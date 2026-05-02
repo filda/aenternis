@@ -22,9 +22,19 @@ Prototype phase. Eight laboratory web prototypes exist in `prototypes/`, each ve
 
 The eventual production target is Rust + WASM. Today's prototypes are intentionally low-friction JavaScript so design questions can be answered cheaply.
 
+## Running
+
+```
+npm install
+npm run dev          # http://localhost:5173/ — landing page with prototype index
+npm run dev:p8       # opens prototype 8 directly
+```
+
+The Vite dev server is required for the Web Worker mode in prototype 8 (Chrome blocks workers from `file://` null origin). Each prototype is otherwise a self-contained static page and can also be opened directly via `file://` if you don't need workers.
+
 ## Prototypes
 
-Each prototype is a self-contained static page — open `index.html` in a browser, no build step.
+Each prototype is a self-contained static page — open via the dev server (or `file://` directly).
 
 - [`prototypes/01-diffusion/`](prototypes/01-diffusion/) — energy diffusion in a 3D torus
 - [`prototypes/02-memory/`](prototypes/02-memory/) — proto-entity as energetic memory (concept abandoned, kept as historical record)

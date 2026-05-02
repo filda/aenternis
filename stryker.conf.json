@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "Aenternis mutation testing. Mutates src/ only - prototypes/ are intentionally excluded (throwaway lab experiments). Thresholds are deliberately strict; the production codebase is small enough to keep them tight.",
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "reporters": ["html", "clear-text", "progress"],
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/**/*.js"
+  ],
+  "ignorePatterns": [
+    "prototypes/**",
+    "node_modules/**",
+    "dist/**",
+    "reports/**",
+    ".stryker-tmp/**"
+  ],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "thresholds": {
+    "high": 90,
+    "low": 80,
+    "break": 70
+  }
+}

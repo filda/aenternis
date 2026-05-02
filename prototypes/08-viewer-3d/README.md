@@ -12,7 +12,16 @@ Klíčové otázky:
 
 ## Spuštění
 
-Otevři `index.html` v prohlížeči. Three.js se natáhne z CDN (CDN.js + jsDelivr).
+**Preferovaně přes dev server** (kvůli Web Workeru):
+
+```
+npm install      # poprvé
+npm run dev:p8   # otevře přímo prototyp 8 na http://localhost:5173/prototypes/08-viewer-3d/
+```
+
+Případně otevři `index.html` přímo přes `file://`. V tom případě má prototyp **fallback** pro Web Worker (XHR + Blob URL), ale doporučujeme dev server.
+
+Three.js se natáhne z CDN (unpkg.com).
 
 ## Co vidíš
 

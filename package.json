@@ -1,0 +1,24 @@
+{
+  "name": "aenternis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Aenternis - 3D toroidální simulace s programovatelnými entitami jako 8bit mikropočítači",
+  "scripts": {
+    "dev": "vite",
+    "dev:p8": "vite --open /prototypes/08-viewer-3d/",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage",
+    "test:mutation": "stryker run",
+    "check": "npm run test:cov && npm run test:mutation"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
+    "@vitest/coverage-v8": "^4.1.5",
+    "vite": "^5.4.0",
+    "vitest": "^4.1.5"
+  }
+}

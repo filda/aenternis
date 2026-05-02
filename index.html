@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Aenternis - rozcestník prototypů</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0a10;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 40px 20px;
+      line-height: 1.5;
+    }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 {
+      color: #d4a76a;
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    .subtitle { color: #8a8a90; font-size: 14px; margin-bottom: 32px; }
+    h2 {
+      color: #d4a76a;
+      font-size: 16px;
+      margin-top: 24px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #2a2a35;
+      padding-bottom: 4px;
+    }
+    .proto {
+      display: block;
+      background: rgba(20, 20, 25, 0.85);
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      text-decoration: none;
+      color: #e0e0e0;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .proto:hover {
+      border-color: #d4a76a;
+      background: rgba(40, 35, 25, 0.9);
+    }
+    .proto .name { font-weight: 600; color: #d4a76a; }
+    .proto .desc { font-size: 13px; color: #8a8a90; margin-top: 2px; }
+    .proto .latest { color: #f0c060; font-size: 11px; margin-left: 8px; }
+    .docs a {
+      color: #c0c0c8;
+      text-decoration: none;
+      margin-right: 12px;
+      font-size: 13px;
+    }
+    .docs a:hover { color: #d4a76a; }
+    code {
+      background: #1a1a22;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Aenternis</h1>
+    <div class="subtitle">3D toroidální simulace s programovatelnými entitami jako 8bit mikropočítači. Vše vychází z fyziky.</div>
+
+    <h2>Prototypy</h2>
+
+    <a class="proto" href="/prototypes/01-diffusion/">
+      <div class="name">01 — Difuze</div>
+      <div class="desc">Základní 1D/2D difuze energie. Sub-tick reflow, conservation.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/02-memory/">
+      <div class="name">02 — Paměť ve slotech</div>
+      <div class="desc">Cell drží 32-bit sloty místo skalární energie. Slot = kód × hodnota.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/03-vm/">
+      <div class="name">03 — VM</div>
+      <div class="desc">Mini virtuální stroj. PC, opcodes, set/copy/jmp.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/04-ports/">
+      <div class="name">04 — Porty a aktivní rates</div>
+      <div class="desc">Cell ovlivňuje vlastní outflow přes 6 register-pointerů.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/05-pointers/">
+      <div class="name">05 — Pasivní reprodukce přes pointery</div>
+      <div class="desc">Pasivní vyzařování, žádný aktivní zápis sousedovi.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/06-cooperation/">
+      <div class="name">06 — Kooperace + dominance</div>
+      <div class="desc">Asembler/disasembler, sid/paint, lineage tracker, intrusion mechanika.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/07-perf-3d/">
+      <div class="name">07 — 3D perf benchmark</div>
+      <div class="desc">Měření plné 3D simulace (až 100³). Bez vizualizace, jen čísla.</div>
+    </a>
+
+    <a class="proto" href="/prototypes/08-viewer-3d/">
+      <div class="name">08 — 3D Viewer
+        <span class="latest">↑ poslední</span>
+      </div>
+      <div class="desc">Three.js voxelové vykreslení. WSAD kamera, tracker s trail, Web Worker mód.</div>
+    </a>
+
+    <h2>Dokumentace</h2>
+    <div class="docs">
+      <a href="/AENTERNIS.md">AENTERNIS.md</a>
+      <a href="/MECHANIKY.md">MECHANIKY.md</a>
+      <a href="/VM.md">VM.md</a>
+      <a href="/OTAZKY.md">OTAZKY.md</a>
+      <a href="/PLAN.md">PLAN.md</a>
+      <a href="/PROTOTYPY.md">PROTOTYPY.md</a>
+    </div>
+
+    <h2>Jak spustit</h2>
+    <p style="font-size: 13px; color: #b0b0b8;">
+      Dev server: <code>npm run dev</code> · jen prototyp 8: <code>npm run dev:p8</code>
+    </p>
+  </div>
+</body>
+</html>
