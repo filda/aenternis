@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aenternis - Prototyp 2</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Aenternis / laboratorni prototyp</p>
+          <h1>Proto-entita jako energeticka pamet</h1>
+        </div>
+        <div class="step-readout">
+          <span>Takt</span>
+          <strong id="stepValue">0</strong>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="viewport-panel" aria-label="Mapa pameti entity">
+          <div class="memory-toolbar">
+            <div class="mode-control" aria-label="Zobrazeni pameti">
+              <label>
+                <input type="radio" name="viewMode" value="age" checked>
+                <span>Vek</span>
+              </label>
+              <label>
+                <input type="radio" name="viewMode" value="value">
+                <span>Data</span>
+              </label>
+              <label>
+                <input type="radio" name="viewMode" value="risk">
+                <span>Riziko</span>
+              </label>
+            </div>
+            <div class="selected-cell">
+              <span id="selectedAddress">Adresa -</span>
+              <strong id="selectedValue">hodnota - / vek -</strong>
+            </div>
+          </div>
+
+          <canvas id="memoryCanvas" width="768" height="512" aria-label="Pametova mapa"></canvas>
+
+          <div class="legend" aria-label="Legenda pameti">
+            <span>stabilni</span>
+            <div class="legend-bar"></div>
+            <span>stare / mrtve</span>
+          </div>
+        </section>
+
+        <aside class="control-panel" aria-label="Ovladani prototypu">
+          <section class="panel-section">
+            <h2>Beh</h2>
+            <div class="button-row">
+              <button id="runButton" type="button">Spustit</button>
+              <button id="stepButton" type="button">Krok</button>
+              <button id="resetButton" type="button">Reset</button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Energie</h2>
+            <label class="field">
+              <span>Pocatecni energie</span>
+              <input id="energyInput" type="number" min="1" step="16" value="512">
+            </label>
+            <label class="field">
+              <span>Energie na bunku</span>
+              <input id="energyPerCellInput" type="number" min="0.01" step="0.01" value="1">
+            </label>
+            <label class="field">
+              <span>Ztrata / takt</span>
+              <input id="leakInput" type="range" min="0" max="0.010" step="0.0001" value="0.0010">
+              <output id="leakValue">0.0010</output>
+            </label>
+            <label class="field">
+              <span>Impuls energie</span>
+              <input id="energyPulseInput" type="number" min="1" step="8" value="64">
+            </label>
+            <div class="button-row">
+              <button id="loseEnergyButton" type="button">Ztratit</button>
+              <button id="gainEnergyButton" type="button">Pridat</button>
+              <button id="refreshNowButton" type="button">Obnovit</button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Pamet</h2>
+            <label class="field">
+              <span>Maximum bunek</span>
+              <select id="maxCellsInput">
+                <option value="256">256</option>
+                <option value="512" selected>512</option>
+                <option value="1024">1024</option>
+                <option value="2048">2048</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Pocatecni obsah</span>
+              <select id="patternInput">
+                <option value="random" selected>Nahodny program</option>
+                <option value="ramp">Rostouci hodnoty</option>
+                <option value="core">Jadro + sum</option>
+                <option value="zero">Nuly</option>
+              </select>
+            </label>
+            <label class="field checkbox-field">
+              <input id="refreshEnabledInput" type="checkbox" checked>
+              <span>Periodicky obnovovat jadro</span>
+            </label>
+            <label class="field">
+              <span>Velikost jadra</span>
+              <input id="coreSizeInput" type="number" min="0" step="4" value="64">
+            </label>
+            <label class="field">
+              <span>Interval obnovy</span>
+              <input id="refreshIntervalInput" type="number" min="1" step="1" value="8">
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Mutace</h2>
+            <label class="field">
+              <span>Polocas starnuti</span>
+              <input id="halfLifeInput" type="number" min="1" step="10" value="240">
+            </label>
+            <label class="field">
+              <span>Max mutace / takt</span>
+              <input id="maxMutationInput" type="range" min="0" max="0.020" step="0.0001" value="0.0020">
+              <output id="maxMutationValue">0.0020</output>
+            </label>
+            <label class="field">
+              <span>Kroky / frame</span>
+              <input id="stepsPerFrameInput" type="number" min="1" max="500" step="1" value="4">
+            </label>
+            <label class="field">
+              <span>Seed</span>
+              <input id="seedInput" type="number" step="1" value="12345">
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Metriky</h2>
+            <dl class="metrics">
+              <div>
+                <dt>Energie</dt>
+                <dd id="energyMetric">0</dd>
+              </div>
+              <div>
+                <dt>Pamet</dt>
+                <dd id="memoryMetric">0</dd>
+              </div>
+              <div>
+                <dt>Ztraceno</dt>
+                <dd id="lostMetric">0</dd>
+              </div>
+              <div>
+                <dt>Mutace</dt>
+                <dd id="mutationMetric">0</dd>
+              </div>
+              <div>
+                <dt>Mutace/takt</dt>
+                <dd id="lastMutationMetric">0</dd>
+              </div>
+              <div>
+                <dt>Prumerny vek</dt>
+                <dd id="averageAgeMetric">0</dd>
+              </div>
+              <div>
+                <dt>Rizikove</dt>
+                <dd id="riskyMetric">0</dd>
+              </div>
+              <div>
+                <dt>Obnoveno</dt>
+                <dd id="refreshMetric">0</dd>
+              </div>
+            </dl>
+            <canvas id="graphCanvas" width="420" height="120" aria-label="Graf energie a pameti"></canvas>
+          </section>
+
+          <section class="panel-section note-section">
+            <h2>Otazka</h2>
+            <p>Je pravidlo "pamet starne, zapis ji obnovuje" pouzitelne jako zaklad stability a mutaci?</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

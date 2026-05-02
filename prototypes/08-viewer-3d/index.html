@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Aenternis - Prototyp 8: 3D Viewer</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Three.js r146 UMD - bez ES modules, funguje z file:// -->
+  <script src="https://unpkg.com/three@0.146.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <div id="canvasContainer"></div>
+
+  <div class="hud">
+    <div class="panel">
+      <h2>3D Viewer</h2>
+      <div class="row">
+        <span class="label">Cely:</span> <span id="cellCount">0</span>
+      </div>
+      <div class="row">
+        <span class="label">Aktivní voxely:</span> <span id="visibleCount">0</span>
+      </div>
+      <div class="row">
+        <span class="label">FPS:</span> <span id="fps">-</span>
+      </div>
+      <div class="row">
+        <span class="label">ms/tik:</span> <span id="msPerTick">-</span>
+      </div>
+      <div class="row">
+        <span class="label">Krok:</span> <span id="step">0</span>
+      </div>
+      <div class="row">
+        <span class="label">Total energie:</span> <span id="totalE">0</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Ovládání</h3>
+      <button id="runBtn">Spustit</button>
+      <button id="stepBtn">Krok</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+
+    <div class="panel">
+      <h3>Svět</h3>
+      <div class="row">
+        <label>N (×³):</label>
+        <input id="sizeInput" type="number" min="8" max="100" value="32">
+      </div>
+      <div class="row">
+        <label>Scénář:</label>
+        <select id="scenarioInput">
+          <option value="point" selected>Bod ve středu (Big Bang)</option>
+          <option value="ball">Hustá koule</option>
+          <option value="random">Rovnoměrný šum</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Coeff:</label>
+        <input id="coeffInput" type="range" min="0.05" max="0.30" step="0.01" value="0.15">
+        <span id="coeffVal">0.15</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Vizualizace</h3>
+      <div class="row">
+        <label>Barva:</label>
+        <select id="colorMode">
+          <option value="energy" selected>Energie (heat)</option>
+          <option value="identity">Identity (origin tag)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Škála:</label>
+        <select id="energyScale">
+          <option value="relative" selected>Relativní (max v poli)</option>
+          <option value="absolute">Absolutní (log, world cap)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Min energy:</label>
+        <input id="minEnergy" type="range" min="0" max="100" value="0">
+        <span id="minEnergyVal">0</span>
+      </div>
+      <div class="row">
+        <label>Velikost voxelu:</label>
+        <input id="voxelSize" type="range" min="0.3" max="1.0" step="0.05" value="0.85">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Tracker</h3>
+      <div class="row">
+        <label>Sledovat:</label>
+        <input id="trackerEnabled" type="checkbox" checked>
+        <span class="hint">nejsilnější cela</span>
+      </div>
+      <div class="row">
+        <label>Trail:</label>
+        <input id="trailLen" type="range" min="0" max="200" step="5" value="60">
+        <span id="trailLenVal">60</span>
+      </div>
+      <div class="row">
+        <label>Ztlumit ostatní:</label>
+        <input id="dimOthers" type="range" min="0" max="1" step="0.05" value="0.82">
+        <span id="dimOthersVal">0.82</span>
+      </div>
+      <div class="row">
+        <label>Pozice:</label>
+        <span id="trackerPos">-</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Backend</h3>
+      <div class="row">
+        <label>Web Worker:</label>
+        <input id="useWorker" type="checkbox" checked>
+        <span id="workerStatus" class="hint">-</span>
+      </div>
+      <div class="row hint">Worker oddělí výpočet od renderu (60 FPS i při běhu)</div>
+    </div>
+
+    <div class="panel hint">
+      <strong>Ovládání kamery:</strong><br>
+      drag = rotace, scroll = zoom, pravé tl. = pan<br>
+      <strong>WSAD</strong> + Q/E (dolů/nahoru), Shift = sprint
+    </div>
+
+    <div class="panel hint">
+      <strong>Cíl prototypu:</strong> zjistit, jestli má 3D vizualizace Aenternis budoucnost.
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

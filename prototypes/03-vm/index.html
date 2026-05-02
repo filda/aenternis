@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aenternis - Prototyp 3</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Aenternis / laboratorni prototyp</p>
+          <h1>Minimalni VM proto-entity</h1>
+        </div>
+        <div class="step-readout">
+          <span>Takt</span>
+          <strong id="stepValue">0</strong>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="viewport-panel" aria-label="Debugger virtualniho stroje">
+          <div class="debug-toolbar">
+            <div class="mode-control" aria-label="Zobrazeni pameti">
+              <label>
+                <input type="radio" name="viewMode" value="value" checked>
+                <span>Data</span>
+              </label>
+              <label>
+                <input type="radio" name="viewMode" value="age">
+                <span>Vek</span>
+              </label>
+              <label>
+                <input type="radio" name="viewMode" value="risk">
+                <span>Riziko</span>
+              </label>
+            </div>
+            <div class="cpu-strip">
+              <div>
+                <span>PC</span>
+                <strong id="pcValue">0</strong>
+              </div>
+              <div>
+                <span>SP</span>
+                <strong id="spValue">255</strong>
+              </div>
+              <div>
+                <span>Z</span>
+                <strong id="zeroValue">0</strong>
+              </div>
+              <div>
+                <span>Instrukce</span>
+                <strong id="instructionValue">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <canvas id="memoryCanvas" width="768" height="512" aria-label="Pametova mapa VM"></canvas>
+
+          <section class="trace-panel" aria-label="Stopa instrukci">
+            <h2>Stopa</h2>
+            <ol id="traceList"></ol>
+          </section>
+        </section>
+
+        <aside class="control-panel" aria-label="Ovladani prototypu">
+          <section class="panel-section">
+            <h2>Beh</h2>
+            <div class="button-row">
+              <button id="runButton" type="button">Spustit</button>
+              <button id="stepButton" type="button">Instrukce</button>
+              <button id="tickButton" type="button">Takt</button>
+              <button id="resetButton" type="button">Reset</button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Program</h2>
+            <label class="field">
+              <span>Ukazka</span>
+              <select id="programInput">
+                <option value="loop" selected>Nekonecna smycka</option>
+                <option value="selfModify">Self-modifying code</option>
+                <option value="decay">Krehky program</option>
+                <option value="dataRun">PC najede do dat</option>
+                <option value="random">Nahodna pamet</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Seed</span>
+              <input id="seedInput" type="number" step="1" value="12345">
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Energie a pamet</h2>
+            <label class="field">
+              <span>Pocatecni energie</span>
+              <input id="energyInput" type="number" min="1" step="16" value="256">
+            </label>
+            <label class="field">
+              <span>Ztrata / takt</span>
+              <input id="leakInput" type="range" min="0" max="0.010" step="0.0001" value="0.0000">
+              <output id="leakValue">0.0000</output>
+            </label>
+            <label class="field">
+              <span>Impuls energie</span>
+              <input id="energyPulseInput" type="number" min="1" step="8" value="32">
+            </label>
+            <div class="button-row three">
+              <button id="loseEnergyButton" type="button">Ztratit</button>
+              <button id="gainEnergyButton" type="button">Pridat</button>
+              <button id="mutateButton" type="button">Mutovat PC</button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Starnuti</h2>
+            <label class="field">
+              <span>Polocas</span>
+              <input id="halfLifeInput" type="number" min="1" step="10" value="1000">
+            </label>
+            <label class="field">
+              <span>Max mutace / takt</span>
+              <input id="maxMutationInput" type="range" min="0" max="0.020" step="0.0001" value="0.0010">
+              <output id="maxMutationValue">0.0010</output>
+            </label>
+            <label class="field">
+              <span>Instrukce / frame</span>
+              <input id="stepsPerFrameInput" type="number" min="1" max="1000" step="1" value="16">
+            </label>
+            <label class="field checkbox-field">
+              <input id="ageEnabledInput" type="checkbox" checked>
+              <span>Starnuti a mutace bezi</span>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Metriky</h2>
+            <dl class="metrics">
+              <div>
+                <dt>Energie</dt>
+                <dd id="energyMetric">0</dd>
+              </div>
+              <div>
+                <dt>Pamet</dt>
+                <dd id="memoryMetric">0</dd>
+              </div>
+              <div>
+                <dt>Instrukce</dt>
+                <dd id="instructionMetric">0</dd>
+              </div>
+              <div>
+                <dt>Mutace</dt>
+                <dd id="mutationMetric">0</dd>
+              </div>
+              <div>
+                <dt>Zapisy</dt>
+                <dd id="writeMetric">0</dd>
+              </div>
+              <div>
+                <dt>Stav</dt>
+                <dd id="statusMetric">bezi</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel-section isa-section">
+            <h2>Instrukce</h2>
+            <table>
+              <tbody>
+                <tr><td>00</td><td>nop/data</td></tr>
+                <tr><td>01</td><td>nop</td></tr>
+                <tr><td>10 a v</td><td>set [a], v</td></tr>
+                <tr><td>11 a b</td><td>copy [a], [b]</td></tr>
+                <tr><td>20 a b</td><td>add [a], [b]</td></tr>
+                <tr><td>21 a b</td><td>sub [a], [b]</td></tr>
+                <tr><td>30 a</td><td>inc [a]</td></tr>
+                <tr><td>31 a</td><td>dec [a]</td></tr>
+                <tr><td>40 a</td><td>jmp a</td></tr>
+                <tr><td>41 a b</td><td>jz [a], b</td></tr>
+              </tbody>
+            </table>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

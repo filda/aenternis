@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aenternis - Prototyp 1</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Aenternis / laboratorni prototyp</p>
+          <h1>Difuze energie v 3D toru</h1>
+        </div>
+        <div class="step-readout">
+          <span>Takt</span>
+          <strong id="stepValue">0</strong>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="viewport-panel" aria-label="Vizualizace rezu sveta">
+          <div class="canvas-toolbar">
+            <div class="axis-control" aria-label="Osa rezu">
+              <label>
+                <input type="radio" name="axis" value="z" checked>
+                <span>Z</span>
+              </label>
+              <label>
+                <input type="radio" name="axis" value="y">
+                <span>Y</span>
+              </label>
+              <label>
+                <input type="radio" name="axis" value="x">
+                <span>X</span>
+              </label>
+            </div>
+            <label class="slice-control">
+              <span>Rez</span>
+              <input id="sliceInput" type="range" min="0" max="31" value="16">
+              <output id="sliceValue">16</output>
+            </label>
+          </div>
+          <canvas id="worldCanvas" width="640" height="640" aria-label="Heatmapa energie"></canvas>
+          <div class="legend" aria-label="Legenda heatmapy">
+            <span>ridke</span>
+            <div class="legend-bar"></div>
+            <span>huste</span>
+          </div>
+        </section>
+
+        <aside class="control-panel" aria-label="Ovladani prototypu">
+          <section class="panel-section">
+            <h2>Beh</h2>
+            <div class="button-row">
+              <button id="runButton" type="button">Spustit</button>
+              <button id="stepButton" type="button">Krok</button>
+              <button id="resetButton" type="button">Reset</button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Parametry</h2>
+            <label class="field">
+              <span>Rozmer</span>
+              <select id="sizeInput">
+                <option value="16">16^3</option>
+                <option value="32" selected>32^3</option>
+                <option value="48">48^3</option>
+                <option value="64">64^3</option>
+                <option value="100">100^3</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Energie</span>
+              <input id="energyInput" type="number" min="1" step="1000" value="1000000">
+            </label>
+            <label class="field">
+              <span>Tok</span>
+              <input id="rateInput" type="range" min="0" max="0.166" step="0.001" value="0.080">
+              <output id="rateValue">0.080</output>
+            </label>
+            <label class="field">
+              <span>Kroky / frame</span>
+              <input id="stepsPerFrameInput" type="number" min="1" max="200" step="1" value="2">
+            </label>
+            <label class="field">
+              <span>Prah rovnovahy</span>
+              <input id="equilibriumInput" type="number" min="0" max="10" step="0.001" value="0.010">
+            </label>
+            <label class="field">
+              <span>Barevne meritko</span>
+              <select id="scaleInput">
+                <option value="mean" selected>Prumer = stred</option>
+                <option value="auto">Aktualni maximum</option>
+                <option value="initial">Pocatecni maximum</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Metriky</h2>
+            <dl class="metrics">
+              <div>
+                <dt>Celkem</dt>
+                <dd id="totalMetric">0</dd>
+              </div>
+              <div>
+                <dt>Drift</dt>
+                <dd id="driftMetric">0</dd>
+              </div>
+              <div>
+                <dt>Maximum</dt>
+                <dd id="maxMetric">0</dd>
+              </div>
+              <div>
+                <dt>Minimum</dt>
+                <dd id="minMetric">0</dd>
+              </div>
+              <div>
+                <dt>Prumer</dt>
+                <dd id="meanMetric">0</dd>
+              </div>
+              <div>
+                <dt>Rozptyl</dt>
+                <dd id="varianceMetric">0</dd>
+              </div>
+              <div>
+                <dt>Nerovnovaha</dt>
+                <dd id="imbalanceMetric">0</dd>
+              </div>
+              <div>
+                <dt>Vychladlo</dt>
+                <dd id="cooledMetric">-</dd>
+              </div>
+            </dl>
+            <canvas id="graphCanvas" width="420" height="120" aria-label="Graf maxima a rozptylu"></canvas>
+          </section>
+
+          <section class="panel-section note-section">
+            <h2>Otazka</h2>
+            <p>Chova se energie stabilne a citelne, kdyz tece do sesti sousedu podle rozdilu potencialu?</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

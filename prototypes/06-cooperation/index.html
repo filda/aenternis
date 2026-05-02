@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Aenternis - Prototyp 6: kooperace dvou entit</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Aenternis - Prototyp 6</h1>
+    <p class="subtitle">Kooperace: dvě entity ve 2D toroidálním poli</p>
+  </header>
+
+  <main>
+    <section class="col-canvas">
+      <canvas id="worldCanvas" width="640" height="640"></canvas>
+      <div class="world-controls">
+        <div class="control-row">
+          <label>Vizualizace:</label>
+          <label><input type="radio" name="viz" value="energy" checked> Energie</label>
+          <label><input type="radio" name="viz" value="memory_top"> Vrch paměti</label>
+          <label><input type="radio" name="viz" value="memory_bottom"> Spodek paměti</label>
+          <label><input type="radio" name="viz" value="activity"> Aktivita CPU</label>
+          <label><input type="radio" name="viz" value="warpaint"> War paint</label>
+          <label><input type="radio" name="viz" value="identity"> Identity (origin tag)</label>
+        </div>
+        <div class="control-row">
+          <label><input type="checkbox" id="highlightPair" checked> Zvýraznit dvojici A/B</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="col-side">
+      <div class="panel metrics">
+        <h2>Metriky</h2>
+        <div class="metric"><span class="label">Krok:</span> <span id="stepValue">0</span></div>
+        <div class="metric"><span class="label">Celková energie:</span> <span id="totalEnergyMetric">0</span></div>
+        <div class="metric"><span class="label">Min/Max E:</span> <span id="rangeMetric">0 / 0</span></div>
+        <div class="metric"><span class="label">Průměr / rozptyl:</span> <span id="statsMetric">0 / 0</span></div>
+      </div>
+
+      <div class="panel controls">
+        <button id="runButton">Spustit</button>
+        <button id="stepButton">Krok</button>
+        <button id="resetButton">Reset</button>
+        <label>kroků za frame: <input id="stepsPerFrameInput" type="number" min="1" max="50" value="1"></label>
+      </div>
+
+      <div class="panel params">
+        <h2>Parametry světa</h2>
+        <div class="param-row">
+          <label>Velikost (N×N):</label>
+          <input id="sizeInput" type="number" min="8" max="128" value="48">
+        </div>
+        <div class="param-row">
+          <label>Počáteční scénář:</label>
+          <select id="scenarioInput">
+            <option value="empty">Prázdné pole (žádné cely)</option>
+            <option value="quiet">Tiché pozadí (rovnoměrná malá energie)</option>
+            <option value="noise" selected>Rovnoměrný šum</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label>Počáteční energie (max):</label>
+          <input id="maxEnergyInput" type="number" min="1" max="16384" value="32">
+          <span class="hint">(cap MAX_MEMORY je 16384, nad ním leakage)</span>
+        </div>
+        <div class="param-row">
+          <label>Koeficient toku:</label>
+          <input id="diffusionInput" type="range" min="0.02" max="0.40" step="0.01" value="0.15">
+          <span id="diffusionValue">0.15</span>
+          <span class="hint">(stabilní &lt; 0.25 ve 2D)</span>
+        </div>
+        <div class="param-row">
+          <label>CPU K (instrukce = E/K):</label>
+          <input id="cpuKInput" type="number" min="1" max="64" value="1">
+        </div>
+        <div class="param-row">
+          <label>Move threshold (dominance):</label>
+          <input id="moveThresholdInput" type="range" min="0.5" max="5.0" step="0.1" value="2.0">
+          <span id="moveThresholdValue">2.0</span>
+        </div>
+      </div>
+
+      <div class="panel pair">
+        <h2>Dvojice cel A &amp; B</h2>
+        <div class="param-row">
+          <label>Cela A (x, y):</label>
+          <input id="aX" type="number" min="0" value="22">
+          <input id="aY" type="number" min="0" value="24">
+          <button id="setAButton">vybrat</button>
+        </div>
+        <div class="param-row">
+          <label>Cela B (x, y):</label>
+          <input id="bX" type="number" min="0" value="23">
+          <input id="bY" type="number" min="0" value="24">
+          <button id="setBButton">vybrat</button>
+        </div>
+        <div class="param-row hint">
+          <span>Klikni do canvasu pro nastavení B; Shift+klik pro A.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="col-inspector">
+      <div class="panel inspector">
+        <h2>Inspector A <span class="cell-coord" id="aCoord"></span> <button id="aTrackButton" class="track-btn">Track</button></h2>
+        <div class="inspector-info">
+          <div><strong>Energie:</strong> <span id="aEnergy">0</span> &nbsp; <strong>Paměť:</strong> <span id="aMemSize">0</span> sl. &nbsp; <strong>CPU:</strong> <span id="aCpuRate">0</span>/takt</div>
+          <div><strong>PC:</strong> <span id="aPc">-</span> &nbsp; <strong>Inst:</strong> <span id="aInstCount">0</span> &nbsp; <strong>Last:</strong> <span id="aLastInst">-</span></div>
+          <div><strong>Pointery:</strong> <span id="aPointers">-</span></div>
+          <div><strong>Rate:</strong> <span id="aRates">-</span></div>
+          <div><strong>Tag:</strong> <span id="aTag" class="tag-swatch">-</span> &nbsp; <strong>Paint:</strong> <span id="aPaint" class="tag-swatch">-</span></div>
+        </div>
+        <pre id="aMemory" class="memory-dump">-</pre>
+        <h3>Inject do A</h3>
+        <div class="param-row">
+          <select id="aPresetInput">
+            <option value="">— vyber preset —</option>
+          </select>
+          <button id="aInjectButton">Vlož</button>
+          <button id="aCpuStepButton">CPU krok</button>
+        </div>
+        <div class="param-row">
+          <textarea id="aInjectInput" rows="4" placeholder="hex sloty NEBO asembler (mnemoniky, labely, ; komentáře)"></textarea>
+        </div>
+      </div>
+
+      <div class="panel inspector">
+        <h2>Inspector B <span class="cell-coord" id="bCoord"></span> <button id="bTrackButton" class="track-btn">Track</button></h2>
+        <div class="inspector-info">
+          <div><strong>Energie:</strong> <span id="bEnergy">0</span> &nbsp; <strong>Paměť:</strong> <span id="bMemSize">0</span> sl. &nbsp; <strong>CPU:</strong> <span id="bCpuRate">0</span>/takt</div>
+          <div><strong>PC:</strong> <span id="bPc">-</span> &nbsp; <strong>Inst:</strong> <span id="bInstCount">0</span> &nbsp; <strong>Last:</strong> <span id="bLastInst">-</span></div>
+          <div><strong>Pointery:</strong> <span id="bPointers">-</span></div>
+          <div><strong>Rate:</strong> <span id="bRates">-</span></div>
+          <div><strong>Tag:</strong> <span id="bTag" class="tag-swatch">-</span> &nbsp; <strong>Paint:</strong> <span id="bPaint" class="tag-swatch">-</span></div>
+        </div>
+        <pre id="bMemory" class="memory-dump">-</pre>
+        <h3>Inject do B</h3>
+        <div class="param-row">
+          <select id="bPresetInput">
+            <option value="">— vyber preset —</option>
+          </select>
+          <button id="bInjectButton">Vlož</button>
+          <button id="bCpuStepButton">CPU krok</button>
+        </div>
+        <div class="param-row">
+          <textarea id="bInjectInput" rows="4" placeholder="hex sloty NEBO asembler (mnemoniky, labely, ; komentáře)"></textarea>
+        </div>
+      </div>
+
+      <div class="panel comm-trace">
+        <h2>Komunikační stopa A ⇄ B</h2>
+        <div class="comm-row"><strong>A → B</strong> (poslední takt): <span id="commAtoB">-</span></div>
+        <div class="comm-row"><strong>B → A</strong> (poslední takt): <span id="commBtoA">-</span></div>
+        <div class="comm-row hint">Funguje pouze pokud A a B sousedí.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Otázka prototypu: může spolupráce vzniknout jen z programu a portů, bez toho, aby engine znal pojem "spojenec"?</p>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

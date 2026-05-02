@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Aenternis - Prototyp 7: 3D performance test</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Aenternis - Prototyp 7</h1>
+    <p class="subtitle">3D performance test: měření FPS a ms/tick při různých N pro odhad limitu JS</p>
+  </header>
+
+  <main>
+    <section class="col-canvas">
+      <canvas id="worldCanvas" width="512" height="512"></canvas>
+      <div class="world-controls">
+        <div class="control-row">
+          <label>Osa řezu:</label>
+          <label><input type="radio" name="axis" value="x"> X</label>
+          <label><input type="radio" name="axis" value="y"> Y</label>
+          <label><input type="radio" name="axis" value="z" checked> Z</label>
+        </div>
+        <div class="control-row">
+          <label>Index řezu: <span id="sliceValue">8</span></label>
+          <input id="sliceInput" type="range" min="0" max="31" value="8">
+        </div>
+        <div class="control-row">
+          <label>Vizualizace:</label>
+          <label><input type="radio" name="viz" value="energy" checked> Energie</label>
+          <label><input type="radio" name="viz" value="memory_top"> Vrch paměti</label>
+          <label><input type="radio" name="viz" value="memory_bottom"> Spodek paměti</label>
+          <label><input type="radio" name="viz" value="activity"> Aktivita CPU</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="col-side">
+      <div class="panel metrics">
+        <h2>Metriky</h2>
+        <div class="metric"><span class="label">Krok:</span> <span id="stepValue">0</span></div>
+        <div class="metric"><span class="label">Celková energie:</span> <span id="totalEnergyMetric">0</span></div>
+        <div class="metric"><span class="label">Min/Max E:</span> <span id="rangeMetric">0 / 0</span></div>
+        <div class="metric"><span class="label">Průměr / rozptyl:</span> <span id="statsMetric">0 / 0</span></div>
+      </div>
+
+      <div class="panel metrics">
+        <h2>Performance</h2>
+        <div class="metric"><span class="label">Počet cel:</span> <span id="cellCountMetric">0</span></div>
+        <div class="metric"><span class="label">Slotů celkem:</span> <span id="totalSlotsMetric">0</span></div>
+        <div class="metric"><span class="label">RAM odhad:</span> <span id="memUsageMetric">0 MB</span></div>
+        <div class="metric"><span class="label">ms / tick:</span> <span id="msPerTickMetric">-</span></div>
+        <div class="metric"><span class="label">FPS:</span> <span id="fpsMetric">-</span></div>
+      </div>
+
+      <div class="panel controls">
+        <button id="benchButton">Benchmark 100 tiků</button>
+        <span id="benchResult" class="hint"></span>
+      </div>
+
+      <div class="panel controls">
+        <button id="runButton">Spustit</button>
+        <button id="stepButton">Krok</button>
+        <button id="resetButton">Reset</button>
+        <label>kroků za frame: <input id="stepsPerFrameInput" type="number" min="1" max="50" value="1"></label>
+      </div>
+
+      <div class="panel params">
+        <h2>Parametry světa</h2>
+        <div class="param-row">
+          <label>Velikost (N×N×N):</label>
+          <input id="sizeInput" type="number" min="8" max="100" value="32">
+        </div>
+        <div class="param-row">
+          <label>Počáteční scénář:</label>
+          <select id="scenarioInput">
+            <option value="point">Bod ve středu</option>
+            <option value="ball" selected>Hustá koule</option>
+            <option value="random">Rovnoměrný šum</option>
+            <option value="two_balls">Dvě koule s odlišným obsahem</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <label>Počáteční energie (max):</label>
+          <input id="maxEnergyInput" type="number" min="1" max="65535" value="128">
+          <span class="hint">jen pro "ball" / "two_balls"; "Bod" a "Šum" používají N³ (zachování)</span>
+        </div>
+        <div class="param-row">
+          <label>Koeficient toku:</label>
+          <input id="diffusionInput" type="range" min="0.02" max="0.40" step="0.01" value="0.15">
+          <span id="diffusionValue">0.15</span>
+          <span class="hint">(stabilní < 0.17)</span>
+        </div>
+        <div class="param-row">
+          <label>CPU K (instrukce = E/K):</label>
+          <input id="cpuKInput" type="number" min="1" max="64" value="1">
+          <span class="hint">(K=1 zachovává compute=energie přesně; vyšší = pomalejší tikání ale ztrácí compute)</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="col-inspector panel inspector">
+      <h2>Inspector buňky</h2>
+      <div class="param-row">
+        <label>Souřadnice (x, y, z):</label>
+        <input id="inspX" type="number" min="0" max="31" value="16">
+        <input id="inspY" type="number" min="0" max="31" value="16">
+        <input id="inspZ" type="number" min="0" max="31" value="16">
+        <span class="hint">(nebo klikni do canvasu)</span>
+      </div>
+      <div class="inspector-info">
+        <div><strong>Energie:</strong> <span id="inspEnergy">0</span></div>
+        <div><strong>Velikost paměti:</strong> <span id="inspMemSize">0</span></div>
+        <div><strong>Pointery (xp, xn, yp, yn, zp, zn):</strong> <span id="inspPointers">-</span></div>
+        <div><strong>Rate:</strong> <span id="inspRates">-</span></div>
+        <div><strong>PC:</strong> <span id="inspPc">-</span> &nbsp; <strong>Rychlost CPU:</strong> <span id="inspCredit">-</span></div>
+        <div><strong>Poslední instrukce:</strong> <span id="inspLastInst">-</span></div>
+        <div><strong>Celkem provedeno:</strong> <span id="inspInstCount">0</span></div>
+      </div>
+      <h3>Paměť (hex dump, žluté = pozice pointerů, červená = PC)</h3>
+      <pre id="inspMemory" class="memory-dump">-</pre>
+      <h3>Inject program do této buňky</h3>
+      <div class="param-row">
+        <label>Předvolba:</label>
+        <select id="presetInput">
+          <option value="">— vyber preset —</option>
+          <option value="counter">Counter (inc 0x10; jmp 0)</option>
+          <option value="self_xp">Self-replicator → +x</option>
+          <option value="self_omni">Self-replicator → všech 6 směrů</option>
+          <option value="beacon">Beacon (počítadlo + broadcast)</option>
+          <option value="quine_core">Quine s chráněným jádrem</option>
+          <option value="deadbeef">Pouhá data DEADBEEF</option>
+          <option value="projectile">Projektil → +x (silný active write)</option>
+        </select>
+      </div>
+      <div class="param-row">
+        <textarea id="injectInput" rows="2" placeholder="hex sloty (32-bit) oddělené mezerou, např: 09 00 00 07 00"></textarea>
+      </div>
+      <div class="param-row">
+        <button id="injectButton">Vlož jako program (PC=0)</button>
+        <button id="injectTailButton">Vlož na konec paměti</button>
+      </div>
+      <div class="param-row">
+        <span class="hint">PC=0 přepíše začátek paměti a resetuje PC. "Na konec" zapíše do membrány, takže se příští takt vyzáří defaultními pointery.</span>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Otázka etapy 1: vzniká pozorovatelná dvouvrstva (stabilní jádro + míchající membrána) z asymetrických počátečních podmínek?</p>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

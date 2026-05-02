@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aenternis - Prototyp 4</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Aenternis / laboratorni prototyp</p>
+          <h1>Porty, raketovy pohyb a sani energie</h1>
+        </div>
+        <div class="step-readout">
+          <span>Takt</span>
+          <strong id="stepValue">0</strong>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="viewport-panel" aria-label="Vizualizace sveta">
+          <div class="canvas-toolbar">
+            <div class="axis-control" aria-label="Osa rezu">
+              <label>
+                <input type="radio" name="axis" value="z" checked>
+                <span>Z</span>
+              </label>
+              <label>
+                <input type="radio" name="axis" value="y">
+                <span>Y</span>
+              </label>
+              <label>
+                <input type="radio" name="axis" value="x">
+                <span>X</span>
+              </label>
+            </div>
+            <label class="slice-control">
+              <span>Rez</span>
+              <input id="sliceInput" type="range" min="0" max="31" value="16">
+              <output id="sliceValue">16</output>
+            </label>
+            <label class="follow-control">
+              <input id="followInput" type="checkbox" checked>
+              <span>Sledovat entitu</span>
+            </label>
+          </div>
+
+          <canvas id="worldCanvas" width="640" height="640" aria-label="Heatmapa energie"></canvas>
+
+          <div class="entity-strip" aria-label="Stav entity">
+            <div>
+              <span>Pozice</span>
+              <strong id="positionValue">-</strong>
+            </div>
+            <div>
+              <span>Energie</span>
+              <strong id="entityEnergyValue">0</strong>
+            </div>
+            <div>
+              <span>Pamet</span>
+              <strong id="memoryValue">0</strong>
+            </div>
+            <div>
+              <span>Posledni akce</span>
+              <strong id="actionValue">-</strong>
+            </div>
+          </div>
+        </section>
+
+        <aside class="control-panel" aria-label="Ovladani prototypu">
+          <section class="panel-section">
+            <h2>Beh</h2>
+            <div class="button-row">
+              <button id="runButton" type="button">Spustit</button>
+              <button id="stepButton" type="button">Krok</button>
+              <button id="resetButton" type="button">Reset</button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Svet</h2>
+            <label class="field">
+              <span>Rozmer</span>
+              <select id="sizeInput">
+                <option value="16">16^3</option>
+                <option value="32" selected>32^3</option>
+                <option value="48">48^3</option>
+                <option value="64">64^3</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Pozadi / bunka</span>
+              <input id="ambientInput" type="number" min="0" step="0.1" value="1">
+            </label>
+            <label class="field">
+              <span>Zdroj energie</span>
+              <input id="sourceInput" type="number" min="0" step="100" value="5000">
+            </label>
+            <label class="field">
+              <span>Tok prostoru</span>
+              <input id="diffusionInput" type="range" min="0" max="0.166" step="0.001" value="0.040">
+              <output id="diffusionValue">0.040</output>
+            </label>
+            <label class="field">
+              <span>Kroky / frame</span>
+              <input id="stepsPerFrameInput" type="number" min="1" max="100" step="1" value="1">
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Entita</h2>
+            <label class="field">
+              <span>Pocatecni energie</span>
+              <input id="entityEnergyInput" type="number" min="0" step="16" value="512">
+            </label>
+            <label class="field">
+              <span>Energie na bunku pameti</span>
+              <input id="energyPerCellInput" type="number" min="0.01" step="0.01" value="1">
+            </label>
+            <label class="field">
+              <span>Unik entity / takt</span>
+              <input id="entityLeakInput" type="range" min="0" max="0.010" step="0.0001" value="0.0005">
+              <output id="entityLeakValue">0.0005</output>
+            </label>
+            <label class="field">
+              <span>Práh pohybu cil / entita</span>
+              <input id="moveThresholdInput" type="range" min="0" max="1" step="0.01" value="0.10">
+              <output id="moveThresholdValue">0.10</output>
+            </label>
+            <label class="field checkbox-field">
+              <input id="suctionImpulseInput" type="checkbox">
+              <span>Sani pritahuje entitu</span>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Porty</h2>
+            <label class="field">
+              <span>Sila portu</span>
+              <input id="portAmountInput" type="number" min="0" step="1" value="32">
+            </label>
+            <div class="ports-grid" aria-label="Smerove porty">
+              <div class="port-card" data-direction="xp">
+                <strong>X+</strong>
+                <span id="sense-xp">0</span>
+                <button data-action="fire" data-direction="xp" type="button">Zazeh</button>
+                <button data-action="suck" data-direction="xp" type="button">Sat</button>
+              </div>
+              <div class="port-card" data-direction="xn">
+                <strong>X-</strong>
+                <span id="sense-xn">0</span>
+                <button data-action="fire" data-direction="xn" type="button">Zazeh</button>
+                <button data-action="suck" data-direction="xn" type="button">Sat</button>
+              </div>
+              <div class="port-card" data-direction="yp">
+                <strong>Y+</strong>
+                <span id="sense-yp">0</span>
+                <button data-action="fire" data-direction="yp" type="button">Zazeh</button>
+                <button data-action="suck" data-direction="yp" type="button">Sat</button>
+              </div>
+              <div class="port-card" data-direction="yn">
+                <strong>Y-</strong>
+                <span id="sense-yn">0</span>
+                <button data-action="fire" data-direction="yn" type="button">Zazeh</button>
+                <button data-action="suck" data-direction="yn" type="button">Sat</button>
+              </div>
+              <div class="port-card" data-direction="zp">
+                <strong>Z+</strong>
+                <span id="sense-zp">0</span>
+                <button data-action="fire" data-direction="zp" type="button">Zazeh</button>
+                <button data-action="suck" data-direction="zp" type="button">Sat</button>
+              </div>
+              <div class="port-card" data-direction="zn">
+                <strong>Z-</strong>
+                <span id="sense-zn">0</span>
+                <button data-action="fire" data-direction="zn" type="button">Zazeh</button>
+                <button data-action="suck" data-direction="zn" type="button">Sat</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <h2>Metriky</h2>
+            <dl class="metrics">
+              <div>
+                <dt>Energie pole</dt>
+                <dd id="fieldEnergyMetric">0</dd>
+              </div>
+              <div>
+                <dt>Celkem</dt>
+                <dd id="totalEnergyMetric">0</dd>
+              </div>
+              <div>
+                <dt>Vyzareno</dt>
+                <dd id="emittedMetric">0</dd>
+              </div>
+              <div>
+                <dt>Nasato</dt>
+                <dd id="suckedMetric">0</dd>
+              </div>
+              <div>
+                <dt>Absorbovano</dt>
+                <dd id="absorbedMetric">0</dd>
+              </div>
+              <div>
+                <dt>Pohyby</dt>
+                <dd id="movesMetric">0</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel-section note-section">
+            <h2>Otazka</h2>
+            <p>Da se entita ridit jako raketa pomoci cteni, zapisu a odsavani smerovych portu?</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>
