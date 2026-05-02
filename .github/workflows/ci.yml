@@ -1,0 +1,88 @@
+name: CI
+
+# Runs the verification gate (`npm run check` = vitest+coverage + Stryker)
+# on every push to main and on every pull request.
+#
+# Two jobs run in parallel for fast feedback:
+#   - `test`     - vitest with coverage thresholds
+#   - `mutation` - Stryker mutation testing
+#
+# Both upload their HTML reports as artifacts (14-day retention).
+#
+# Prototypes under `prototypes/**` are deliberately excluded from the gate
+# (see vitest.config.js and stryker.conf.json). Lab experiments are not
+# expected to pass tests.
+#
+# Cross-OS matrix: not yet. The codebase is small and pure JS; the eventual
+# WASM target is browser-only. Re-evaluate once the Rust workspace lands.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Cancel previous runs on the same branch when a new commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests + Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:cov
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: reports/coverage/
+          retention-days: 14
+          if-no-files-found: warn
+
+  mutation:
+    name: Mutation Testing (Stryker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run mutation testing
+        run: npm run test:mutation
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          retention-days: 14
+          if-no-files-found: warn

@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # npm dependencies (vite, vitest, stryker, ...)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      # Group test tooling so Stryker + vitest + coverage move together
+      testing:
+        patterns:
+          - "@stryker-mutator/*"
+          - "@vitest/*"
+          - "vitest"
+      # Group dev tooling so vite + plugins move together
+      dev-tooling:
+        patterns:
+          - "vite"
+
+  # GitHub Actions used in workflows (actions/checkout, setup-node, ...)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3

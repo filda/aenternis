@@ -1,5 +1,9 @@
 # Aenternis
 
+<!-- CI badge: replace OWNER/REPO with the GitHub path once the repo is published.
+     Workflow file lives at .github/workflows/ci.yml and the badge resolves automatically:
+     ![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg) -->
+
 A 3D toroidal simulation where every cell is a latent micro-computer with its own program, energy, and memory pointers. Higher-level phenomena — entities, organisms, movement, reproduction, combat, communication — emerge from the physics of energy flow and programmable content.
 
 The model shifts away from "entities living in space" toward "space is made of micro-entities". The boundary between an empty cell and an active entity is a spectrum of organization, energy, and program coherence — not a binary flag.
@@ -31,6 +35,20 @@ npm run dev:p8       # opens prototype 8 directly
 ```
 
 The Vite dev server is required for the Web Worker mode in prototype 8 (Chrome blocks workers from `file://` null origin). Each prototype is otherwise a self-contained static page and can also be opened directly via `file://` if you don't need workers.
+
+## Tests
+
+Production code under `src/` is covered by [Vitest](https://vitest.dev/) and mutation-tested by [Stryker](https://stryker-mutator.io/). Lab prototypes under `prototypes/**` are intentionally exempt.
+
+```
+npm run test          # vitest, single run
+npm run test:watch    # vitest, watch mode
+npm run test:cov      # vitest with v8 coverage (95% lines / 90% branches)
+npm run test:mutation # Stryker mutation testing (break threshold 70 %)
+npm run check         # test:cov && test:mutation — the verification gate
+```
+
+`npm run check` is what CI runs on every push and pull request (see `.github/workflows/ci.yml`). Reports land in `reports/coverage/` and `reports/mutation/`.
 
 ## Prototypes
 
