@@ -15,6 +15,9 @@
     "test:mutation": "stryker run",
     "check": "npm run test:cov && npm run test:mutation"
   },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
   "devDependencies": {
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/vitest-runner": "^9.6.1",

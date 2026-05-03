@@ -2,133 +2,154 @@
 <html lang="cs">
 <head>
   <meta charset="UTF-8">
-  <title>Aenternis — WASM smoke test</title>
+  <title>Aenternis — WASM 3D viewer</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0a0a10;
+      background: #050508;
       color: #e0e0e0;
       overflow: hidden;
       height: 100vh;
-      display: grid;
-      grid-template-columns: 320px 1fr;
+      width: 100vw;
+    }
+    #canvasContainer {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+    }
+    #canvasContainer canvas {
+      display: block;
     }
     .hud {
-      padding: 16px;
-      border-right: 1px solid #2a2a35;
+      position: fixed;
+      top: 16px; left: 16px;
+      width: 320px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 8px;
+      pointer-events: none;
+      font-size: 12px;
+      z-index: 10;
+    }
+    .hud .panel {
+      background: rgba(20, 20, 25, 0.85);
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 10px 12px;
+      pointer-events: auto;
+      backdrop-filter: blur(6px);
     }
     .hud h2 {
+      font-size: 14px;
       color: #d4a76a;
-      font-size: 16px;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
     }
     .hud h3 {
-      color: #d4a76a;
       font-size: 12px;
-      margin-top: 8px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+      color: #d4a76a;
+      margin-bottom: 4px;
     }
     .row {
       display: flex;
-      justify-content: space-between;
-      font-size: 13px;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0;
+      flex-wrap: wrap;
     }
-    .row .label { color: #8a8a90; }
+    .row .label, .row label {
+      color: #8a8a90;
+      min-width: 100px;
+    }
     .row .value {
       color: #f0e0c0;
       font-variant-numeric: tabular-nums;
+      margin-left: auto;
     }
-    button {
-      background: #2a2a35;
-      color: #e0e0e0;
-      border: 1px solid #3a3a45;
-      padding: 6px 12px;
-      border-radius: 3px;
-      cursor: pointer;
-      font-size: 12px;
+    .panel.hint {
+      color: #8a8a90;
+      font-style: italic;
+      font-size: 11px;
+      line-height: 1.4;
     }
-    button:hover { background: #34344a; }
-    .controls {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
+    .panel.hint strong {
+      color: #d4a76a;
+      font-style: normal;
     }
-    .config {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    input[type="number"] {
+    input[type="number"], select {
       background: #0e0e12;
       color: #e0e0e0;
       border: 1px solid #2a2a30;
       padding: 3px 6px;
       border-radius: 3px;
-      font-size: 12px;
-      width: 100%;
-    }
-    input[type="range"] { width: 100%; }
-    .hint {
       font-size: 11px;
-      color: #6a6a72;
-      font-style: italic;
-      line-height: 1.4;
+      width: 110px;
     }
-    canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
-      background: #000;
+    input[type="range"] {
+      flex: 1;
+      max-width: 130px;
     }
+    button {
+      background: #2a2a35;
+      color: #e0e0e0;
+      border: 1px solid #3a3a45;
+      padding: 4px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+      margin-right: 4px;
+    }
+    button:hover { background: #34344a; }
   </style>
 </head>
 <body>
-  <aside class="hud">
-    <h2>Aenternis · WASM smoke test</h2>
-    <div class="hint">
-      Phase 3c milestone — Rust + WASM simulation core, rendered as 2D
-      projection. Three.js arrives in phase 4.
+  <div id="canvasContainer"></div>
+
+  <div class="hud">
+    <div class="panel">
+      <h2>Aenternis · WASM 3D</h2>
+      <div class="row"><span class="label">tick</span><span class="value" id="tick">0</span></div>
+      <div class="row"><span class="label">cells</span><span class="value" id="cells">0</span></div>
+      <div class="row"><span class="label">total energy</span><span class="value" id="energy">0</span></div>
+      <div class="row"><span class="label">FPS</span><span class="value" id="fps">-</span></div>
     </div>
 
-    <h3>Stats</h3>
-    <div class="row"><span class="label">tick</span><span class="value" id="tick">0</span></div>
-    <div class="row"><span class="label">cells</span><span class="value" id="cells">0</span></div>
-    <div class="row"><span class="label">total energy</span><span class="value" id="energy">0</span></div>
-    <div class="row"><span class="label">FPS</span><span class="value" id="fps">-</span></div>
-
-    <h3>Controls</h3>
-    <div class="controls">
-      <button id="pauseBtn">Pause</button>
-      <button id="resetBtn">Reset</button>
-    </div>
-
-    <h3>Config</h3>
-    <div class="config">
-      <div class="row"><span class="label">seed</span></div>
-      <input id="seed" type="number" value="42" min="0" max="4294967295">
-      <div class="row"><span class="label">big-bang energy</span></div>
-      <input id="energy_in" type="number" value="500" min="0" max="100000">
+    <div class="panel">
+      <h3>Controls</h3>
       <div class="row">
-        <span class="label">coeff</span>
+        <button id="pauseBtn">Pause</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Config</h3>
+      <div class="row">
+        <label>seed</label>
+        <input id="seed" type="number" value="42" min="0" max="4294967295">
+      </div>
+      <div class="row">
+        <label>energy</label>
+        <input id="energy_in" type="number" value="500" min="0" max="100000">
+      </div>
+      <div class="row">
+        <label>coeff</label>
+        <input id="coeff" type="range" min="0.05" max="0.30" step="0.01" value="0.20">
         <span class="value" id="coeffVal">0.20</span>
       </div>
-      <input id="coeff" type="range" min="0.05" max="0.30" step="0.01" value="0.20">
-      <div class="row"><span class="label">k</span><span class="value" id="kVal">1</span></div>
-      <input id="k" type="range" min="1" max="32" value="1">
+      <div class="row">
+        <label>k</label>
+        <input id="k" type="range" min="1" max="32" value="1">
+        <span class="value" id="kVal">1</span>
+      </div>
     </div>
 
-    <div class="hint">
-      Renderer ignoruje z-osu (čistá xy projekce). Color: energy → heat
-      ramp. Z-stack v 3D viewer přijde s Three.js v Phase 4.
+    <div class="panel hint">
+      <strong>Camera:</strong> drag = rotace, scroll = zoom, pravé tl. = pan.
+      Phase 4a — 3D voxely přes Three.js InstancedMesh. WSAD kamera +
+      tracker přijdou v 4b.
     </div>
-  </aside>
-
-  <canvas id="canvas"></canvas>
+  </div>
 
   <script type="module" src="./main.js"></script>
 </body>
