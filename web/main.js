@@ -27,6 +27,8 @@ function rebuild() {
   world.free();
   world = new World(config.seed, config.energy);
   cameraFitDirty = true;
+  tracker.trail = [];
+  tracker.current = null;
 }
 
 // ----- Three.js setup --------------------------------------------------------
@@ -59,6 +61,68 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(50, 80, 50);
 scene.add(dirLight);
+
+// ----- WSAD camera (FPS-style movement on top of OrbitControls) --------------
+//
+// W/S = forward/back along view direction
+// A/D = strafe left/right (perpendicular to view)
+// Q/E = down/up in world Y
+// Shift = sprint (3x)
+//
+// Move both camera and orbit target by the same delta so the orbit
+// relationship stays consistent during translation.
+
+const keyState = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+
+function isInputFocused(target) {
+  const tag = (target && target.tagName) || "";
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+}
+
+window.addEventListener("keydown", (ev) => {
+  if (isInputFocused(ev.target)) return;
+  const k = ev.key.toLowerCase();
+  if (k in keyState) keyState[k] = true;
+  if (k === "shift") keyState.shift = true;
+});
+window.addEventListener("keyup", (ev) => {
+  const k = ev.key.toLowerCase();
+  if (k in keyState) keyState[k] = false;
+  if (k === "shift") keyState.shift = false;
+});
+window.addEventListener("blur", () => {
+  for (const k of Object.keys(keyState)) keyState[k] = false;
+});
+
+const _camForward = new THREE.Vector3();
+const _camRight = new THREE.Vector3();
+const _worldUp = new THREE.Vector3(0, 1, 0);
+const _moveDelta = new THREE.Vector3();
+
+function applyWsad(dtMs) {
+  if (!keyState.w && !keyState.a && !keyState.s && !keyState.d
+      && !keyState.q && !keyState.e) return;
+
+  // Speed scales with current camera-target distance so the move is
+  // perceptually consistent at any zoom level.
+  const dist = camera.position.distanceTo(controls.target);
+  const baseSpeed = Math.max(dist * 0.01, 0.1) * (dtMs / 16);
+  const speed = baseSpeed * (keyState.shift ? 3 : 1);
+
+  camera.getWorldDirection(_camForward);
+  _camRight.crossVectors(_camForward, _worldUp).normalize();
+
+  _moveDelta.set(0, 0, 0);
+  if (keyState.w) _moveDelta.addScaledVector(_camForward, speed);
+  if (keyState.s) _moveDelta.addScaledVector(_camForward, -speed);
+  if (keyState.d) _moveDelta.addScaledVector(_camRight, speed);
+  if (keyState.a) _moveDelta.addScaledVector(_camRight, -speed);
+  if (keyState.e) _moveDelta.y += speed;
+  if (keyState.q) _moveDelta.y -= speed;
+
+  camera.position.add(_moveDelta);
+  controls.target.add(_moveDelta);
+}
 
 // ----- Voxel mesh (instanced, dynamic capacity) ------------------------------
 
@@ -117,6 +181,117 @@ function heatColor(t) {
   ];
 }
 
+// ----- Tracker (highlight max-energy cell + trail) ---------------------------
+
+const tracker = {
+  enabled: true,
+  trailLen: 60,
+  trail: [],          // [{x, y, z, energy}]
+  current: null,      // { x, y, z, energy } — the cell we're currently tracking
+  highlightMesh: null,
+  trailLine: null,
+};
+
+function createHighlightMesh() {
+  if (tracker.highlightMesh) {
+    scene.remove(tracker.highlightMesh);
+    tracker.highlightMesh.geometry.dispose();
+    tracker.highlightMesh.material.dispose();
+  }
+  const geo = new THREE.BoxGeometry(1.4, 1.4, 1.4);
+  const mat = new THREE.LineBasicMaterial({ color: 0xfff0c0, transparent: true, opacity: 0.95 });
+  const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), mat);
+  wire.visible = false;
+  scene.add(wire);
+  tracker.highlightMesh = wire;
+}
+
+function createTrailLine() {
+  if (tracker.trailLine) {
+    scene.remove(tracker.trailLine);
+    tracker.trailLine.geometry.dispose();
+    tracker.trailLine.material.dispose();
+  }
+  const cap = Math.max(2, tracker.trailLen + 1);
+  const geo = new THREE.BufferGeometry();
+  const positions = new Float32Array(cap * 3);
+  const colors = new Float32Array(cap * 3);
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geo.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85 });
+  const line = new THREE.Line(geo, mat);
+  line.frustumCulled = false;
+  scene.add(line);
+  tracker.trailLine = line;
+}
+
+createHighlightMesh();
+createTrailLine();
+
+function updateTracker(maxCellIdx, snap, stride) {
+  if (!tracker.enabled || maxCellIdx < 0) {
+    if (tracker.highlightMesh) tracker.highlightMesh.visible = false;
+    if (tracker.trailLine) tracker.trailLine.visible = false;
+    if (dom.trackerPos) dom.trackerPos.textContent = "-";
+    return;
+  }
+
+  const off = maxCellIdx * stride;
+  const x = snap[off] | 0;
+  const y = snap[off + 1] | 0;
+  const z = snap[off + 2] | 0;
+  const e = snap[off + 3];
+  tracker.current = { x, y, z, energy: e };
+
+  // Append to trail only when the position actually changes (otherwise
+  // we'd stack repeated points on the same coord).
+  const last = tracker.trail.length > 0 ? tracker.trail[tracker.trail.length - 1] : null;
+  if (!last || last.x !== x || last.y !== y || last.z !== z) {
+    tracker.trail.push({ x, y, z, energy: e });
+    while (tracker.trail.length > tracker.trailLen + 1) tracker.trail.shift();
+  } else {
+    last.energy = e;
+  }
+
+  // Highlight wireframe + tiny pulse so it's visible against bright cells.
+  if (tracker.highlightMesh) {
+    tracker.highlightMesh.visible = true;
+    tracker.highlightMesh.position.set(x, y, z);
+    const pulse = 1.0 + 0.08 * Math.sin(performance.now() / 250);
+    tracker.highlightMesh.scale.setScalar(pulse);
+  }
+
+  // Trail line — fade older positions toward dark.
+  if (tracker.trailLine) {
+    const len = tracker.trail.length;
+    tracker.trailLine.visible = (tracker.trailLen > 0) && (len > 1);
+    if (tracker.trailLine.visible) {
+      const positions = tracker.trailLine.geometry.attributes.position.array;
+      const colors = tracker.trailLine.geometry.attributes.color.array;
+      const cap = positions.length / 3;
+      const drawLen = Math.min(len, cap);
+      for (let i = 0; i < drawLen; i++) {
+        const p = tracker.trail[len - drawLen + i];
+        positions[i * 3]     = p.x;
+        positions[i * 3 + 1] = p.y;
+        positions[i * 3 + 2] = p.z;
+        const f = (i + 1) / drawLen; // 0..1, newer = brighter
+        colors[i * 3]     = 1.00 * f;
+        colors[i * 3 + 1] = 0.80 * f;
+        colors[i * 3 + 2] = 0.20 * f;
+      }
+      tracker.trailLine.geometry.setDrawRange(0, drawLen);
+      tracker.trailLine.geometry.attributes.position.needsUpdate = true;
+      tracker.trailLine.geometry.attributes.color.needsUpdate = true;
+    }
+  }
+
+  if (dom.trackerPos) {
+    dom.trackerPos.textContent = `(${x},${y},${z}) E=${e.toLocaleString()}`;
+  }
+}
+
 // ----- HUD --------------------------------------------------------------------
 
 const dom = {
@@ -132,7 +307,20 @@ const dom = {
   coeffVal: document.getElementById("coeffVal"),
   k: document.getElementById("k"),
   kVal: document.getElementById("kVal"),
+  trackerEnabled: document.getElementById("trackerEnabled"),
+  trailLen: document.getElementById("trailLen"),
+  trailLenVal: document.getElementById("trailLenVal"),
+  trackerPos: document.getElementById("trackerPos"),
 };
+
+dom.trackerEnabled.addEventListener("change", () => {
+  tracker.enabled = dom.trackerEnabled.checked;
+});
+dom.trailLen.addEventListener("input", () => {
+  tracker.trailLen = parseInt(dom.trailLen.value, 10);
+  dom.trailLenVal.textContent = tracker.trailLen;
+  createTrailLine(); // realloc buffer
+});
 
 dom.pauseBtn.addEventListener("click", () => {
   running = !running;
@@ -182,6 +370,8 @@ function frame(now) {
   lastT = now;
   if (dt > 0) fpsAvg = 0.9 * fpsAvg + 0.1 * (1000 / dt);
 
+  applyWsad(dt);
+
   if (running) {
     world.step(config.coeff, config.k);
   }
@@ -192,19 +382,22 @@ function frame(now) {
 
   ensureCapacity(Math.max(cellCount, lastUsedCount));
 
-  // First pass: bbox + max energy.
+  // First pass: bbox + max energy + index of the max-energy cell (for tracker).
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
   let maxE = 0;
-  for (let i = 0; i < snap.length; i += stride) {
-    const x = snap[i] | 0;
-    const y = snap[i + 1] | 0;
-    const z = snap[i + 2] | 0;
+  let maxCellIdx = -1;
+  for (let i = 0; i < cellCount; i++) {
+    const off = i * stride;
+    const x = snap[off] | 0;
+    const y = snap[off + 1] | 0;
+    const z = snap[off + 2] | 0;
     if (x < minX) minX = x; if (x > maxX) maxX = x;
     if (y < minY) minY = y; if (y > maxY) maxY = y;
     if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-    if (snap[i + 3] > maxE) maxE = snap[i + 3];
+    const e = snap[off + 3];
+    if (e > maxE) { maxE = e; maxCellIdx = i; }
   }
   if (maxE < 1) maxE = 1;
 
@@ -244,6 +437,8 @@ function frame(now) {
 
   voxelMesh.instanceMatrix.needsUpdate = true;
   if (voxelMesh.instanceColor) voxelMesh.instanceColor.needsUpdate = true;
+
+  updateTracker(maxCellIdx, snap, stride);
 
   controls.update();
   renderer.render(scene, camera);

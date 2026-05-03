@@ -144,10 +144,28 @@
       </div>
     </div>
 
+    <div class="panel">
+      <h3>Tracker</h3>
+      <div class="row">
+        <label>sledovat</label>
+        <input id="trackerEnabled" type="checkbox" checked>
+        <span class="hint">nejsilnější cela</span>
+      </div>
+      <div class="row">
+        <label>trail</label>
+        <input id="trailLen" type="range" min="0" max="200" step="5" value="60">
+        <span class="value" id="trailLenVal">60</span>
+      </div>
+      <div class="row">
+        <label>pozice</label>
+        <span class="value" id="trackerPos">-</span>
+      </div>
+    </div>
+
     <div class="panel hint">
-      <strong>Camera:</strong> drag = rotace, scroll = zoom, pravé tl. = pan.
-      Phase 4a — 3D voxely přes Three.js InstancedMesh. WSAD kamera +
-      tracker přijdou v 4b.
+      <strong>Kamera:</strong> drag = rotace, scroll = zoom, pravé tl. = pan.<br>
+      <strong>WSAD</strong> + Q/E (dolů/nahoru), Shift = sprint (3×).<br>
+      Phase 4b — WSAD kamera + tracker s trail.
     </div>
   </div>
 
