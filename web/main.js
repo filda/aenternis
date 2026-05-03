@@ -317,6 +317,8 @@ const dom = {
   cells: document.getElementById("cells"),
   energy: document.getElementById("energy"),
   fps: document.getElementById("fps"),
+  msPerTick: document.getElementById("msPerTick"),
+  ticksPerSec: document.getElementById("ticksPerSec"),
   pauseBtn: document.getElementById("pauseBtn"),
   resetBtn: document.getElementById("resetBtn"),
   seed: document.getElementById("seed"),
@@ -388,7 +390,10 @@ const tempScale = new THREE.Vector3(1, 1, 1);
 
 let lastT = performance.now();
 let fpsAvg = 0;
+let msPerTickAvg = 0;
+let ticksPerSecAvg = 0;
 let lastRenderedTick = -1;
+let lastTickStampT = 0;
 
 function frame(now) {
   const dt = now - lastT;
@@ -401,6 +406,18 @@ function frame(now) {
   // re-build instance data when the snapshot has actually advanced.
   if (latestSnapshot && latestSnapshot.tick !== lastRenderedTick) {
     renderSnapshot(latestSnapshot);
+
+    // Smooth tick metrics from this newly-arrived snapshot.
+    msPerTickAvg = 0.85 * msPerTickAvg + 0.15 * latestSnapshot.msPerTick;
+    if (lastTickStampT > 0) {
+      const ticksDelta = latestSnapshot.tick - lastRenderedTick;
+      const wallDelta = now - lastTickStampT;
+      if (ticksDelta > 0 && wallDelta > 0) {
+        const observed = (ticksDelta * 1000) / wallDelta;
+        ticksPerSecAvg = 0.85 * ticksPerSecAvg + 0.15 * observed;
+      }
+    }
+    lastTickStampT = now;
     lastRenderedTick = latestSnapshot.tick;
   }
 
@@ -413,6 +430,8 @@ function frame(now) {
     dom.energy.textContent = latestSnapshot.totalEnergy.toLocaleString();
   }
   dom.fps.textContent = fpsAvg.toFixed(1);
+  dom.msPerTick.textContent = msPerTickAvg.toFixed(1);
+  dom.ticksPerSec.textContent = ticksPerSecAvg.toFixed(1);
 
   requestAnimationFrame(frame);
 }

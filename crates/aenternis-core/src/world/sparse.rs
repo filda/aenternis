@@ -44,17 +44,27 @@ pub struct SparseWorld {
 
     /// Current tick count. Starts at zero, monotonically increasing.
     pub tick: u64,
+
+    /// Threshold for collision-as-soft-mixing (`docs/mechanics.md`).
+    /// `dominance = clamp(1 - target_E / (attacker_E_post_burn *
+    /// move_threshold), 0, 1)`. Default `2.0`.
+    pub move_threshold: f32,
 }
 
 impl SparseWorld {
+    /// Default value for [`SparseWorld::move_threshold`].
+    pub const DEFAULT_MOVE_THRESHOLD: f32 = 2.0;
+
     /// Build an empty world. No cells exist yet; the caller is responsible
     /// for inserting any initial state (typically via [`big_bang`](Self::big_bang)).
+    /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
     #[must_use]
     pub const fn new(world_seed: u64) -> Self {
         Self {
             cells: BTreeMap::new(),
             world_seed,
             tick: 0,
+            move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
         }
     }
 

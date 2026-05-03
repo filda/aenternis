@@ -55,9 +55,13 @@ function schedule() {
   setTimeout(loop, 0);
 }
 
+let lastMsPerTick = 0;
+
 function loop() {
   if (!world || !running) return;
+  const t0 = performance.now();
   world.step(coeff, k);
+  lastMsPerTick = performance.now() - t0;
   sendSnapshot();
   schedule();
 }
@@ -71,6 +75,7 @@ function sendSnapshot() {
       tick: world.tick(),
       cellCount: world.cellCount(),
       totalEnergy: world.totalEnergy(),
+      msPerTick: lastMsPerTick,
       snap,
       stride: world.snapshotStride,
     },

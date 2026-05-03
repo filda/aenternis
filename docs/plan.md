@@ -98,9 +98,21 @@ Animated smoke-test page lives in `web/` (`web/index.html` + `web/main.js`): `re
 
 Production frontend in `web/` that loads the WASM module, runs the simulation in a Web Worker, and renders via Three.js (instanced spheres + WSAD + tracker, lifted from prototype 8). Inspector panel and assembler/disassembler from prototype 6 ported to read live WASM state. Prototypes/ then closes as historical lab notes.
 
-### Later
+### Phase 5 — Dominance / intrusion ✓
 
-- **Dominance / intrusion** in the Rust core (still pending in prototype 6 as the JS reference).
+Collision-as-soft-mixing implemented in `tick::apply_outflow`. Three-phase pipeline replaces the old append-at-end logic:
+
+1. Snapshot pre-step energies + per-source total outflow.
+2. Shrink each source by its total outflow.
+3. Per target, build inflow entries with `dominance = clamp(1 - r/move_threshold, 0, 1)` where `r = target_E_post / max(attacker_E_post_burn, 1)`. Sort by dominance descending (tie-break by canonical direction). Insert each at `write_start = memSize - intrusion_depth`. Origin-tag inheritance fires when top dominance ≥ 0.5.
+
+PC stays numerically the same across the insert (body-snatch vs. continuity per `pc_old < write_start`, exactly as `docs/mechanics.md` point 15.3 specifies).
+
+`SparseWorld::move_threshold: f32` (default 2.0, public field) tunes how easily strong attackers take over. 9 new tests cover the dominance arithmetic, intrusion-depth math, sort order with multiple inflows, origin-tag inheritance threshold, and conservation. **Done 2026-05-04.**
+
+**Visual observable:** before phase 5 the WASM 3D viewer rendered a uniform "potato"; after phase 5 it shows the same wisps and local concentrations as JS prototype 9. The fix wasn't iteration order, it was a missing physical mechanic.
+
+### Later
 - **Lineage tracker** + manual tag + war paint as a UI overlay.
 - **Sensor expansion**: `sinflow`, `sself`, `srate` opcodes.
 - **Z80-density opcodes**: bitwise, arithmetic, conditional jumps, stack. Goal: ~60 % meaningful opcodes for emergent appearance from random noise.

@@ -193,52 +193,182 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
     }
 }
 
-/// Apply an [`Outflow`] snapshot to the world.
+/// Apply an [`Outflow`] snapshot to the world with collision-as-soft-mixing
+/// (dominance / intrusion) semantics, per `docs/mechanics.md`.
 ///
-/// Shrinks each source by its total outgoing slot count, then appends
-/// per-direction inflows into neighbors. Void neighbors are alloc-on-
-/// written via [`SparseWorld::get_or_alloc`].
+/// Three phases, sequential to keep the result independent of iteration
+/// order:
 ///
-/// The two phases run sequentially (all shrinks, then all appends), not
-/// per-cell interleaved. Doing it the other way would let a freshly
-/// shrunk cell receive inflows on top of its already-reduced memory,
-/// which is what we want; but interleaving per-cell would make the
-/// behavior depend on iteration order, which `BTreeMap` keeps stable
-/// but that's not a contract we want to lean on for physics.
+/// 1. **Snapshot pre-step energies.** Build a `Coord → energy` map plus
+///    `Coord → total_outflow` so the dominance math has consistent
+///    "before this tick's outflow" inputs for both attacker and target.
+/// 2. **Shrink sources.** Every cell loses `total_outflow` slots from
+///    the end of memory. Energy = `memory.len()` invariant restored.
+/// 3. **Per-target intrusion insert.** Inflows targeting the same cell
+///    are sorted by dominance descending (tie-break by source-direction
+///    canonical order) and applied one by one: each inflow is inserted
+///    at `write_start = memSize - intrusion_depth`, displacing the
+///    target's existing memory upward. Strong attackers drive deep into
+///    the core; weak ones stack on the membrane.
 ///
-/// Per-direction order on the inflow side is the canonical
-/// `[xp, xn, yp, yn, zp, zn]` — same load-bearing invariant as
-/// elsewhere. A target cell receiving from multiple neighbors gets all
-/// inflows appended in this fixed direction order.
+/// **Dominance:** `dominance = clamp(1 - r / move_threshold, 0, 1)`
+/// where `r = target_E_post_outflow / max(attacker_E_post_burn, 1)`,
+/// `attacker_E_post_burn = source.energy_pre - source.total_outflow`,
+/// and `target_E_post_outflow = target.energy_pre - target.total_outflow`.
+/// Void targets have both energies and total outflow at zero.
 ///
-/// **Conservation:** total slots before == total slots after, modulo
-/// the cap behavior in [`Cell::append_slots`] (no cap is passed here,
-/// so memory grows freely). Energy is therefore conserved.
+/// **Origin-tag inheritance:** if the highest-dominance inflow has
+/// `dominance >= 0.5`, the target adopts the attacker's `origin_tag`.
+/// Sub-`0.5` collisions leave the tag alone.
+///
+/// **PC under metempsychosis:** the target's program counter stays
+/// numerically the same. If `pc_old < write_start`, the program runs
+/// on. If `pc_old >= write_start`, PC now points into the attacker's
+/// freshly-inserted code — body snatch. The PC is finally taken modulo
+/// the new memory length so it stays in range; only happens when
+/// memory shrank (impossible here — inflow only grows or holds).
+///
+/// **Conservation:** total slots before == total slots after.
 pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
-    // Phase 1: shrink each source by its total outgoing slot count.
+    // -------------------------------------------------------------------
+    // Phase 1: snapshot pre-step energies + per-source total outflow.
+    // -------------------------------------------------------------------
+    let pre_energy: BTreeMap<Coord, u32> = world
+        .cells
+        .iter()
+        .map(|(c, cell)| (*c, cell.energy()))
+        .collect();
+
+    let mut total_outflow: BTreeMap<Coord, u32> = BTreeMap::new();
     for (coord, per_dir) in outflow {
         let total: u32 = per_dir
             .iter()
             .map(|v| u32::try_from(v.len()).unwrap_or(u32::MAX))
             .fold(0u32, u32::saturating_add);
+        total_outflow.insert(*coord, total);
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 2: shrink each source by its total outgoing slot count.
+    // -------------------------------------------------------------------
+    for (coord, total) in &total_outflow {
         if let Some(cell) = world.cells.get_mut(coord) {
-            cell.shrink_from_end(total);
+            cell.shrink_from_end(*total);
         }
     }
 
-    // Phase 2: append per-direction inflows into neighbors. Allocate
-    // void neighbors as empty cells before appending.
+    // -------------------------------------------------------------------
+    // Phase 3: build per-target inflow lists with dominance, then apply.
+    // -------------------------------------------------------------------
+    //
+    // Per target: vec of (slots, dominance, src_origin_tag, dir_from_target_index).
+    // dir_from_target_index is the OPPOSITE of the source's emission dir,
+    // and is used as a deterministic tie-breaker when multiple inflows
+    // share the same dominance.
+
+    let move_threshold = world.move_threshold.max(f32::EPSILON);
+    let mut inflows_by_target: BTreeMap<Coord, Vec<InflowEntry<'_>>> = BTreeMap::new();
+
     for (source_coord, per_dir) in outflow {
+        let attacker_pre = pre_energy.get(source_coord).copied().unwrap_or(0);
+        let attacker_total = total_outflow.get(source_coord).copied().unwrap_or(0);
+        let attacker_post_burn = u32::max(1, attacker_pre.saturating_sub(attacker_total));
+        let src_origin_tag = world.cells.get(source_coord).map_or(0, |c| c.origin_tag);
+
         for &d in &Direction::ALL {
-            let inflows = &per_dir[d.index()];
-            if inflows.is_empty() {
+            let slots = &per_dir[d.index()];
+            if slots.is_empty() {
                 continue;
             }
             let target_coord = source_coord.neighbor(d);
-            let target = world.get_or_alloc(target_coord);
-            target.append_slots(inflows, None);
+
+            let target_pre = pre_energy.get(&target_coord).copied().unwrap_or(0);
+            let target_total = total_outflow.get(&target_coord).copied().unwrap_or(0);
+            let target_e_post = target_pre.saturating_sub(target_total);
+
+            let r = u32_to_f32(target_e_post) / u32_to_f32(attacker_post_burn);
+            let dom = (1.0 - r / move_threshold).clamp(0.0, 1.0);
+
+            let dir_from_target = d.opposite().index() as u8;
+            inflows_by_target.entry(target_coord).or_default().push((
+                slots.as_slice(),
+                dom,
+                src_origin_tag,
+                dir_from_target,
+            ));
         }
     }
+
+    for (target_coord, mut entries) in inflows_by_target {
+        // Sort by dominance descending; tie-break by direction-from-target
+        // ascending (canonical order = deterministic).
+        entries.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.3.cmp(&b.3))
+        });
+
+        let target = world.get_or_alloc(target_coord);
+
+        // Origin-tag inheritance: highest-dominance source wins, but only
+        // if its dominance crosses the metempsychosis threshold.
+        if let Some(top) = entries.first() {
+            if top.1 >= 0.5 {
+                target.origin_tag = top.2;
+            }
+        }
+
+        // Apply each inflow with intrusion-depth insert.
+        for (slots, dominance, _, _) in &entries {
+            let current = target.memory.len();
+            let intrusion_depth = ((*dominance) * usize_to_f32(current)) as usize;
+            let write_start = current.saturating_sub(intrusion_depth);
+
+            // new_mem = mem[..write_start] ++ slots ++ mem[write_start..]
+            let mut new_mem = Vec::with_capacity(current + slots.len());
+            new_mem.extend_from_slice(&target.memory[..write_start]);
+            new_mem.extend_from_slice(slots);
+            new_mem.extend_from_slice(&target.memory[write_start..]);
+            target.memory = new_mem;
+        }
+
+        // PC stays numerically the same; bring it back into range if
+        // memory ever shrank. (Inflow phase only grows, so this is a
+        // no-op here, but defensive.)
+        if target.memory.is_empty() {
+            target.pc = 0;
+        } else {
+            target.pc %= target.memory.len() as u32;
+        }
+    }
+}
+
+/// Inflow entry built during phase 3 of [`apply_outflow`]: a slice of
+/// slots to insert, the attacker's dominance against the target, the
+/// attacker's origin tag (for metempsychosis), and the direction the
+/// inflow appears from the target's perspective (used as a deterministic
+/// tie-breaker when sorting equal-dominance inflows).
+type InflowEntry<'a> = (&'a [u32], f32, u32, u8);
+
+/// `u32 → f32` cast for dominance arithmetic. Cell energies stay well
+/// below `2^24` in any realistic world (where `f32` is exact), so the
+/// cast is lossless in practice. `clippy::cast_precision_loss` can't
+/// see that constraint, so we localize the suppression. `const fn`
+/// can't hold float `as` casts on MSRV 1.78 either, hence the second
+/// allow.
+#[allow(clippy::cast_precision_loss, clippy::missing_const_for_fn)]
+#[inline]
+fn u32_to_f32(v: u32) -> f32 {
+    v as f32
+}
+
+/// `usize → f32` cast for `intrusion_depth`. Same story as
+/// [`u32_to_f32`]: memory sizes are bounded by the world's energy,
+/// which fits comfortably under the `f32` mantissa precision.
+#[allow(clippy::cast_precision_loss, clippy::missing_const_for_fn)]
+#[inline]
+fn usize_to_f32(v: usize) -> f32 {
+    v as f32
 }
 
 /// Reset transient per-tick state on every cell: pointer overrides and

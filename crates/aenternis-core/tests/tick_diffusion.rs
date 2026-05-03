@@ -146,6 +146,7 @@ fn apply_outflow_allocates_void_neighbor_with_inflow() {
     let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50]);
     cell.rates[Direction::Xp.index()] = 2;
     cell.pointers[Direction::Xp.index()] = 0;
+    cell.origin_tag = 0xCAFE; // explicit so we can verify inheritance
     w.insert(Coord::ORIGIN, cell);
 
     let outflow = collect_outflow(&w);
@@ -157,9 +158,9 @@ fn apply_outflow_allocates_void_neighbor_with_inflow() {
         .get(Coord::new(1, 0, 0))
         .expect("alloc-on-write should have created the cell");
     assert_eq!(target.memory, vec![10, 20]);
-    // Origin tag is the deterministic per-cell-at-tick value, so
-    // it's not zero.
-    assert_ne!(target.origin_tag, 0);
+    // Strong attacker against an empty target → dominance ≈ 1.0,
+    // so the target inherits the attacker's origin tag.
+    assert_eq!(target.origin_tag, 0xCAFE);
 }
 
 #[test]
