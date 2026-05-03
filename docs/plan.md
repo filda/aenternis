@@ -1,6 +1,6 @@
 # Aenternis — plan and implementation status
 
-Last updated: 2026-05-03 (prototype 9 implemented; 3D sparse prototype dropped from plan)
+Last updated: 2026-05-03 (Rust core + VM done; toroid harness deferred; WASM bindings next)
 
 This document summarizes where we are and what comes next. Decisions about mechanics live in `mechanics.md`, questions and agreements in `questions.md`, prototypes in `prototypes.md`.
 
@@ -13,6 +13,7 @@ This document summarizes where we are and what comes next. Decisions about mecha
 - The 3D variant in prototype 5 as a baseline for emergent reproduction
 - A 3D performance test (prototype 7) and a 3D viewer (prototype 8, including a Web Worker mode)
 - Sparse world (prototype 9, 2D): big bang from a single cell, `world.size() ≤ E_total` invariant, alloc-on-write, GC of `E = 0` cells, tick-based RNG. Bit-equivalent to a port of prototype 6's toroid for 1000+ ticks while it stays inside the toroid window.
+- **Rust core skeleton** (`crates/aenternis-core/`): `Coord`, `Direction`, `Rng` (PCG-XSH-RR-64/32 with splittable per-cell-per-tick streams), `Cell` (memory + 6 pointers + 6 rates + active outflow + override flags + PC + UI tags), `proportional_clamp`, `SparseWorld` (`BTreeMap<Coord, Cell>` for deterministic iteration, big bang, GC, neighbor lookup). 92 unit / integration tests, all green; no tick logic yet.
 - Slot model (32-bit unsigned integer, opcode = low byte)
 - VM with 20 opcodes (nop, set, copy, add, sub, inc, dec, jmp, jz, setp, getp, port, senergy, jne, je, ldi, sti, setpv, sid, paint)
 - Passive emission with pointer layout from the end of memory
@@ -41,20 +42,78 @@ See `questions.md`. Notably:
 - Performance refactor for larger worlds
 - Rust + WASM as the production platform
 
-## Nearest work (priority)
+## Implementation roadmap (Rust + WASM)
 
-1. **Dominance / intrusion in prototype 6** — implement `attacker_E_post_burn`, `dominance`, `intrusion_depth`, insertion in place of append. Start with default `move_threshold = 2.0`. PC rule = numerically stable (body snatch or continuity, depending on `pc_old < write_start`).
-2. **Lineage tracker + manual tag + war paint in the inspector** — origin_tag field in the UI, visualization mode (the opcodes `sid` and `paint` are already implemented).
-3. **Tier 1 debug metrics** — extend the inspector with `energy_before/after`, `natural_rate[d]`, `active_rate[d]`, `combined_rate[d]`, `inflow[d]`.
-4. **Sensors** — implement `sinflow`, `sself`, `srate`.
-5. **Cooperation experiments** — once the above is in place, write actual cooperative programs and observe what patterns arise.
+The skeleton crate is in place; from here the work proceeds in narrow phases that each end on a passing `bash scripts/check.sh` (= `cargo fmt --check && cargo clippy -D warnings && cargo test`).
 
-## Later phases
+### Phase 0 — Skeleton ✓
 
-- **Instruction-set expansion to Z80 density**: bitwise operations, arithmetic, conditional jumps, stack. Goal: ~60 % meaningful opcodes.
-- **Prototype 10 (self-encapsulation, 2D sparse)** — once dominance is settled (still pending in prototype 6) and now that the sparse world model is verified (prototype 9, done 2026-05-03), a concrete laboratory experiment with self-encapsulating programs. Self-encapsulation fits the sparse model especially well: "surrounding yourself with your own neighbors" becomes literally "creating your own surrounding world from your own energy".
-- **Real implementation in Rust + WASM, sparse 3D from day one**: prototype 9 verified that sparse mechanics are dimension-agnostic — `DIRS = 4 → 6` is a configuration change, not a design change. There is therefore **no separate 3D JS sparse prototype** planned; the 3D port goes directly into production Rust + WASM. First production milestone: port `test-equivalence.js` to Rust as bit-identity harness against a Rust port of the prototype 5 toroid. Bit-identity for 1000 ticks while sparse stays inside the toroid window = same verification gate the JS version passed, but in production code.
-- **Performance refactor of JS prototypes is no longer prioritized.** Original plan was to refactor toroid prototypes (5–8) for shared `Uint32Array` and bigger N. With sparse 3D moving directly to Rust + WASM, the JS toroid prototypes stay as historical lab experiments at their current performance ceiling (N ≈ 32–48 smooth, 64 usable offline).
+Workspace, lints, CI job, helper script for the verification gate, and four foundation modules: `Coord`/`Direction`, `Rng`, `Cell` + `proportional_clamp`, `SparseWorld`. **Done 2026-05-03.**
+
+### Phase 1 — Diffusion-only tick ✓
+
+End-to-end tick cycle without the CPU phase. `tick::compute_natural_rates`, `tick::lay_out_pointers`, `tick::collect_outflow`, `tick::apply_outflow`, `tick::end_of_tick`, plus the `tick::initialize` helper and the orchestrating `tick::step_diffusion(world, coeff)`. `SparseWorld::get_or_alloc` provides the alloc-on-write entry point used by inflow into void neighbors.
+
+Verified by 132 tests, including:
+
+- **conservation** of `world.total_energy()` across 50 ticks of `step_diffusion`
+- `world.len() ≤ total_energy` invariant maintained across 20 ticks
+- **determinism** — two independently-seeded simulations produce byte-identical state for every cell after 30 ticks
+- big bang from origin expands outward (orthogonal neighbors are alloc-on-written in the first tick)
+- empty cells produced during outflow are removed by `gc_empty` before the next tick starts
+
+The behavioral semantics match prototype 9: the only pieces still missing for parity are the CPU phase, `active_outflow`-driven reflow, and dominance / intrusion. **Done 2026-05-03.**
+
+### Phase 2 — VM execution ✓
+
+20-opcode VM wired in as the CPU phase. Per-cell `floor(energy / k)` instructions executed against a snapshot of neighbor energies (introspection invariant enforced by type signature — `execute_instruction` has no access to the world). Programs may override pointers via `setp`/`setpv` and accumulate active outflow via `port`; the sub-tick reflow re-runs `lay_out_pointers` with the resulting combined rates honoring the override flags.
+
+Verified by 57 additional tests (189 total), including:
+
+- **conservation** holds with VM running over 30 ticks (random program from big-bang noise) — no opcode leaks energy
+- **determinism** with VM running — two seeded simulations produce byte-identical state after 20 ticks
+- `step(world, coeff, u32::MAX)` ≡ `step_diffusion(world, coeff)` (budget = 0, no instructions)
+- per-opcode behavior matches `docs/vm.md` (set, copy, add, sub, inc, dec, jmp, jz, jne, je, setp, getp, port, senergy, ldi, sti, setpv, sid, paint, plus nop and unknown-opcode default)
+- modular addressing, PC wrap, direction-modulo for `d` operand
+- two adjacent cells running `senergy` each see the other's energy correctly through the per-cell snapshot
+
+`tick::step(world, coeff, k)` is now the production tick. `tick::step_diffusion` remains for tests that want a CPU-less baseline. **Done 2026-05-03.**
+
+### Phase 3 — WASM bindings ✓
+
+`crates/aenternis-wasm/` cdylib wraps the core `SparseWorld` as an owned-handle JS API via `wasm-bindgen`. Build via `wasm-pack build crates/aenternis-wasm --target web` (now also a step in `scripts/check.sh`, so the verification gate enforces a working WASM bundle).
+
+API surface:
+
+- `new(seed, energy)`, `step(coeff, k)` — constructor + tick
+- `total_energy()`, `cell_count()`, `tick()` — scalar stats
+- `cells_snapshot()` — flat `Uint32Array`, 6 fields per cell `(x, y, z, energy, origin_tag, appearance)`, deterministic canonical iteration order
+- `snapshot_stride` getter (= 6) so JS doesn't hard-code the layout
+
+Animated smoke-test page lives in `web/` (`web/index.html` + `web/main.js`): `requestAnimationFrame` loop, 2D xy projection on a canvas, heat-ramp coloring of cells, HUD with tick / cell count / total energy / FPS, and Pause / Reset / config controls. Run via `npm run dev:wasm` (which opens `/web/` in the browser; the WASM bundle must already be built — `bash scripts/check.sh` rebuilds it as a side effect).
+
+**Done 2026-05-03.**
+
+### Phase 4 — Frontend integration
+
+Production frontend in `web/` that loads the WASM module, runs the simulation in a Web Worker, and renders via Three.js (instanced spheres + WSAD + tracker, lifted from prototype 8). Inspector panel and assembler/disassembler from prototype 6 ported to read live WASM state. Prototypes/ then closes as historical lab notes.
+
+### Later
+
+- **Dominance / intrusion** in the Rust core (still pending in prototype 6 as the JS reference).
+- **Lineage tracker** + manual tag + war paint as a UI overlay.
+- **Sensor expansion**: `sinflow`, `sself`, `srate` opcodes.
+- **Z80-density opcodes**: bitwise, arithmetic, conditional jumps, stack. Goal: ~60 % meaningful opcodes for emergent appearance from random noise.
+- **Persistence**: `bincode` save / load with an explicit version byte in the header.
+- **Aging counter** as a debug metric (open: per-slot vs aggregated, see `questions.md`).
+- **Reflection mechanism** if cap-exceeding inflows turn out to be a problem in 3D.
+- **Performance**: rayon `par_iter` over cells, eventually `SharedArrayBuffer` + WASM threads for off-main parallelism. Only after profiling shows it's needed.
+- **Optional: toroid reference + bit-identity harness in Rust**. Originally listed as the first production milestone (a port of prototype 5's toroid as a side-by-side baseline for sparse). Demoted to optional because (a) prototype 9 already verified the sparse-vs-toroid equivalence in 2D JS, (b) the 2D-to-3D step is a config change (`DIRS = 4 → 6`) with no logic change, and (c) the Rust sparse engine already has strong invariant coverage (conservation, determinism, world-size bound, per-opcode behavior). Revisit only if a concrete bug surfaces that this harness would have caught.
+
+### Out of scope (for now)
+
+- **JS-side performance refactor.** With sparse 3D moving directly to Rust + WASM, the JS toroid prototypes (5–8) stay as historical lab experiments at their current ceiling (N ≈ 32–48 smooth, 64 usable offline).
+- **Prototype 10 (self-encapsulation, 2D sparse)** — paused; the same physical question can be studied directly in the 3D Rust + WASM core once dominance lands. If Rust dominance proves hard to debug, a JS prototype 10 may come back as a sandbox.
 
 ## Milestone history
 
@@ -64,3 +123,5 @@ See `questions.md`. Notably:
 - **2026-05-01**: consolidation discussion. Documentation refactored — split into `aenternis.md` (core), `mechanics.md` (detail), `questions.md` (questions), `vm.md` (spec), `prototypes.md` (laboratories).
 - **2026-05-02**: prototype 7 (3D performance test) and prototype 8 (3D viewer with WSAD camera, instanced rendering, Web Worker mode); `sid` and `paint` opcodes implemented (VM at 20 opcodes).
 - **2026-05-03**: prototype 9 (sparse world, 2D) — `Map<bigint, Cell>` replacing the toroidal grid, big bang as initial condition, alloc-on-write + GC, tick-based RNG. Headless conservation test + bit-identity comparison harness against a port of prototype 6.
+- **2026-05-03 (later)**: Rust + WASM implementation kicked off. Cargo workspace (`crates/aenternis-core/`), CI job (`cargo fmt --check + clippy -D warnings + test`), `scripts/check.sh` helper for the local sandbox loop. Phase 0 skeleton landed: `Coord` + `Direction`, deterministic PCG `Rng` with splittable per-cell-per-tick streams, `Cell` with full pointer/rate/override surface + `proportional_clamp`, `SparseWorld` over `BTreeMap<Coord, Cell>` with big bang and `gc_empty`. 92 tests, all green. No tick logic yet — that's phase 1.
+- **2026-05-03 (evening)**: Phase 1 (diffusion-only tick) and Phase 2 (full VM execution) landed in a single sandbox-iteration loop. 189 tests, all green. The Rust core now matches prototype 9's physics in 3D + a working 20-opcode CPU phase. Energy conservation verified over 30 ticks of `step` with the VM actively running random noise as a program. Production sparse 3D engine at functional parity with the JS prototypes (modulo dominance / lineage tracker / sensor expansion, all on the post-bit-identity backlog).

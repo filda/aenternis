@@ -14,7 +14,10 @@
 - For browser / visual / UX work in prototypes, manual repro steps in chat are sufficient — see "Prototypes are exempt" below.
 - **Prototypes are exempt from the test gate.** Files under `prototypes/**` are throwaway laboratory experiments. They are explicitly excluded from coverage and mutation runs (see `vitest.config.js` and `stryker.conf.json`). Don't write tests for prototype code; don't refactor prototype code in service of testability.
 - For sim-logic changes (when they hit `src/`), a counting / conservation check (`isEnergyConserved`, `totalSlots`) over many ticks counts as a real test and should be added.
-- When the prototypes mature into the real Rust + WASM implementation (see `docs/plan.md`), the same discipline applies on the Rust side: `cargo test` for unit tests, `cargo llvm-cov` for coverage (high thresholds), and `cargo mutants` for mutation testing. Production Rust code must pass all three before a task is done.
+- The Rust workspace lives at the repository root (`Cargo.toml` + `crates/aenternis-core/`). The Rust verification gate is **`cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`** — all three must pass after every non-trivial change to a Rust file. CI runs this automatically (see `.github/workflows/ci.yml`, job `rust`).
+- Coverage and mutation testing on the Rust side will be added once the core has more than skeleton modules: `cargo llvm-cov` for coverage and `cargo mutants` for mutation testing (analogue of the JS Stryker pipeline). Same expectation: thresholds high, surviving mutants are missing assertions.
+- When working in Rust, follow the same "all production code must have tests" rule. Tests can live next to the module (`#[cfg(test)] mod tests`) for unit work or under `tests/` for integration. The `aenternis-core` crate has a `tests/coord.rs` example to mirror.
+- The production Rust + WASM implementation targets sparse 3D from day one (see `docs/plan.md`). Toroidal models live only as fixed-N reference implementations for the bit-identity harness against the JS prototypes.
 
 ## Project Basics
 

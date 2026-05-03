@@ -6,4 +6,7 @@ dist/
 reports/
 .stryker-tmp/
 coverage/
+target/
+**/*.rs.bk
+crates/*/pkg/
 /AGENTS.local.md

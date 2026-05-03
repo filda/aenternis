@@ -1,0 +1,41 @@
+# Aenternis Cargo workspace.
+#
+# Production code lives under `crates/`. Today only `aenternis-core` exists;
+# a `aenternis-wasm` cdylib will join once the core stabilizes enough to wrap.
+# Workspace-level lints apply to every member crate.
+
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT"
+authors = ["Filip Subr"]
+repository = "https://github.com/filipsubr/aenternis"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# A handful of pedantic lints are too noisy for a small simulation core
+# where we use plain `as` for known-safe widening conversions.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+# Tests benefit from a little optimization to keep wallclock reasonable
+# once the simulation core grows; this still keeps debug info.
+opt-level = 1

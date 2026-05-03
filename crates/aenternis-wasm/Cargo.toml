@@ -1,0 +1,22 @@
+[package]
+name = "aenternis-wasm"
+description = "WebAssembly bindings for the Aenternis simulation core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# `cdylib` is what wasm-pack consumes to produce the .wasm bundle.
+# `rlib` is kept so `cargo test --workspace` can run host-target tests
+# against the same wrapper code.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+aenternis-core = { path = "../aenternis-core" }
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true

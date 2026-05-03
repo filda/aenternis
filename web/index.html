@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Aenternis — WASM smoke test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0a0a10;
+      color: #e0e0e0;
+      overflow: hidden;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+    }
+    .hud {
+      padding: 16px;
+      border-right: 1px solid #2a2a35;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .hud h2 {
+      color: #d4a76a;
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+    .hud h3 {
+      color: #d4a76a;
+      font-size: 12px;
+      margin-top: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+    .row .label { color: #8a8a90; }
+    .row .value {
+      color: #f0e0c0;
+      font-variant-numeric: tabular-nums;
+    }
+    button {
+      background: #2a2a35;
+      color: #e0e0e0;
+      border: 1px solid #3a3a45;
+      padding: 6px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    button:hover { background: #34344a; }
+    .controls {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .config {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    input[type="number"] {
+      background: #0e0e12;
+      color: #e0e0e0;
+      border: 1px solid #2a2a30;
+      padding: 3px 6px;
+      border-radius: 3px;
+      font-size: 12px;
+      width: 100%;
+    }
+    input[type="range"] { width: 100%; }
+    .hint {
+      font-size: 11px;
+      color: #6a6a72;
+      font-style: italic;
+      line-height: 1.4;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+    }
+  </style>
+</head>
+<body>
+  <aside class="hud">
+    <h2>Aenternis · WASM smoke test</h2>
+    <div class="hint">
+      Phase 3c milestone — Rust + WASM simulation core, rendered as 2D
+      projection. Three.js arrives in phase 4.
+    </div>
+
+    <h3>Stats</h3>
+    <div class="row"><span class="label">tick</span><span class="value" id="tick">0</span></div>
+    <div class="row"><span class="label">cells</span><span class="value" id="cells">0</span></div>
+    <div class="row"><span class="label">total energy</span><span class="value" id="energy">0</span></div>
+    <div class="row"><span class="label">FPS</span><span class="value" id="fps">-</span></div>
+
+    <h3>Controls</h3>
+    <div class="controls">
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+
+    <h3>Config</h3>
+    <div class="config">
+      <div class="row"><span class="label">seed</span></div>
+      <input id="seed" type="number" value="42" min="0" max="4294967295">
+      <div class="row"><span class="label">big-bang energy</span></div>
+      <input id="energy_in" type="number" value="500" min="0" max="100000">
+      <div class="row">
+        <span class="label">coeff</span>
+        <span class="value" id="coeffVal">0.20</span>
+      </div>
+      <input id="coeff" type="range" min="0.05" max="0.30" step="0.01" value="0.20">
+      <div class="row"><span class="label">k</span><span class="value" id="kVal">1</span></div>
+      <input id="k" type="range" min="1" max="32" value="1">
+    </div>
+
+    <div class="hint">
+      Renderer ignoruje z-osu (čistá xy projekce). Color: energy → heat
+      ramp. Z-stack v 3D viewer přijde s Three.js v Phase 4.
+    </div>
+  </aside>
+
+  <canvas id="canvas"></canvas>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

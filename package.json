@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "dev:p8": "vite --open /prototypes/08-viewer-3d/",
+    "dev:wasm": "vite --open /web/",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
