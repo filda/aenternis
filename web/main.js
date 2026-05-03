@@ -1,15 +1,19 @@
-// Aenternis — WASM 3D viewer (phase 4a).
+// Aenternis — WASM 3D viewer (phase 4c).
 //
-// Rust core compiled to WASM, rendered as Three.js InstancedMesh of
-// spheres. One instance per cell; positions and colors are updated
-// every frame from `world.cellsSnapshot()`. Capacity grows on demand
-// (powers of two) so we don't pre-allocate megabytes for tiny worlds.
+// Render thread only. The WASM World instance and the per-tick step
+// loop live in a dedicated Web Worker (`./worker.js`); the main thread
+// receives `{ snap, stride, tick, ... }` snapshots over postMessage
+// (Uint32Array transferred zero-copy) and renders the latest one each
+// animation frame.
+//
+// This decoupling keeps the render thread at 60 FPS even when the
+// simulation is heavy. Render and sim are independent: if the worker
+// is slow, the renderer reuses the last snapshot; if the renderer is
+// slow, intermediate snapshots are simply overwritten before they're
+// drawn.
 
-import init, { World } from "/crates/aenternis-wasm/pkg/aenternis_wasm.js";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-
-await init();
 
 // ----- Configuration ---------------------------------------------------------
 
@@ -20,15 +24,44 @@ const config = {
   k: 1,
 };
 
-let world = new World(config.seed, config.energy);
-let running = true;
+// ----- Worker setup ----------------------------------------------------------
 
-function rebuild() {
-  world.free();
-  world = new World(config.seed, config.energy);
+const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+
+let latestSnapshot = null; // { snap, stride, tick, cellCount, totalEnergy }
+let workerReady = false;
+
+worker.onmessage = (ev) => {
+  const msg = ev.data;
+  if (msg.type === "ready") {
+    workerReady = true;
+    sendInit();
+  } else if (msg.type === "snapshot") {
+    latestSnapshot = msg;
+  }
+};
+
+function sendInit() {
+  worker.postMessage({
+    type: "init",
+    seed: config.seed,
+    energy: config.energy,
+    coeff: config.coeff,
+    k: config.k,
+  });
   cameraFitDirty = true;
   tracker.trail = [];
   tracker.current = null;
+}
+
+function sendConfig() {
+  if (!workerReady) return;
+  worker.postMessage({ type: "config", coeff: config.coeff, k: config.k });
+}
+
+function sendRunning(running) {
+  if (!workerReady) return;
+  worker.postMessage({ type: "running", running });
 }
 
 // ----- Three.js setup --------------------------------------------------------
@@ -63,14 +96,6 @@ dirLight.position.set(50, 80, 50);
 scene.add(dirLight);
 
 // ----- WSAD camera (FPS-style movement on top of OrbitControls) --------------
-//
-// W/S = forward/back along view direction
-// A/D = strafe left/right (perpendicular to view)
-// Q/E = down/up in world Y
-// Shift = sprint (3x)
-//
-// Move both camera and orbit target by the same delta so the orbit
-// relationship stays consistent during translation.
 
 const keyState = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
 
@@ -103,8 +128,6 @@ function applyWsad(dtMs) {
   if (!keyState.w && !keyState.a && !keyState.s && !keyState.d
       && !keyState.q && !keyState.e) return;
 
-  // Speed scales with current camera-target distance so the move is
-  // perceptually consistent at any zoom level.
   const dist = camera.position.distanceTo(controls.target);
   const baseSpeed = Math.max(dist * 0.01, 0.1) * (dtMs / 16);
   const speed = baseSpeed * (keyState.shift ? 3 : 1);
@@ -143,7 +166,6 @@ function ensureCapacity(n) {
   }
   voxelMesh = new THREE.InstancedMesh(voxelGeometry, voxelMaterial, cap);
   voxelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  // Pre-fill colors so .setColorAt is valid for any index.
   const initColor = new THREE.Color(0, 0, 0);
   for (let i = 0; i < cap; i++) {
     voxelMesh.setColorAt(i, initColor);
@@ -155,7 +177,7 @@ function ensureCapacity(n) {
 
 ensureCapacity(1024);
 
-// ----- Heat ramp (energy → color) --------------------------------------------
+// ----- Heat ramp -------------------------------------------------------------
 
 const HEAT_STOPS = [
   [0.00, [0.00, 0.00, 0.00]],
@@ -186,8 +208,8 @@ function heatColor(t) {
 const tracker = {
   enabled: true,
   trailLen: 60,
-  trail: [],          // [{x, y, z, energy}]
-  current: null,      // { x, y, z, energy } — the cell we're currently tracking
+  trail: [],
+  current: null,
   highlightMesh: null,
   trailLine: null,
 };
@@ -244,8 +266,6 @@ function updateTracker(maxCellIdx, snap, stride) {
   const e = snap[off + 3];
   tracker.current = { x, y, z, energy: e };
 
-  // Append to trail only when the position actually changes (otherwise
-  // we'd stack repeated points on the same coord).
   const last = tracker.trail.length > 0 ? tracker.trail[tracker.trail.length - 1] : null;
   if (!last || last.x !== x || last.y !== y || last.z !== z) {
     tracker.trail.push({ x, y, z, energy: e });
@@ -254,7 +274,6 @@ function updateTracker(maxCellIdx, snap, stride) {
     last.energy = e;
   }
 
-  // Highlight wireframe + tiny pulse so it's visible against bright cells.
   if (tracker.highlightMesh) {
     tracker.highlightMesh.visible = true;
     tracker.highlightMesh.position.set(x, y, z);
@@ -262,7 +281,6 @@ function updateTracker(maxCellIdx, snap, stride) {
     tracker.highlightMesh.scale.setScalar(pulse);
   }
 
-  // Trail line — fade older positions toward dark.
   if (tracker.trailLine) {
     const len = tracker.trail.length;
     tracker.trailLine.visible = (tracker.trailLen > 0) && (len > 1);
@@ -276,7 +294,7 @@ function updateTracker(maxCellIdx, snap, stride) {
         positions[i * 3]     = p.x;
         positions[i * 3 + 1] = p.y;
         positions[i * 3 + 2] = p.z;
-        const f = (i + 1) / drawLen; // 0..1, newer = brighter
+        const f = (i + 1) / drawLen;
         colors[i * 3]     = 1.00 * f;
         colors[i * 3 + 1] = 0.80 * f;
         colors[i * 3 + 2] = 0.20 * f;
@@ -313,31 +331,37 @@ const dom = {
   trackerPos: document.getElementById("trackerPos"),
 };
 
+let running = true;
+
+dom.pauseBtn.addEventListener("click", () => {
+  running = !running;
+  dom.pauseBtn.textContent = running ? "Pause" : "Resume";
+  sendRunning(running);
+});
+dom.resetBtn.addEventListener("click", () => {
+  config.seed = parseInt(dom.seed.value, 10) || 0;
+  config.energy = parseInt(dom.energyIn.value, 10) || 0;
+  running = true;
+  dom.pauseBtn.textContent = "Pause";
+  sendInit();
+});
+dom.coeff.addEventListener("input", () => {
+  config.coeff = parseFloat(dom.coeff.value);
+  dom.coeffVal.textContent = config.coeff.toFixed(2);
+  sendConfig();
+});
+dom.k.addEventListener("input", () => {
+  config.k = parseInt(dom.k.value, 10) || 1;
+  dom.kVal.textContent = config.k;
+  sendConfig();
+});
 dom.trackerEnabled.addEventListener("change", () => {
   tracker.enabled = dom.trackerEnabled.checked;
 });
 dom.trailLen.addEventListener("input", () => {
   tracker.trailLen = parseInt(dom.trailLen.value, 10);
   dom.trailLenVal.textContent = tracker.trailLen;
-  createTrailLine(); // realloc buffer
-});
-
-dom.pauseBtn.addEventListener("click", () => {
-  running = !running;
-  dom.pauseBtn.textContent = running ? "Pause" : "Resume";
-});
-dom.resetBtn.addEventListener("click", () => {
-  config.seed = parseInt(dom.seed.value, 10) || 0;
-  config.energy = parseInt(dom.energyIn.value, 10) || 0;
-  rebuild();
-});
-dom.coeff.addEventListener("input", () => {
-  config.coeff = parseFloat(dom.coeff.value);
-  dom.coeffVal.textContent = config.coeff.toFixed(2);
-});
-dom.k.addEventListener("input", () => {
-  config.k = parseInt(dom.k.value, 10) || 1;
-  dom.kVal.textContent = config.k;
+  createTrailLine();
 });
 
 // ----- Camera initial fit ----------------------------------------------------
@@ -354,7 +378,7 @@ function fitCameraToWorld(minX, maxX, minY, maxY, minZ, maxZ) {
   camera.updateProjectionMatrix();
 }
 
-// ----- Frame loop ------------------------------------------------------------
+// ----- Frame loop (render only — sim runs in worker) -------------------------
 
 const tempMatrix = new THREE.Matrix4();
 const tempColor = new THREE.Color();
@@ -364,6 +388,7 @@ const tempScale = new THREE.Vector3(1, 1, 1);
 
 let lastT = performance.now();
 let fpsAvg = 0;
+let lastRenderedTick = -1;
 
 function frame(now) {
   const dt = now - lastT;
@@ -372,17 +397,31 @@ function frame(now) {
 
   applyWsad(dt);
 
-  if (running) {
-    world.step(config.coeff, config.k);
+  // Render only when we've received at least one snapshot, and only
+  // re-build instance data when the snapshot has actually advanced.
+  if (latestSnapshot && latestSnapshot.tick !== lastRenderedTick) {
+    renderSnapshot(latestSnapshot);
+    lastRenderedTick = latestSnapshot.tick;
   }
 
-  const snap = world.cellsSnapshot();
-  const stride = world.snapshotStride;
-  const cellCount = (snap.length / stride) | 0;
+  controls.update();
+  renderer.render(scene, camera);
+
+  if (latestSnapshot) {
+    dom.tick.textContent = latestSnapshot.tick;
+    dom.cells.textContent = latestSnapshot.cellCount.toLocaleString();
+    dom.energy.textContent = latestSnapshot.totalEnergy.toLocaleString();
+  }
+  dom.fps.textContent = fpsAvg.toFixed(1);
+
+  requestAnimationFrame(frame);
+}
+
+function renderSnapshot(state) {
+  const { snap, stride, cellCount } = state;
 
   ensureCapacity(Math.max(cellCount, lastUsedCount));
 
-  // First pass: bbox + max energy + index of the max-energy cell (for tracker).
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   let minZ = Infinity, maxZ = -Infinity;
@@ -401,13 +440,11 @@ function frame(now) {
   }
   if (maxE < 1) maxE = 1;
 
-  // Camera initial fit (only on first frame after rebuild).
   if (cameraFitDirty && cellCount > 0) {
     fitCameraToWorld(minX, maxX, minY, maxY, minZ, maxZ);
     cameraFitDirty = false;
   }
 
-  // Second pass: write instance matrix + color for each cell.
   for (let i = 0; i < cellCount; i++) {
     const off = i * stride;
     const x = snap[off] | 0;
@@ -425,7 +462,6 @@ function frame(now) {
     voxelMesh.setColorAt(i, tempColor);
   }
 
-  // Hide previously-used instances that are now beyond the live count.
   if (lastUsedCount > cellCount) {
     const zeroScale = new THREE.Vector3(0, 0, 0);
     for (let i = cellCount; i < lastUsedCount; i++) {
@@ -439,17 +475,6 @@ function frame(now) {
   if (voxelMesh.instanceColor) voxelMesh.instanceColor.needsUpdate = true;
 
   updateTracker(maxCellIdx, snap, stride);
-
-  controls.update();
-  renderer.render(scene, camera);
-
-  // HUD.
-  dom.tick.textContent = world.tick();
-  dom.cells.textContent = cellCount.toLocaleString();
-  dom.energy.textContent = world.totalEnergy().toLocaleString();
-  dom.fps.textContent = fpsAvg.toFixed(1);
-
-  requestAnimationFrame(frame);
 }
 
 requestAnimationFrame(frame);
