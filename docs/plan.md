@@ -1,6 +1,6 @@
 # Aenternis — plan and implementation status
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03 (prototype 9 implemented; 3D sparse prototype dropped from plan)
 
 This document summarizes where we are and what comes next. Decisions about mechanics live in `mechanics.md`, questions and agreements in `questions.md`, prototypes in `prototypes.md`.
 
@@ -8,10 +8,11 @@ This document summarizes where we are and what comes next. Decisions about mecha
 
 ### Done in implementation
 
-- 8 laboratory prototypes (`prototypes/01-diffusion` through `08-viewer-3d`), each verifying a specific layer of physics
+- 9 laboratory prototypes (`prototypes/01-diffusion` through `09-sparse-world`), each verifying a specific layer of physics
 - The 2D variant in prototype 6 as a platform for cooperation and collision experiments
 - The 3D variant in prototype 5 as a baseline for emergent reproduction
 - A 3D performance test (prototype 7) and a 3D viewer (prototype 8, including a Web Worker mode)
+- Sparse world (prototype 9, 2D): big bang from a single cell, `world.size() ≤ E_total` invariant, alloc-on-write, GC of `E = 0` cells, tick-based RNG. Bit-equivalent to a port of prototype 6's toroid for 1000+ ticks while it stays inside the toroid window.
 - Slot model (32-bit unsigned integer, opcode = low byte)
 - VM with 20 opcodes (nop, set, copy, add, sub, inc, dec, jmp, jz, setp, getp, port, senergy, jne, je, ldi, sti, setpv, sid, paint)
 - Passive emission with pointer layout from the end of memory
@@ -50,10 +51,10 @@ See `questions.md`. Notably:
 
 ## Later phases
 
-- **Performance refactor**: shared `Uint32Array` for the whole world, allocation recycling, optionally a web worker. Goal: 64×64 running smoothly, 100×100 with a smile.
 - **Instruction-set expansion to Z80 density**: bitwise operations, arithmetic, conditional jumps, stack. Goal: ~60 % meaningful opcodes.
-- **Real implementation in Rust + WASM**: once the physics is verified enough and the VM stable. Today this is still the prototype phase.
-- **Prototype 9 (self-encapsulation)** — once dominance is settled, this will be a concrete laboratory experiment with self-encapsulating programs.
+- **Prototype 10 (self-encapsulation, 2D sparse)** — once dominance is settled (still pending in prototype 6) and now that the sparse world model is verified (prototype 9, done 2026-05-03), a concrete laboratory experiment with self-encapsulating programs. Self-encapsulation fits the sparse model especially well: "surrounding yourself with your own neighbors" becomes literally "creating your own surrounding world from your own energy".
+- **Real implementation in Rust + WASM, sparse 3D from day one**: prototype 9 verified that sparse mechanics are dimension-agnostic — `DIRS = 4 → 6` is a configuration change, not a design change. There is therefore **no separate 3D JS sparse prototype** planned; the 3D port goes directly into production Rust + WASM. First production milestone: port `test-equivalence.js` to Rust as bit-identity harness against a Rust port of the prototype 5 toroid. Bit-identity for 1000 ticks while sparse stays inside the toroid window = same verification gate the JS version passed, but in production code.
+- **Performance refactor of JS prototypes is no longer prioritized.** Original plan was to refactor toroid prototypes (5–8) for shared `Uint32Array` and bigger N. With sparse 3D moving directly to Rust + WASM, the JS toroid prototypes stay as historical lab experiments at their current performance ceiling (N ≈ 32–48 smooth, 64 usable offline).
 
 ## Milestone history
 
@@ -62,3 +63,4 @@ See `questions.md`. Notably:
 - **2026-04-30**: prototype 5 (3D field of micro-entities, slot model, pointers), prototype 6 (2D cooperation), 18 opcodes
 - **2026-05-01**: consolidation discussion. Documentation refactored — split into `aenternis.md` (core), `mechanics.md` (detail), `questions.md` (questions), `vm.md` (spec), `prototypes.md` (laboratories).
 - **2026-05-02**: prototype 7 (3D performance test) and prototype 8 (3D viewer with WSAD camera, instanced rendering, Web Worker mode); `sid` and `paint` opcodes implemented (VM at 20 opcodes).
+- **2026-05-03**: prototype 9 (sparse world, 2D) — `Map<bigint, Cell>` replacing the toroidal grid, big bang as initial condition, alloc-on-write + GC, tick-based RNG. Headless conservation test + bit-identity comparison harness against a port of prototype 6.

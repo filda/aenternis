@@ -6,3 +6,4 @@ dist/
 reports/
 .stryker-tmp/
 coverage/
+/AGENTS.local.md

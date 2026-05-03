@@ -1,6 +1,6 @@
 # Aenternis — prototypes
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03 (prototype 9 implemented; 3D sparse prototype dropped)
 
 A series of laboratory web prototypes lives in `prototypes/`. Each prototype is meant to verify a specific layer of physics or programmer interface. They are not games; they are experiments.
 
@@ -114,6 +114,28 @@ Built on Three.js, using `InstancedMesh` for N³ voxels, OrbitControls + WSAD FP
 
 **Status: experimental platform.** Confirms that instanced rendering + Web Worker is the right architectural direction; the perceptual / UX questions (camera, filters, what's actually playable) remain open.
 
+## Prototype 9: sparse world (2D)
+
+`prototypes/09-sparse-world/` — 2026-05-03
+
+A 2D world without a fixed grid. The world's size is a consequence of total energy: a cell exists iff `E > 0`, and `world.size() ≤ E_total`. The big bang is the literal initial condition — one cell at (0, 0) holds all the energy and the world expands outward. Built on the same VM and physics as prototype 6 (20 opcodes, 4 directions), with `Map<bigint, Cell>` replacing the toroidal `Float32Array`, alloc-on-write semantics for emission into void, garbage collection of `E = 0` cells, and tick-based RNG that makes results independent of cell life-cycle.
+
+Comes with two test harnesses (Node):
+
+- `test-headless.js` — conservation + cap invariants over 200+ ticks for three scenarios
+- `test-equivalence.js` — bit-identical match against a port of prototype 6's toroid (fixed-N), valid while sparse stays inside the toroid bbox
+
+**Question:** can we replace the fixed toroidal grid with a sparse representation governed by the invariant `cells ≤ energy`, and preserve all the existing physics without exceptions?
+
+**Status: successfully verified.** Observations:
+
+- big bang and heat death emerge from physics alone — entropy gradient is real, not designed
+- sparse and toroidal implementations are bit-identical for 1000+ ticks (pure_noise, counter) while sparse stays inside the toroid's window
+- expansion front advances at ≈ 1 cell / tick / side in heat-death-like regimes, slower for compact replicators
+- `world.size()` peaks around 97% of `E_total` for noise scenarios, matching the theoretical maximum
+
+**Out of scope (carried forward):** 3D variant, full inspector, lineage tracker, history-trace overlay. See README in the prototype directory for the full lab notes.
+
 ## Planned extensions / further prototypes
 
 From the consolidation on 2026-05-01, several priorities remain unimplemented:
@@ -121,10 +143,15 @@ From the consolidation on 2026-05-01, several priorities remain unimplemented:
 - **Dominance / intrusion mechanic** in the existing prototype 6 — collision as soft mixing of continuities
 - **Lineage tracker + manual tag + war paint** in the prototype 6 UI
 - **Sensor expansion** (`sinflow`, `sself`, `srate`)
-- **Performance refactor** (shared TypedArray) for larger worlds
-- **Real implementation** in Rust + WASM for production-grade stages
+- **Real implementation** in Rust + WASM for production-grade stages — now targeting **sparse 3D directly** (see `plan.md`)
 
-Detail in `plan.md` and `questions.md`.
+Designed in May 2026 and awaiting implementation:
+
+- **Prototype 10 (self-encapsulation, 2D sparse)** — once the sparse world model is verified (which prototype 9 has done) and dominance / intrusion lands in prototype 6, a concrete experiment with self-encapsulating programs. Self-encapsulation in the sparse model is literally "creating your own surrounding world from your own energy".
+
+**No separate 3D sparse JS prototype is planned.** Prototype 9 demonstrated that sparse mechanics are dimension-agnostic — `DIRS = 4 → 6` is a configuration change, not a design change. The 3D port therefore skips the prototype phase and goes directly into the Rust + WASM production implementation. First production milestone is bit-identity verification (port of `test-equivalence.js` to Rust) against a Rust port of prototype 5's toroid.
+
+Detail in `plan.md`, `prototype-09-plan.md`, and `questions.md`.
 
 ## The tone of experimentation
 

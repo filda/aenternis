@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<title>Aenternis — prototyp 9: sparse svět (2D)</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <h1>Aenternis — prototyp 9: sparse svět (2D)</h1>
+  <span class="lead">buňka existuje ⇔ E&nbsp;&gt;&nbsp;0 · <code>cells&nbsp;≤&nbsp;E_total</code> · big bang z 1×1</span>
+</header>
+
+<main>
+
+<section class="controls">
+  <fieldset>
+    <legend>Svět</legend>
+    <label>
+      E_total
+      <input id="eTotalInput" type="number" min="1" max="65536" value="512" step="1">
+    </label>
+    <label>
+      Difuzní koef.
+      <input id="diffusionInput" type="range" min="0.05" max="0.40" step="0.01" value="0.15">
+      <span id="diffusionValue">0.15</span>
+    </label>
+    <label>
+      K (energie/instr.)
+      <input id="cpuKInput" type="number" min="1" max="64" value="1">
+    </label>
+    <label>
+      move_threshold
+      <input id="moveThresholdInput" type="range" min="1.0" max="5.0" step="0.1" value="2.0">
+      <span id="moveThresholdValue">2.0</span>
+    </label>
+    <label>
+      seed
+      <input id="seedInput" type="number" min="1" value="1234">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Běh</legend>
+    <button id="runButton">Spustit</button>
+    <button id="stepButton">Tik</button>
+    <button id="resetButton">Reset</button>
+    <label>
+      kroky / frame
+      <input id="stepsPerFrameInput" type="number" min="1" max="50" value="1">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Vizualizace</legend>
+    <label><input type="radio" name="viz" value="energy" checked> energie</label>
+    <label><input type="radio" name="viz" value="memory_top"> mem (top)</label>
+    <label><input type="radio" name="viz" value="memory_bottom"> mem (bottom)</label>
+    <label>zoom <input id="zoomInput" type="range" min="2" max="32" step="1" value="8"><span id="zoomValue">8</span></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Program v centrální buňce (volitelné)</legend>
+    <select id="presetInput">
+      <option value="">-- vyber preset --</option>
+    </select>
+    <textarea id="programInput" rows="4" placeholder="; asembler nebo raw hex; aplikuje se Reset
+start:
+  setp xp, start
+  jmp start"></textarea>
+  </fieldset>
+</section>
+
+<section class="viz">
+  <div class="hud">
+    <span>tick: <strong id="tickValue">0</strong></span>
+    <span>buněk: <strong id="cellCountValue">0</strong></span>
+    <span>E_total: <strong id="totalEnergyValue">0</strong></span>
+    <span>bbox: <strong id="bboxValue">—</strong></span>
+    <span>centroid: <strong id="centroidValue">—</strong></span>
+    <span class="cap">cap: <strong id="capValue">—</strong></span>
+  </div>
+  <div class="canvas-wrap">
+    <canvas id="worldCanvas" width="640" height="640"></canvas>
+  </div>
+</section>
+
+<section class="diagnostics">
+  <h2>Batch</h2>
+  <button id="conservationCheckButton">10 000 ticek (3 scénáře)</button>
+  <div id="conservationOutput" class="diagnostics-box mono">Bílá tečka = centroid · červený kříž = origin (0,0) · zelený rámec = bbox</div>
+</section>
+
+</main>
+
+<script src="world.js"></script>
+<script src="main.js"></script>
+
+</body>
+</html>
