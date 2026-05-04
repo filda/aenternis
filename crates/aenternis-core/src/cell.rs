@@ -59,6 +59,12 @@ pub struct Cell {
     /// [`end_of_tick`](Self::end_of_tick).
     pub pointer_override: [bool; Direction::COUNT],
 
+    /// Per-direction count of slots received in the most recently
+    /// completed tick. Written by `tick::apply_outflow`, read by the
+    /// `sinflow` opcode. Persists across `end_of_tick` so the next
+    /// tick's CPU phase can observe it.
+    pub inflow: [u32; Direction::COUNT],
+
     /// Program counter — index into [`memory`](Self::memory).
     pub pc: u32,
 
@@ -80,6 +86,7 @@ impl Cell {
             rates: [0; Direction::COUNT],
             active_outflow: [0; Direction::COUNT],
             pointer_override: [false; Direction::COUNT],
+            inflow: [0; Direction::COUNT],
             pc: 0,
             origin_tag: 0,
             appearance: 0,

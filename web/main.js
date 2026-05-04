@@ -38,6 +38,8 @@ worker.onmessage = (ev) => {
     sendInit();
   } else if (msg.type === "snapshot") {
     latestSnapshot = msg;
+  } else if (msg.type === "cellDetail") {
+    renderInspector(msg);
   }
 };
 
@@ -433,6 +435,8 @@ function frame(now) {
   dom.msPerTick.textContent = msPerTickAvg.toFixed(1);
   dom.ticksPerSec.textContent = ticksPerSecAvg.toFixed(1);
 
+  maybeRefreshInspector();
+
   requestAnimationFrame(frame);
 }
 
@@ -493,7 +497,151 @@ function renderSnapshot(state) {
   voxelMesh.instanceMatrix.needsUpdate = true;
   if (voxelMesh.instanceColor) voxelMesh.instanceColor.needsUpdate = true;
 
+  // Three.js raycasts InstancedMesh by first testing the global
+  // bounding sphere; without an explicit update it stays around the
+  // single zero-instance default and the cursor never finds anything.
+  // Update it from the world's bbox so clicks can hit live cells.
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+  const halfSpan = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 2) / 2 + 1;
+  if (!voxelMesh.boundingSphere) {
+    voxelMesh.boundingSphere = new THREE.Sphere();
+  }
+  voxelMesh.boundingSphere.center.set(cx, cy, cz);
+  voxelMesh.boundingSphere.radius = halfSpan;
+
   updateTracker(maxCellIdx, snap, stride);
+}
+
+// ----- Inspector (cell click → state dump panel) -----------------------------
+
+const inspector = {
+  panel: document.getElementById("inspector"),
+  coord: null, // { x, y, z } or null when closed
+  dom: {
+    coord: document.getElementById("iCoord"),
+    tick: document.getElementById("iTick"),
+    pc: document.getElementById("iPc"),
+    energy: document.getElementById("iEnergy"),
+    originTag: document.getElementById("iOriginTag"),
+    appearance: document.getElementById("iAppearance"),
+    pointers: document.getElementById("iPointers"),
+    rates: document.getElementById("iRates"),
+    activeOutflow: document.getElementById("iActiveOutflow"),
+    inflow: document.getElementById("iInflow"),
+    memory: document.getElementById("iMemory"),
+    close: document.getElementById("iClose"),
+  },
+};
+
+inspector.dom.close.addEventListener("click", () => {
+  inspector.coord = null;
+  inspector.panel.classList.remove("visible");
+});
+
+const raycaster = new THREE.Raycaster();
+const mouseNdc = new THREE.Vector2();
+
+renderer.domElement.addEventListener("click", (ev) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouseNdc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  mouseNdc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouseNdc, camera);
+
+  if (!voxelMesh || !latestSnapshot) return;
+  const hits = raycaster.intersectObject(voxelMesh, false);
+  if (hits.length === 0) return;
+
+  // Find the closest hit whose instanceId is within the live cell range
+  // (instances beyond `cellCount` are scaled to zero but raycaster sees them).
+  for (const hit of hits) {
+    const idx = hit.instanceId;
+    if (idx === undefined) continue;
+    if (idx >= latestSnapshot.cellCount) continue;
+    const off = idx * latestSnapshot.stride;
+    const x = latestSnapshot.snap[off] | 0;
+    const y = latestSnapshot.snap[off + 1] | 0;
+    const z = latestSnapshot.snap[off + 2] | 0;
+    inspector.coord = { x, y, z };
+    inspector.panel.classList.add("visible");
+    requestInspect(x, y, z);
+    return;
+  }
+});
+
+function requestInspect(x, y, z) {
+  if (!workerReady) return;
+  worker.postMessage({ type: "inspect", x, y, z });
+}
+
+const DIR_LABELS = ["xp", "xn", "yp", "yn", "zp", "zn"];
+
+function fmtArr(arr) {
+  return DIR_LABELS.map((d, i) => `${d}=${arr[i]}`).join("  ");
+}
+
+function fmtMemory(slots) {
+  // Hex dump: 8 slots per row, each as 8-char hex.
+  const lines = [];
+  for (let i = 0; i < slots.length; i += 8) {
+    const addr = i.toString(16).padStart(4, "0");
+    const row = [];
+    for (let j = 0; j < 8 && i + j < slots.length; j++) {
+      row.push(slots[i + j].toString(16).padStart(8, "0"));
+    }
+    lines.push(`${addr}: ${row.join(" ")}`);
+  }
+  return lines.join("\n");
+}
+
+function renderInspector(msg) {
+  if (!inspector.coord) return;
+  const { x, y, z } = inspector.coord;
+  if (msg.x !== x || msg.y !== y || msg.z !== z) return; // stale
+  const data = msg.data;
+  const prefix = msg.prefix;
+  const dom = inspector.dom;
+
+  if (data.length === 0) {
+    dom.coord.textContent = `(${x}, ${y}, ${z}) — no cell`;
+    dom.tick.textContent = msg.tick;
+    dom.pc.textContent = "-";
+    dom.energy.textContent = "-";
+    dom.originTag.textContent = "-";
+    dom.appearance.textContent = "-";
+    dom.pointers.textContent = "";
+    dom.rates.textContent = "";
+    dom.activeOutflow.textContent = "";
+    dom.inflow.textContent = "";
+    dom.memory.textContent = "";
+    return;
+  }
+
+  dom.coord.textContent = `(${x}, ${y}, ${z})`;
+  dom.tick.textContent = msg.tick;
+  dom.pc.textContent = data[0];
+  dom.energy.textContent = data[1].toLocaleString();
+  dom.originTag.textContent = `0x${data[2].toString(16).padStart(8, "0")}`;
+  dom.appearance.textContent = `0x${data[3].toString(16).padStart(8, "0")}`;
+  dom.pointers.textContent = fmtArr(data.slice(4, 10));
+  dom.rates.textContent = fmtArr(data.slice(10, 16));
+  dom.activeOutflow.textContent = fmtArr(data.slice(16, 22));
+  dom.inflow.textContent = fmtArr(data.slice(22, 28));
+  dom.memory.textContent = fmtMemory(data.slice(prefix));
+}
+
+// Auto-refresh inspector every ~5 frames while it's open and the world
+// is running, so the panel reflects live state without flooding the
+// worker with messages.
+let inspectorRefreshCounter = 0;
+function maybeRefreshInspector() {
+  if (!inspector.coord || !running) return;
+  inspectorRefreshCounter += 1;
+  if (inspectorRefreshCounter >= 5) {
+    inspectorRefreshCounter = 0;
+    requestInspect(inspector.coord.x, inspector.coord.y, inspector.coord.z);
+  }
 }
 
 requestAnimationFrame(frame);

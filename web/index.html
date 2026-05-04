@@ -40,6 +40,59 @@
       pointer-events: auto;
       backdrop-filter: blur(6px);
     }
+    .inspector {
+      position: fixed;
+      top: 16px; right: 16px;
+      width: 380px;
+      max-height: calc(100vh - 32px);
+      background: rgba(20, 20, 25, 0.92);
+      border: 1px solid #d4a76a;
+      border-radius: 4px;
+      padding: 12px 14px;
+      color: #e0e0e0;
+      font-size: 12px;
+      backdrop-filter: blur(6px);
+      z-index: 20;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+    }
+    .inspector.visible { display: flex; }
+    .inspector h3 {
+      color: #d4a76a;
+      font-size: 13px;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .inspector .close {
+      background: transparent;
+      color: #8a8a90;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+    }
+    .inspector .close:hover { color: #d4a76a; }
+    .inspector .arr {
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      color: #f0e0c0;
+      font-size: 11px;
+    }
+    .inspector pre.mem {
+      background: #0a0a10;
+      border: 1px solid #2a2a30;
+      border-radius: 3px;
+      padding: 6px 8px;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 10px;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre;
+      color: #c0c0c8;
+    }
     .hud h2 {
       font-size: 14px;
       color: #d4a76a;
@@ -167,9 +220,27 @@
     <div class="panel hint">
       <strong>Kamera:</strong> drag = rotace, scroll = zoom, pravé tl. = pan.<br>
       <strong>WSAD</strong> + Q/E (dolů/nahoru), Shift = sprint (3×).<br>
-      Phase 4b — WSAD kamera + tracker s trail.
+      <strong>Klik</strong> na buňku → otevře inspector.
     </div>
   </div>
+
+  <aside class="inspector" id="inspector">
+    <h3>
+      <span>Inspector — <span id="iCoord">-</span></span>
+      <button class="close" id="iClose" title="Close">×</button>
+    </h3>
+    <div class="row"><span class="label">tick @ snapshot</span><span class="value" id="iTick">-</span></div>
+    <div class="row"><span class="label">pc</span><span class="value" id="iPc">-</span></div>
+    <div class="row"><span class="label">energy</span><span class="value" id="iEnergy">-</span></div>
+    <div class="row"><span class="label">origin_tag</span><span class="value" id="iOriginTag">-</span></div>
+    <div class="row"><span class="label">appearance</span><span class="value" id="iAppearance">-</span></div>
+    <div><strong>pointers</strong> <span class="arr" id="iPointers"></span></div>
+    <div><strong>rates</strong> <span class="arr" id="iRates"></span></div>
+    <div><strong>active_outflow</strong> <span class="arr" id="iActiveOutflow"></span></div>
+    <div><strong>inflow (last tick)</strong> <span class="arr" id="iInflow"></span></div>
+    <div><strong>memory</strong></div>
+    <pre class="mem" id="iMemory"></pre>
+  </aside>
 
   <script type="module" src="./main.js"></script>
 </body>

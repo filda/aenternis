@@ -324,6 +324,71 @@ fn senergy_can_only_read_via_neighbor_energies() {
     assert_eq!(c.memory[1], 12345);
 }
 
+// ----- sinflow / sself / srate (sensors) -----
+
+#[test]
+fn sinflow_reads_inflow_count_from_cell() {
+    let mut c = cell_with(&[op(Opcode::Sinflow), 2, 3, 0]);
+    c.inflow[Direction::Yp.index()] = 17;
+    execute_instruction(&mut c, &VOID);
+    // arg1 = mem[1] = 2 → Yp; arg2 = mem[2] = 3 → dst.
+    assert_eq!(c.memory[3], 17);
+    assert_eq!(c.pc, 3);
+}
+
+#[test]
+fn sinflow_zero_for_directions_with_no_inflow() {
+    let mut c = cell_with(&[op(Opcode::Sinflow), 0, 1, 0]);
+    // inflow defaults to all zero
+    execute_instruction(&mut c, &VOID);
+    assert_eq!(c.memory[1], 0);
+}
+
+#[test]
+fn sinflow_direction_operand_wraps_modulo_six() {
+    let mut c = cell_with(&[op(Opcode::Sinflow), 8, 3, 0]);
+    c.inflow[Direction::Yp.index()] = 99; // 8 mod 6 = 2 = Yp
+    execute_instruction(&mut c, &VOID);
+    assert_eq!(c.memory[3], 99);
+}
+
+#[test]
+fn sself_writes_own_energy_into_memory() {
+    let mut c = cell_with(&[op(Opcode::Sself), 1, 0, 0, 0, 0, 0]); // 7 slots
+    execute_instruction(&mut c, &VOID);
+    // memSize = 7; sself stores it at mem[arg1=mem[1]=1].
+    assert_eq!(c.memory[1], 7);
+    assert_eq!(c.pc, 2);
+}
+
+#[test]
+fn sself_writes_to_modular_address() {
+    let mut c = cell_with(&[op(Opcode::Sself), 99, 0]); // size 3, arg1=99
+    execute_instruction(&mut c, &VOID);
+    // dst = 99 mod 3 = 0 → mem[0] = 3.
+    assert_eq!(c.memory[0], 3);
+}
+
+#[test]
+fn srate_reads_combined_rate_for_direction() {
+    let mut c = cell_with(&[op(Opcode::Srate), 1, 3, 0]);
+    c.rates[Direction::Xn.index()] = 4;
+    c.active_outflow[Direction::Xn.index()] = 7;
+    execute_instruction(&mut c, &VOID);
+    // d = mem[1] = 1 = Xn; combined = 4 + 7 = 11; dst = mem[2] = 3.
+    assert_eq!(c.memory[3], 11);
+    assert_eq!(c.pc, 3);
+}
+
+#[test]
+fn srate_saturates_on_combined_overflow() {
+    let mut c = cell_with(&[op(Opcode::Srate), 0, 1, 0]);
+    c.rates[Direction::Xp.index()] = u32::MAX - 5;
+    c.active_outflow[Direction::Xp.index()] = 100;
+    execute_instruction(&mut c, &VOID);
+    assert_eq!(c.memory[1], u32::MAX);
+}
+
 // ----- direction modulo (d mod DIRS) for opcodes with a `d` operand -----
 
 #[test]

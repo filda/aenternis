@@ -23,6 +23,7 @@ fn new_returns_empty_cell() {
     assert_eq!(c.rates, [0; 6]);
     assert_eq!(c.active_outflow, [0; 6]);
     assert_eq!(c.pointer_override, [false; 6]);
+    assert_eq!(c.inflow, [0; 6]);
     assert_eq!(c.pc, 0);
     assert_eq!(c.origin_tag, 0);
     assert_eq!(c.appearance, 0);

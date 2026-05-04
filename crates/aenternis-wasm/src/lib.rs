@@ -145,6 +145,59 @@ impl World {
     pub fn snapshot_stride(&self) -> u32 {
         Self::SNAPSHOT_STRIDE as u32
     }
+
+    /// Full state dump of the cell at `(x, y, z)`. Returns an empty
+    /// `Uint32Array` if no cell exists at that coordinate.
+    ///
+    /// Layout (all `u32`, fixed-width prefix then variable memory):
+    ///
+    /// | offset       | meaning           | length |
+    /// |--------------|-------------------|--------|
+    /// | `0`          | `pc`              | 1      |
+    /// | `1`          | `energy`          | 1      |
+    /// | `2`          | `origin_tag`      | 1      |
+    /// | `3`          | `appearance`      | 1      |
+    /// | `4..10`      | `pointers[6]`     | 6      |
+    /// | `10..16`     | `rates[6]`        | 6      |
+    /// | `16..22`     | `active_outflow[6]` | 6    |
+    /// | `22..28`     | `inflow[6]`       | 6      |
+    /// | `28..28+E`   | `memory[E]`       | E      |
+    ///
+    /// Total length = `INSPECT_PREFIX + energy`, so JS can derive
+    /// `memSize = arr.length - INSPECT_PREFIX` without a separate
+    /// metadata call. Use [`World::inspect_prefix`] to get the
+    /// constant from JS.
+    ///
+    /// Direction order in the six-element arrays matches the
+    /// canonical `[xp, xn, yp, yn, zp, zn]` used everywhere else.
+    #[must_use]
+    #[wasm_bindgen(js_name = cellInspect)]
+    pub fn cell_inspect(&self, x: i32, y: i32, z: i32) -> Vec<u32> {
+        let coord = aenternis_core::Coord::new(x, y, z);
+        let Some(cell) = self.inner.cells.get(&coord) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(Self::INSPECT_PREFIX + cell.memory.len());
+        out.push(cell.pc);
+        out.push(cell.energy());
+        out.push(cell.origin_tag);
+        out.push(cell.appearance);
+        out.extend_from_slice(&cell.pointers);
+        out.extend_from_slice(&cell.rates);
+        out.extend_from_slice(&cell.active_outflow);
+        out.extend_from_slice(&cell.inflow);
+        out.extend_from_slice(&cell.memory);
+        out
+    }
+
+    /// Number of `u32` fields in the fixed-width prefix of
+    /// [`World::cell_inspect`] before the memory slots start (= 28).
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = inspectPrefix)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn inspect_prefix(&self) -> u32 {
+        Self::INSPECT_PREFIX as u32
+    }
 }
 
 impl World {
@@ -152,4 +205,9 @@ impl World {
     /// Available as a constant for Rust-side callers; JS uses the
     /// `snapshotStride` getter.
     pub const SNAPSHOT_STRIDE: usize = 6;
+
+    /// Number of `u32` fields in the fixed-width prefix of
+    /// [`World::cell_inspect`] before the variable-length memory
+    /// region starts (4 scalars + 4 × 6 directional arrays = 28).
+    pub const INSPECT_PREFIX: usize = 28;
 }

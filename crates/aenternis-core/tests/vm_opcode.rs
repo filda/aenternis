@@ -36,6 +36,9 @@ fn decode_returns_correct_opcode_for_every_defined_byte() {
         (0x11, Opcode::Setpv),
         (0x12, Opcode::Sid),
         (0x13, Opcode::Paint),
+        (0x14, Opcode::Sinflow),
+        (0x15, Opcode::Sself),
+        (0x16, Opcode::Srate),
     ];
     for (byte, expected) in pairs {
         assert_eq!(
@@ -98,6 +101,9 @@ fn lengths_match_vm_spec() {
         (Opcode::Setpv, 3),
         (Opcode::Sid, 2),
         (Opcode::Paint, 2),
+        (Opcode::Sinflow, 3),
+        (Opcode::Sself, 2),
+        (Opcode::Srate, 3),
     ];
     for (op, expected_len) in cases {
         assert_eq!(op.length(), expected_len, "{op:?}.length()");

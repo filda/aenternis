@@ -94,9 +94,16 @@ Animated smoke-test page lives in `web/` (`web/index.html` + `web/main.js`): `re
 
 **Done 2026-05-03.**
 
-### Phase 4 — Frontend integration
+### Phase 4 — Frontend integration ✓ (4a–4d)
 
-Production frontend in `web/` that loads the WASM module, runs the simulation in a Web Worker, and renders via Three.js (instanced spheres + WSAD + tracker, lifted from prototype 8). Inspector panel and assembler/disassembler from prototype 6 ported to read live WASM state. Prototypes/ then closes as historical lab notes.
+Production frontend in `web/` (`index.html` + `main.js` + `worker.js`):
+
+- **4a — Three.js render swap.** InstancedMesh of low-poly spheres, dynamic capacity (powers of two), heat ramp from energy, OrbitControls for camera. Auto-fit to world bbox on first frame after Reset.
+- **4b — WSAD camera + tracker + trail.** FPS-style WSAD/Q/E/Shift movement layered on top of OrbitControls (speed scales with target distance). Max-energy cell highlight (pulsing wireframe box) plus fading trail of last N positions.
+- **4c — Web Worker.** Sim moves to a dedicated worker thread; main thread only renders. Snapshots flow back as transferable `Uint32Array`. HUD shows FPS (render thread), ms/tick (Rust step duration), and ticks/s (overall throughput). Decoupled — render holds 60 FPS even when sim is heavy.
+- **4d — Inspector panel.** `World::cell_inspect(x, y, z)` exposes a flat 28-prefix `Uint32Array` (pc, energy, origin_tag, appearance, four 6-arrays for pointers / rates / active_outflow / inflow) plus the variable-length memory tail. Three.js raycaster on click → `inspect` worker message → side panel rendering with live auto-refresh every 5 frames while the world runs.
+
+**Done 2026-05-04.**
 
 ### Phase 5 — Dominance / intrusion ✓
 
@@ -111,6 +118,10 @@ PC stays numerically the same across the insert (body-snatch vs. continuity per 
 `SparseWorld::move_threshold: f32` (default 2.0, public field) tunes how easily strong attackers take over. 9 new tests cover the dominance arithmetic, intrusion-depth math, sort order with multiple inflows, origin-tag inheritance threshold, and conservation. **Done 2026-05-04.**
 
 **Visual observable:** before phase 5 the WASM 3D viewer rendered a uniform "potato"; after phase 5 it shows the same wisps and local concentrations as JS prototype 9. The fix wasn't iteration order, it was a missing physical mechanic.
+
+### Phase 6 — Sensors ✓
+
+`Sinflow` (0x14), `Sself` (0x15), `Srate` (0x16) opcodes wired through `Cell::inflow`, `vm::execute_instruction`, and the inflow-tracking pass in `tick::apply_outflow`. Programs can now observe (a) how many slots arrived from each face in the last tick, (b) their own current energy / memSize, (c) their own combined per-direction rate. Total opcode count: 23 of 256 (= 9 % density). **Done 2026-05-04.**
 
 ### Later
 - **Lineage tracker** + manual tag + war paint as a UI overlay.

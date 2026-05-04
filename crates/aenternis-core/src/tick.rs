@@ -231,6 +231,16 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
 /// **Conservation:** total slots before == total slots after.
 pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
+    // Phase 0: clear last tick's inflow tracking on every cell. The
+    // `sinflow` opcode reads what arrived "in the last tick"; that
+    // value is the one we'll accumulate during phase 3, so anything
+    // left over from the previous tick has to go.
+    // -------------------------------------------------------------------
+    for cell in world.cells.values_mut() {
+        cell.inflow = [0; Direction::COUNT];
+    }
+
+    // -------------------------------------------------------------------
     // Phase 1: snapshot pre-step energies + per-source total outflow.
     // -------------------------------------------------------------------
     let pre_energy: BTreeMap<Coord, u32> = world
@@ -319,7 +329,7 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         }
 
         // Apply each inflow with intrusion-depth insert.
-        for (slots, dominance, _, _) in &entries {
+        for (slots, dominance, _, dir_from_target) in &entries {
             let current = target.memory.len();
             let intrusion_depth = ((*dominance) * usize_to_f32(current)) as usize;
             let write_start = current.saturating_sub(intrusion_depth);
@@ -330,6 +340,11 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
             new_mem.extend_from_slice(slots);
             new_mem.extend_from_slice(&target.memory[write_start..]);
             target.memory = new_mem;
+
+            // Track the slot count for `sinflow` in the next tick.
+            let dir_idx = *dir_from_target as usize;
+            let slots_len = u32::try_from(slots.len()).unwrap_or(u32::MAX);
+            target.inflow[dir_idx] = target.inflow[dir_idx].saturating_add(slots_len);
         }
 
         // PC stays numerically the same; bring it back into range if

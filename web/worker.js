@@ -44,8 +44,25 @@ self.onmessage = (ev) => {
     const wasRunning = running;
     running = msg.running;
     if (running && !wasRunning) schedule();
+  } else if (msg.type === "inspect") {
+    sendCellDetail(msg.x, msg.y, msg.z);
   }
 };
+
+function sendCellDetail(x, y, z) {
+  if (!world) return;
+  const data = world.cellInspect(x, y, z);
+  postMessage(
+    {
+      type: "cellDetail",
+      x, y, z,
+      tick: world.tick(),
+      data,
+      prefix: world.inspectPrefix,
+    },
+    [data.buffer],
+  );
+}
 
 function schedule() {
   // setTimeout(0) yields to the message loop between ticks so config /

@@ -60,9 +60,15 @@ fn weak_attacker_against_strong_target_produces_low_dominance() {
 #[test]
 fn strong_attacker_against_weak_target_produces_full_dominance() {
     // Attacker: 100 energy emitting 1 slot → post_burn ≈ 99.
-    // Target: 1 energy, no outflow → post_outflow = 1.
-    // r = 1 / 99 ≈ 0.01; dominance = 1 - 0.01/2 ≈ 0.995, clamped to 1.
-    // Inflow drives all the way to write_start = 0 (deep core).
+    // Target: 50 slots, no outflow → post_outflow = 50.
+    // r = 50/99 ≈ 0.505; dominance = 1 - 0.505/2 ≈ 0.747.
+    // intrusion = floor(0.747 * 50) = 37; write_start = 50 - 37 = 13.
+    //
+    // We use a 50-slot target so the floor-rounded intrusion lands far
+    // from the membrane (write_start ≪ memSize). With a 1-slot target
+    // intrusion would round to zero and the attacker's slot would land
+    // at the very end despite high dominance — that's a real edge case
+    // of integer truncation, not the property we're testing here.
     let mut w = SparseWorld::new(0);
     let mut attacker = Cell::with_memory(vec![1; 100]);
     attacker.memory[0] = 0xAAAA;
@@ -71,7 +77,7 @@ fn strong_attacker_against_weak_target_produces_full_dominance() {
     attacker.origin_tag = 0xAAAA_AAAA;
     w.insert(Coord::ORIGIN, attacker);
 
-    let mut target = Cell::with_memory(vec![0xBBBB]);
+    let mut target = Cell::with_memory(vec![0xBBBB; 50]);
     target.origin_tag = 0xBBBB_BBBB;
     w.insert(Coord::new(1, 0, 0), target);
 
@@ -79,9 +85,14 @@ fn strong_attacker_against_weak_target_produces_full_dominance() {
     apply_outflow(&mut w, &outflow);
 
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
-    // memSize_before_inflow = 1, dominance ≈ 1, write_start = 0.
-    // new_mem = [] ++ slots ++ old = [0xAAAA, 0xBBBB]
-    assert_eq!(target.memory, vec![0xAAAA, 0xBBBB]);
+    assert_eq!(target.memory.len(), 51);
+    // Attacker slot lands at index 13 (= write_start), pushing the
+    // last 37 of the original 0xBBBB block one slot up.
+    assert_eq!(target.memory[13], 0xAAAA);
+    // Bookend assertions: positions 0..13 and 14..51 are still 0xBBBB.
+    assert_eq!(target.memory[0], 0xBBBB);
+    assert_eq!(target.memory[12], 0xBBBB);
+    assert_eq!(target.memory[14], 0xBBBB);
     // Top dominance ≥ 0.5, target inherits attacker's origin tag.
     assert_eq!(target.origin_tag, 0xAAAA_AAAA);
 }
@@ -175,18 +186,21 @@ fn origin_tag_preserved_below_threshold() {
 fn multiple_inflows_apply_strongest_first() {
     // A target receives inflow from both -x (weak attacker) and +x
     // (strong attacker) in the same tick. Strong should sort to the
-    // top and write deeper into memory.
+    // top of the dominance order and end up *earlier* in memory than
+    // weak, even though `floor()` rounding keeps it from reaching
+    // index 0 exactly.
     //
     // Setup:
     //   weak attacker at (1, 0, 0): 3 energy, emits 1 toward -x
     //   strong attacker at (-1, 0, 0): 100 energy, emits 1 toward +x
     //   target at origin: 5 slots, no outflow
     //
-    // Both write into target. Strong gets dominance ≈ 1, intrusion 5
-    // → write_start = 0 → inserted at the front. Weak gets dominance
-    // ≈ 0, write_start = memSize (post-strong) → stacked at end.
-    //
-    // Final memory ordering: [strong] ++ [old_target] ++ [weak]
+    // Strong: r = 5/99 ≈ 0.05, dom ≈ 0.974 → intrusion = floor(0.974*5)
+    //   = 4 → write_start = 1. Memory becomes
+    //   [0xB0, 0xAAAA, 0xB1, 0xB2, 0xB3, 0xB4]  (size 6)
+    // Weak: r = 5/2 = 2.5, dom = clamp(1 - 1.25, 0, 1) = 0 →
+    //   intrusion = 0 → write_start = 6. Memory becomes
+    //   [0xB0, 0xAAAA, 0xB1, 0xB2, 0xB3, 0xB4, 0xCC]  (size 7)
     let mut w = SparseWorld::new(0);
 
     let mut weak = Cell::with_memory(vec![0xCC, 0, 0]);
@@ -207,12 +221,18 @@ fn multiple_inflows_apply_strongest_first() {
     apply_outflow(&mut w, &outflow);
 
     let target = w.get(Coord::ORIGIN).unwrap();
-    // Strong inflow (0xAAAA) is at the very front.
-    assert_eq!(target.memory[0], 0xAAAA);
-    // Weak inflow (0xCC) is at the very end.
-    assert_eq!(*target.memory.last().unwrap(), 0xCC);
-    // Total memory size = 5 (old) + 1 (strong) + 1 (weak) = 7.
     assert_eq!(target.memory.len(), 7);
+    // Strong inflow is at index 1 (just inside the membrane).
+    assert_eq!(target.memory[1], 0xAAAA);
+    // Weak inflow is at the very end.
+    assert_eq!(*target.memory.last().unwrap(), 0xCC);
+    // Strong's index < weak's index — the load-bearing property.
+    let strong_idx = target.memory.iter().position(|&v| v == 0xAAAA).unwrap();
+    let weak_idx = target.memory.iter().position(|&v| v == 0xCC).unwrap();
+    assert!(
+        strong_idx < weak_idx,
+        "strong should land earlier than weak ({strong_idx} vs {weak_idx})"
+    );
 }
 
 // ----- conservation ----------------------------------------------------------
@@ -254,13 +274,88 @@ fn outflow_with_missing_source_treats_attacker_pre_as_zero() {
     assert_eq!(target.memory, vec![42]);
 }
 
+// ----- inflow tracking (for the `sinflow` opcode) ----------------------------
+
+#[test]
+fn apply_outflow_populates_target_inflow_per_direction() {
+    // Two attackers writing into the same target from different sides.
+    // After apply_outflow, target.inflow should reflect both:
+    //   inflow[Xn] = slots received from -x (= attacker at +1 emitting toward -x)
+    //   inflow[Xp] = slots received from +x (= attacker at -1 emitting toward +x)
+    let mut w = SparseWorld::new(0);
+
+    let mut from_plus_x = Cell::with_memory(vec![0xCC, 0, 0]);
+    from_plus_x.rates[Direction::Xn.index()] = 1;
+    from_plus_x.pointers[Direction::Xn.index()] = 0;
+    w.insert(Coord::new(1, 0, 0), from_plus_x);
+
+    let mut from_minus_x = Cell::with_memory(vec![0xAA, 0, 0, 0, 0]);
+    from_minus_x.rates[Direction::Xp.index()] = 2;
+    from_minus_x.pointers[Direction::Xp.index()] = 0;
+    w.insert(Coord::new(-1, 0, 0), from_minus_x);
+
+    let target = Cell::with_memory(vec![0xB0; 5]);
+    w.insert(Coord::ORIGIN, target);
+
+    let outflow = collect_outflow(&w);
+    apply_outflow(&mut w, &outflow);
+
+    let target = w.get(Coord::ORIGIN).unwrap();
+    // `inflow[d]` counts slots that arrived through the d-face. A
+    // neighbor at +x emitting toward -x reaches the target through
+    // the target's +x face → `inflow[Xp]`. A neighbor at -x emitting
+    // toward +x reaches the target through the target's -x face →
+    // `inflow[Xn]`.
+    assert_eq!(
+        target.inflow[Direction::Xp.index()],
+        1,
+        "+x neighbor → through Xp face"
+    );
+    assert_eq!(
+        target.inflow[Direction::Xn.index()],
+        2,
+        "-x neighbor → through Xn face"
+    );
+    // Other directions stay zero.
+    assert_eq!(target.inflow[Direction::Yp.index()], 0);
+    assert_eq!(target.inflow[Direction::Yn.index()], 0);
+    assert_eq!(target.inflow[Direction::Zp.index()], 0);
+    assert_eq!(target.inflow[Direction::Zn.index()], 0);
+}
+
+#[test]
+fn apply_outflow_clears_inflow_from_previous_tick() {
+    // Cell starts with stale inflow from a hypothetical earlier tick.
+    // After apply_outflow with no inflow this tick, inflow must be
+    // zeroed — `sinflow` semantics is "last tick", not "ever received".
+    let mut w = SparseWorld::new(0);
+    let mut cell = Cell::with_memory(vec![1, 2, 3]);
+    cell.inflow = [99, 99, 99, 99, 99, 99];
+    w.insert(Coord::ORIGIN, cell);
+
+    // Empty outflow → no inflows applied this tick.
+    let outflow = collect_outflow(&w);
+    apply_outflow(&mut w, &outflow);
+
+    let cell = w.get(Coord::ORIGIN).unwrap();
+    assert_eq!(cell.inflow, [0; 6]);
+}
+
 // ----- move_threshold knob ---------------------------------------------------
 
 #[test]
-fn lowering_move_threshold_raises_dominance() {
-    // Same energies, two move_threshold values; the lower threshold
-    // gives higher dominance for the same r.
-    fn dom_for_threshold(mt: f32) -> usize {
+fn raising_move_threshold_raises_dominance() {
+    // The dominance formula is `dom = 1 - r / move_threshold`. For a
+    // fixed r, *raising* `move_threshold` makes the divisor larger,
+    // which makes the quotient smaller, which makes `dom` larger.
+    // Higher dominance ⇒ deeper intrusion ⇒ attacker slot lands
+    // earlier (lower index) in the target.
+    //
+    // Setup: attacker (6 energy, emit 1) → post_burn = 5. Target 5
+    // empty slots → r = 5/5 = 1.
+    //   move_threshold = 1.0 → dom = 0   → intrusion 0 → idx 5
+    //   move_threshold = 4.0 → dom = 0.75 → intrusion 3 → idx 2
+    fn position_for_threshold(mt: f32) -> usize {
         let mut w = SparseWorld::new(0);
         w.move_threshold = mt;
 
@@ -275,9 +370,6 @@ fn lowering_move_threshold_raises_dominance() {
         let outflow = collect_outflow(&w);
         apply_outflow(&mut w, &outflow);
 
-        // Find where the attacker's slot landed: the position of the
-        // first non-zero entry tells us write_start, which is
-        // monotonically lower as dominance grows.
         let target = w.get(Coord::new(1, 0, 0)).unwrap();
         target
             .memory
@@ -286,10 +378,11 @@ fn lowering_move_threshold_raises_dominance() {
             .unwrap_or(target.memory.len())
     }
 
-    let high_threshold_pos = dom_for_threshold(4.0); // lower dominance, write further from start
-    let low_threshold_pos = dom_for_threshold(1.0); // higher dominance, write closer to start
+    let pos_low_threshold = position_for_threshold(1.0); // dom 0   → late
+    let pos_high_threshold = position_for_threshold(4.0); // dom 0.75 → early
     assert!(
-        low_threshold_pos < high_threshold_pos,
-        "low move_threshold should put attacker slot earlier in memory"
+        pos_high_threshold < pos_low_threshold,
+        "higher move_threshold should put attacker slot earlier in memory \
+         (got pos@mt=4.0 = {pos_high_threshold}, pos@mt=1.0 = {pos_low_threshold})"
     );
 }

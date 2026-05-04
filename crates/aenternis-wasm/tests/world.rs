@@ -150,3 +150,57 @@ fn snapshot_stride_getter_returns_six() {
     let w = World::new(0, 0);
     assert_eq!(w.snapshot_stride(), 6);
 }
+
+// ----- cell_inspect ----------------------------------------------------------
+
+#[test]
+fn inspect_returns_empty_for_missing_cell() {
+    let w = World::new(0, 0);
+    assert!(w.cell_inspect(0, 0, 0).is_empty());
+}
+
+#[test]
+fn inspect_prefix_getter_returns_28() {
+    let w = World::new(0, 0);
+    assert_eq!(w.inspect_prefix(), 28);
+}
+
+#[test]
+fn inspect_layout_after_big_bang() {
+    let w = World::new(7, 16);
+    let dump = w.cell_inspect(0, 0, 0);
+    assert_eq!(dump.len(), 28 + 16);
+    // pc starts at 0
+    assert_eq!(dump[0], 0);
+    // energy = 16
+    assert_eq!(dump[1], 16);
+    // origin_tag is set deterministically from PCG, so non-zero
+    assert_ne!(dump[2], 0);
+    // appearance defaults to 0
+    assert_eq!(dump[3], 0);
+    // pointers, rates, active_outflow, inflow all default to zero on a
+    // freshly built world (initialize hasn't run since this is bare
+    // `World::new` + bigBang)
+    for (i, &v) in dump[4..28].iter().enumerate() {
+        assert_eq!(v, 0, "expected zero at offset {}", i + 4);
+    }
+    // memory slots start at offset 28
+    assert_eq!(dump.len() - 28, 16);
+}
+
+#[test]
+fn inspect_for_origin_after_step_reflects_state() {
+    let mut w = World::new(0xCAFE, 50);
+    w.step(0.0, 1); // coeff=0 → no diffusion outflow → memory unchanged
+    let dump = w.cell_inspect(0, 0, 0);
+    assert!(!dump.is_empty(), "origin cell should still exist");
+    // Tick has advanced.
+    assert_eq!(w.tick(), 1);
+}
+
+#[test]
+fn inspect_returns_empty_for_void_neighbor() {
+    let w = World::new(7, 100);
+    // The big-bang cell sits at origin; (5, 5, 5) is void.
+    assert!(w.cell_inspect(5, 5, 5).is_empty());
+}

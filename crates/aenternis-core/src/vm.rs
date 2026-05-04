@@ -74,14 +74,20 @@ pub enum Opcode {
     Sid = 0x12,
     /// `paint v` — `appearance = v`. 2 slots.
     Paint = 0x13,
+    /// `sinflow d a` — `mem[a] = own inflow[d]` from the last tick. 3 slots.
+    Sinflow = 0x14,
+    /// `sself a` — `mem[a] = own energy / memSize`. 2 slots.
+    Sself = 0x15,
+    /// `srate d a` — `mem[a] = own combined rate (rates[d] + active_outflow[d])`. 3 slots.
+    Srate = 0x16,
 }
 
 impl Opcode {
-    /// Number of opcode variants (currently `20`).
-    pub const COUNT: u8 = 20;
+    /// Number of opcode variants (currently `23`).
+    pub const COUNT: u8 = 23;
 
-    /// Highest valid opcode value (currently `0x13`).
-    pub const MAX: u8 = 0x13;
+    /// Highest valid opcode value (currently `0x16`).
+    pub const MAX: u8 = 0x16;
 
     /// Decode the lowest byte of a slot into an opcode.
     ///
@@ -112,6 +118,9 @@ impl Opcode {
             0x11 => Some(Self::Setpv),
             0x12 => Some(Self::Sid),
             0x13 => Some(Self::Paint),
+            0x14 => Some(Self::Sinflow),
+            0x15 => Some(Self::Sself),
+            0x16 => Some(Self::Srate),
             _ => None,
         }
     }
@@ -122,7 +131,7 @@ impl Opcode {
     pub const fn length(self) -> u32 {
         match self {
             Self::Nop => 1,
-            Self::Inc | Self::Dec | Self::Jmp | Self::Sid | Self::Paint => 2,
+            Self::Inc | Self::Dec | Self::Jmp | Self::Sid | Self::Paint | Self::Sself => 2,
             Self::Set
             | Self::Copy
             | Self::Add
@@ -135,12 +144,14 @@ impl Opcode {
             | Self::Jne
             | Self::Ldi
             | Self::Sti
-            | Self::Setpv => 3,
+            | Self::Setpv
+            | Self::Sinflow
+            | Self::Srate => 3,
             Self::Je => 4,
         }
     }
 
-    /// All 20 opcodes in canonical (numeric) order.
+    /// All defined opcodes in canonical (numeric) order.
     pub const ALL: [Self; Self::COUNT as usize] = [
         Self::Nop,
         Self::Set,
@@ -162,6 +173,9 @@ impl Opcode {
         Self::Setpv,
         Self::Sid,
         Self::Paint,
+        Self::Sinflow,
+        Self::Sself,
+        Self::Srate,
     ];
 }
 
@@ -326,6 +340,26 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         }
         Opcode::Paint => {
             cell.appearance = arg1;
+        }
+
+        Opcode::Sinflow => {
+            let dir = (arg1 as usize) % Direction::COUNT;
+            let dst = (arg2 as usize) % mem_size;
+            cell.memory[dst] = cell.inflow[dir];
+        }
+        Opcode::Sself => {
+            // Own energy = memory length (the cardinal cell invariant).
+            // u32 cap because `wasm32` memory.len() never reaches 2^32.
+            let dst = (arg1 as usize) % mem_size;
+            cell.memory[dst] = u32::try_from(mem_size).unwrap_or(u32::MAX);
+        }
+        Opcode::Srate => {
+            // Combined rate = natural rate + active outflow accumulated
+            // earlier in this CPU phase via `port`.
+            let dir = (arg1 as usize) % Direction::COUNT;
+            let dst = (arg2 as usize) % mem_size;
+            let combined = cell.rates[dir].saturating_add(cell.active_outflow[dir]);
+            cell.memory[dst] = combined;
         }
     }
 
