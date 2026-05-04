@@ -1,0 +1,206 @@
+// Aenternis assembler.
+//
+// Translates a simple human-readable mnemonic source into a Uint32Array
+// of memory slots that match the layout produced by the Rust VM. Used
+// by the frontend's "Program v centrální buňce" textarea to inject a
+// programmer-defined prefix into the big-bang cell, mirroring the
+// `bigBang(eTotal, programSlots)` API of JS prototype 9.
+//
+// Syntax
+// ------
+//
+//   ; line comment to end of line
+//   label:                       — defines a label at the current slot offset
+//   mnemonic [arg [, arg [, ...]]]
+//
+// A line containing only a number (decimal or `0x`-hex) emits one raw
+// slot — useful for embedding constants without a `set` instruction.
+//
+// Operands accept:
+//   - direction names: `xp xn yp yn zp zn` (resolved to 0..5)
+//   - decimal integers (`42`, `-1` wraps to `0xFFFFFFFF`)
+//   - hex integers: `0x1A`, `0XFF`
+//   - label references (resolved to the slot offset of the label)
+//
+// Mnemonics match `docs/vm.md` 1:1. The opcode count and operand count
+// are derived from `OPCODES` below; adding a new opcode only requires
+// extending that map (and the Rust VM, of course).
+
+/** @type {Record<string, { code: number, args: number }>} */
+export const OPCODES = Object.freeze({
+  nop:     { code: 0x00, args: 0 },
+  set:     { code: 0x01, args: 2 }, // a, v
+  copy:    { code: 0x02, args: 2 }, // a, b
+  add:     { code: 0x03, args: 2 }, // a, b
+  sub:     { code: 0x04, args: 2 }, // a, b
+  inc:     { code: 0x05, args: 1 }, // a
+  dec:     { code: 0x06, args: 1 }, // a
+  jmp:     { code: 0x07, args: 1 }, // a
+  jz:      { code: 0x08, args: 2 }, // a, t
+  setp:    { code: 0x09, args: 2 }, // d, v
+  getp:    { code: 0x0a, args: 2 }, // d, a
+  port:    { code: 0x0b, args: 2 }, // d, i
+  senergy: { code: 0x0c, args: 2 }, // d, a
+  jne:     { code: 0x0d, args: 2 }, // a, t
+  je:      { code: 0x0e, args: 3 }, // a, b, t
+  ldi:     { code: 0x0f, args: 2 }, // a, b
+  sti:     { code: 0x10, args: 2 }, // a, b
+  setpv:   { code: 0x11, args: 2 }, // d, a
+  sid:     { code: 0x12, args: 1 }, // a
+  paint:   { code: 0x13, args: 1 }, // v
+  sinflow: { code: 0x14, args: 2 }, // d, a
+  sself:   { code: 0x15, args: 1 }, // a
+  srate:   { code: 0x16, args: 2 }, // d, a
+});
+
+/** @type {Record<string, number>} */
+export const DIRECTIONS = Object.freeze({
+  xp: 0, xn: 1, yp: 2, yn: 3, zp: 4, zn: 5,
+});
+
+/**
+ * Try to parse a single operand into a u32. Returns `null` on failure.
+ * The caller distinguishes "needs label resolution" from "garbage" by
+ * passing `labels`; if the operand is an identifier and `labels` has
+ * an entry, the slot offset is returned.
+ *
+ * @param {string} s
+ * @param {Map<string, number>} labels
+ * @returns {number | null}
+ */
+export function resolveOperand(s, labels) {
+  const t = s.trim();
+  if (t.length === 0) return null;
+
+  // Direction shorthand
+  if (Object.prototype.hasOwnProperty.call(DIRECTIONS, t.toLowerCase())) {
+    return DIRECTIONS[t.toLowerCase()];
+  }
+
+  // Hex
+  if (/^0[xX][0-9a-fA-F]+$/.test(t)) {
+    const v = parseInt(t.slice(2), 16);
+    return Number.isFinite(v) ? v >>> 0 : null;
+  }
+
+  // Decimal (positive or negative; negative wraps to u32 two's complement)
+  if (/^-?\d+$/.test(t)) {
+    const v = parseInt(t, 10);
+    return Number.isFinite(v) ? v >>> 0 : null;
+  }
+
+  // Label
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(t) && labels.has(t)) {
+    return labels.get(t);
+  }
+
+  return null;
+}
+
+/**
+ * Two-pass assembler.
+ *
+ * Pass 1 — tokenize each line and accumulate slot offsets, building a
+ *          label-to-offset map.
+ * Pass 2 — emit slots, resolving label references against the map.
+ *
+ * Returns `{ slots, errors }`. `slots` is always present (best-effort
+ * partial output even on errors); `errors` is empty on a clean parse.
+ *
+ * @param {string} text
+ * @returns {{ slots: Uint32Array, errors: string[] }}
+ */
+export function assemble(text) {
+  /** @type {string[]} */
+  const errors = [];
+  /** @type {Map<string, number>} */
+  const labels = new Map();
+  /** @type {Array<{ kind: "raw" | "instr", code?: number, args?: string[], lineNo: number, value?: number }>} */
+  const tokens = [];
+  let slotOffset = 0;
+
+  // ---- Pass 1: tokenize + label collection ---------------------------------
+
+  const lines = text.split(/\r?\n/);
+  for (let lineNo = 0; lineNo < lines.length; lineNo++) {
+    let line = lines[lineNo];
+
+    // Strip comments
+    const commentAt = line.indexOf(";");
+    if (commentAt !== -1) line = line.slice(0, commentAt);
+    line = line.trim();
+    if (line.length === 0) continue;
+
+    // Optional label prefix: "name: rest"
+    const labelMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
+    if (labelMatch) {
+      const name = labelMatch[1];
+      if (labels.has(name)) {
+        errors.push(`line ${lineNo + 1}: duplicate label "${name}"`);
+      } else {
+        labels.set(name, slotOffset);
+      }
+      line = labelMatch[2].trim();
+      if (line.length === 0) continue;
+    }
+
+    // Sole-number line → raw slot
+    if (/^(0[xX][0-9a-fA-F]+|-?\d+)$/.test(line)) {
+      const value = resolveOperand(line, labels);
+      if (value === null) {
+        errors.push(`line ${lineNo + 1}: cannot parse number "${line}"`);
+        continue;
+      }
+      tokens.push({ kind: "raw", value, lineNo });
+      slotOffset += 1;
+      continue;
+    }
+
+    // Mnemonic + optional args
+    const head = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*(.*)$/);
+    if (!head) {
+      errors.push(`line ${lineNo + 1}: cannot parse "${line}"`);
+      continue;
+    }
+    const mnemonic = head[1].toLowerCase();
+    const argsRaw = head[2].trim();
+    const op = OPCODES[mnemonic];
+    if (!op) {
+      errors.push(`line ${lineNo + 1}: unknown mnemonic "${mnemonic}"`);
+      continue;
+    }
+    const args = argsRaw.length > 0 ? argsRaw.split(",").map((s) => s.trim()) : [];
+    if (args.length !== op.args) {
+      errors.push(
+        `line ${lineNo + 1}: ${mnemonic} expects ${op.args} arg(s), got ${args.length}`,
+      );
+      continue;
+    }
+
+    tokens.push({ kind: "instr", code: op.code, args, lineNo });
+    slotOffset += 1 + op.args;
+  }
+
+  // ---- Pass 2: emit slots --------------------------------------------------
+
+  const slots = new Uint32Array(slotOffset);
+  let cursor = 0;
+  for (const t of tokens) {
+    if (t.kind === "raw") {
+      slots[cursor++] = t.value;
+      continue;
+    }
+    slots[cursor++] = t.code;
+    for (const arg of t.args) {
+      const v = resolveOperand(arg, labels);
+      if (v === null) {
+        errors.push(`line ${t.lineNo + 1}: cannot resolve "${arg}"`);
+        slots[cursor++] = 0;
+      } else {
+        slots[cursor++] = v;
+      }
+    }
+  }
+
+  return { slots, errors };
+}

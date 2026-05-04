@@ -166,6 +166,21 @@ fn snapshot_walks_cells_in_canonical_order_after_expansion() {
 }
 
 #[test]
+fn move_threshold_default_is_two() {
+    let w = World::new(0, 0);
+    assert!((w.move_threshold() - 2.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn set_move_threshold_round_trips() {
+    let mut w = World::new(0, 100);
+    w.set_move_threshold(0.5);
+    assert!((w.move_threshold() - 0.5).abs() < f32::EPSILON);
+    w.set_move_threshold(3.7);
+    assert!((w.move_threshold() - 3.7).abs() < f32::EPSILON);
+}
+
+#[test]
 fn snapshot_stride_getter_returns_six() {
     let w = World::new(0, 0);
     assert_eq!(w.snapshot_stride(), 6);

@@ -14,14 +14,16 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { assemble } from "../src/asm.js";
 
 // ----- Configuration ---------------------------------------------------------
 
 const config = {
-  seed: 42,
-  energy: 500,
-  coeff: 0.20,
+  seed: 1234,
+  energy: 65536,
+  coeff: 0.15,
   k: 1,
+  moveThreshold: 1.0,
 };
 
 // ----- Worker setup ----------------------------------------------------------
@@ -43,48 +45,15 @@ worker.onmessage = (ev) => {
   }
 };
 
-/// Parse the `Program v centrální buňce` textarea into an array of u32
-/// slots. One slot per line. Decimal or `0x`-prefixed hex. Lines
-/// starting with `;` and blank lines are ignored. Returns `[slots,
-/// errorMessage]` — `errorMessage` is non-empty if any line failed to
-/// parse.
-function parseProgramText(text) {
-  const slots = [];
-  const errors = [];
-  const lines = text.split(/\r?\n/);
-  for (let lineNo = 0; lineNo < lines.length; lineNo++) {
-    let line = lines[lineNo].trim();
-    if (line.length === 0) continue;
-    if (line.startsWith(";")) continue;
-    // Strip inline `;` comment.
-    const commentAt = line.indexOf(";");
-    if (commentAt !== -1) line = line.slice(0, commentAt).trim();
-    if (line.length === 0) continue;
-
-    let value;
-    if (line.startsWith("0x") || line.startsWith("0X")) {
-      value = parseInt(line.slice(2), 16);
-    } else {
-      value = parseInt(line, 10);
-    }
-    if (Number.isNaN(value) || value < 0 || value > 0xFFFFFFFF) {
-      errors.push(`line ${lineNo + 1}: cannot parse "${line}"`);
-      continue;
-    }
-    slots.push(value >>> 0);
-  }
-  return [slots, errors];
-}
-
 function sendInit() {
-  let program = [];
+  let program = new Uint32Array(0);
   if (dom.programText) {
-    const [parsed, errors] = parseProgramText(dom.programText.value);
-    program = parsed;
+    const result = assemble(dom.programText.value);
+    program = result.slots;
     if (dom.programStatus) {
-      dom.programStatus.textContent = errors.length > 0
-        ? `${errors.length} parse error(s): ${errors.join("; ")}`
-        : `${parsed.length} slot(s) parsed`;
+      dom.programStatus.textContent = result.errors.length > 0
+        ? `${result.errors.length} parse error(s): ${result.errors.join("; ")}`
+        : `${program.length} slot(s) assembled`;
     }
   }
   worker.postMessage({
@@ -93,6 +62,7 @@ function sendInit() {
     energy: config.energy,
     coeff: config.coeff,
     k: config.k,
+    moveThreshold: config.moveThreshold,
     program,
   });
   cameraFitDirty = true;
@@ -102,7 +72,12 @@ function sendInit() {
 
 function sendConfig() {
   if (!workerReady) return;
-  worker.postMessage({ type: "config", coeff: config.coeff, k: config.k });
+  worker.postMessage({
+    type: "config",
+    coeff: config.coeff,
+    k: config.k,
+    moveThreshold: config.moveThreshold,
+  });
 }
 
 function sendRunning(running) {
@@ -252,7 +227,7 @@ function heatColor(t) {
 // ----- Tracker (highlight max-energy cell + trail) ---------------------------
 
 const tracker = {
-  enabled: true,
+  enabled: false,
   trailLen: 60,
   trail: [],
   current: null,
@@ -373,13 +348,26 @@ const dom = {
   coeffVal: document.getElementById("coeffVal"),
   k: document.getElementById("k"),
   kVal: document.getElementById("kVal"),
+  moveThreshold: document.getElementById("moveThreshold"),
+  moveThresholdVal: document.getElementById("moveThresholdVal"),
   trackerEnabled: document.getElementById("trackerEnabled"),
   trailLen: document.getElementById("trailLen"),
   trailLenVal: document.getElementById("trailLenVal"),
   trackerPos: document.getElementById("trackerPos"),
   programText: document.getElementById("programText"),
   programStatus: document.getElementById("programStatus"),
+  sliceEnabled: document.getElementById("sliceEnabled"),
 };
+
+// ----- Slice (z = 0 only) — proto-9-style 2D view ----------------------------
+
+const slice = { enabled: false };
+
+dom.sliceEnabled.addEventListener("change", () => {
+  slice.enabled = dom.sliceEnabled.checked;
+  // Force a re-render even if no new snapshot has arrived.
+  lastRenderedTick = -1;
+});
 
 let running = true;
 
@@ -403,6 +391,11 @@ dom.coeff.addEventListener("input", () => {
 dom.k.addEventListener("input", () => {
   config.k = parseInt(dom.k.value, 10) || 1;
   dom.kVal.textContent = config.k;
+  sendConfig();
+});
+dom.moveThreshold.addEventListener("input", () => {
+  config.moveThreshold = parseFloat(dom.moveThreshold.value) || 2.0;
+  dom.moveThresholdVal.textContent = config.moveThreshold.toFixed(1);
   sendConfig();
 });
 dom.trackerEnabled.addEventListener("change", () => {
@@ -498,9 +491,10 @@ function renderSnapshot(state) {
   let maxCellIdx = -1;
   for (let i = 0; i < cellCount; i++) {
     const off = i * stride;
+    const z = snap[off + 2] | 0;
+    if (slice.enabled && z !== 0) continue;
     const x = snap[off] | 0;
     const y = snap[off + 1] | 0;
-    const z = snap[off + 2] | 0;
     if (x < minX) minX = x; if (x > maxX) maxX = x;
     if (y < minY) minY = y; if (y > maxY) maxY = y;
     if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
@@ -508,18 +502,30 @@ function renderSnapshot(state) {
     if (e > maxE) { maxE = e; maxCellIdx = i; }
   }
   if (maxE < 1) maxE = 1;
+  // Avoid bogus camera fit when slice mode hides everything.
+  if (minX === Infinity) {
+    minX = -1; maxX = 1; minY = -1; maxY = 1; minZ = -1; maxZ = 1;
+  }
 
   if (cameraFitDirty && cellCount > 0) {
     fitCameraToWorld(minX, maxX, minY, maxY, minZ, maxZ);
     cameraFitDirty = false;
   }
 
+  const zeroScale = new THREE.Vector3(0, 0, 0);
   for (let i = 0; i < cellCount; i++) {
     const off = i * stride;
     const x = snap[off] | 0;
     const y = snap[off + 1] | 0;
     const z = snap[off + 2] | 0;
     const e = snap[off + 3];
+
+    if (slice.enabled && z !== 0) {
+      // Hide instances outside the z=0 plane in slice mode.
+      tempMatrix.compose(tempPos.set(0, 0, 0), tempQuat, zeroScale);
+      voxelMesh.setMatrixAt(i, tempMatrix);
+      continue;
+    }
 
     tempPos.set(x, y, z);
     tempMatrix.compose(tempPos, tempQuat, tempScale);
@@ -532,7 +538,6 @@ function renderSnapshot(state) {
   }
 
   if (lastUsedCount > cellCount) {
-    const zeroScale = new THREE.Vector3(0, 0, 0);
     for (let i = cellCount; i < lastUsedCount; i++) {
       tempMatrix.compose(tempPos.set(0, 0, 0), tempQuat, zeroScale);
       voxelMesh.setMatrixAt(i, tempMatrix);

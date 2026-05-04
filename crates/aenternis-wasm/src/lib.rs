@@ -81,6 +81,28 @@ impl World {
         tick::step(&mut self.inner, coeff, k);
     }
 
+    /// Set the dominance / intrusion `move_threshold`.
+    ///
+    /// Higher = more aggressive metempsychosis (target cells get
+    /// overwritten by stronger neighbors faster). Default is `2.0`,
+    /// matches the `mechanics.md` spec; prototype 9 used `1.0` for a
+    /// less-aggressive, more wispy regime.
+    #[wasm_bindgen(js_name = setMoveThreshold)]
+    pub fn set_move_threshold(&mut self, threshold: f32) {
+        self.inner.move_threshold = threshold;
+    }
+
+    /// Current `move_threshold` value.
+    ///
+    /// `wasm_bindgen` rejects `const fn` exports, so
+    /// `clippy::missing_const_for_fn` is silenced locally.
+    #[wasm_bindgen(getter, js_name = moveThreshold)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn move_threshold(&self) -> f32 {
+        self.inner.move_threshold
+    }
+
     /// Total energy summed across every cell. Conserved across ticks
     /// (cardinal physical invariant).
     ///

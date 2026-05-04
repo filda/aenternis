@@ -26,6 +26,7 @@ let world = null;
 let running = false;
 let coeff = 0.20;
 let k = 1;
+let moveThreshold = 2.0;
 
 self.onmessage = (ev) => {
   const msg = ev.data;
@@ -43,12 +44,18 @@ self.onmessage = (ev) => {
     }
     coeff = msg.coeff;
     k = msg.k;
+    moveThreshold = msg.moveThreshold ?? 2.0;
+    world.setMoveThreshold(moveThreshold);
     running = true;
     sendSnapshot(); // initial state, before any tick has run
     schedule();
   } else if (msg.type === "config") {
     coeff = msg.coeff;
     k = msg.k;
+    if (typeof msg.moveThreshold === "number") {
+      moveThreshold = msg.moveThreshold;
+      if (world) world.setMoveThreshold(moveThreshold);
+    }
   } else if (msg.type === "running") {
     const wasRunning = running;
     running = msg.running;

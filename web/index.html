@@ -181,29 +181,36 @@
       <h3>Config</h3>
       <div class="row">
         <label>seed</label>
-        <input id="seed" type="number" value="42" min="0" max="4294967295">
+        <input id="seed" type="number" value="1234" min="0" max="4294967295">
       </div>
       <div class="row">
         <label>energy</label>
-        <input id="energy_in" type="number" value="500" min="0" max="100000">
+        <input id="energy_in" type="number" value="65536" min="0" max="10000000">
       </div>
       <div class="row">
         <label>coeff</label>
-        <input id="coeff" type="range" min="0.05" max="0.30" step="0.01" value="0.20">
-        <span class="value" id="coeffVal">0.20</span>
+        <input id="coeff" type="range" min="0.05" max="1.00" step="0.01" value="0.15">
+        <span class="value" id="coeffVal">0.15</span>
       </div>
       <div class="row">
         <label>k</label>
         <input id="k" type="range" min="1" max="32" value="1">
         <span class="value" id="kVal">1</span>
       </div>
+      <div class="row">
+        <label>move_threshold</label>
+        <input id="moveThreshold" type="range" min="0.5" max="4.0" step="0.1" value="1.0">
+        <span class="value" id="moveThresholdVal">1.0</span>
+      </div>
     </div>
 
     <div class="panel">
       <h3>Program v centrální buňce</h3>
       <div class="hint" style="margin-bottom: 4px;">
-        Jeden slot na řádek. Decimal nebo <code>0xHEX</code>. Komentáře <code>;</code>
-        a prázdné řádky se ignorují. Aplikuje se po Reset.
+        Asembler: <code>label:</code>, <code>setp xp, start</code>,
+        <code>jmp start</code>, <code>port d, i</code>, atd. Sólo číslo =
+        raw slot. Směry: <code>xp xn yp yn zp zn</code>. Komentář <code>;</code>.
+        Aplikuje se po Reset.
       </div>
       <textarea id="programText" rows="6" style="
         width: 100%;
@@ -215,7 +222,9 @@
         font-family: ui-monospace, monospace;
         font-size: 11px;
         resize: vertical;
-      "></textarea>
+      ">start:
+  setp xp, start
+  jmp start</textarea>
       <div id="programStatus" class="hint" style="margin-top: 4px;">empty</div>
     </div>
 
@@ -223,7 +232,7 @@
       <h3>Tracker</h3>
       <div class="row">
         <label>sledovat</label>
-        <input id="trackerEnabled" type="checkbox" checked>
+        <input id="trackerEnabled" type="checkbox">
         <span class="hint">nejsilnější cela</span>
       </div>
       <div class="row">
@@ -234,6 +243,17 @@
       <div class="row">
         <label>pozice</label>
         <span class="value" id="trackerPos">-</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Slice</h3>
+      <div class="row">
+        <label>z = 0 slice</label>
+        <input id="sliceEnabled" type="checkbox">
+      </div>
+      <div class="row hint">
+        Skryje cely s z ≠ 0 — 2D pohled jako prototyp 9 pro porovnání.
       </div>
     </div>
 
