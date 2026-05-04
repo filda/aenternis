@@ -58,6 +58,51 @@ fn big_bang_different_seeds_produce_different_memory() {
 }
 
 #[test]
+fn big_bang_with_program_writes_prefix() {
+    let program = [0xCAFE, 0xBABE, 0xDEAD];
+    let w = SparseWorld::big_bang_with_program(7, 16, &program);
+    let cell = w.get(Coord::ORIGIN).unwrap();
+    assert_eq!(cell.memory[0], 0xCAFE);
+    assert_eq!(cell.memory[1], 0xBABE);
+    assert_eq!(cell.memory[2], 0xDEAD);
+}
+
+#[test]
+fn big_bang_with_program_fills_rest_from_rng() {
+    // The first 3 slots come from program; the remaining 13 from RNG.
+    // Two runs with different programs but the same seed/energy must
+    // produce the same suffix because the RNG isn't advanced for
+    // program-covered slots.
+    let a = SparseWorld::big_bang_with_program(42, 16, &[1, 2, 3]);
+    let b = SparseWorld::big_bang_with_program(42, 16, &[9, 9, 9]);
+    let ca = a.get(Coord::ORIGIN).unwrap();
+    let cb = b.get(Coord::ORIGIN).unwrap();
+    // Prefixes differ as supplied.
+    assert_ne!(&ca.memory[..3], &cb.memory[..3]);
+    // Suffixes match — RNG advanced identically.
+    assert_eq!(&ca.memory[3..], &cb.memory[3..]);
+}
+
+#[test]
+fn big_bang_with_program_truncates_oversized() {
+    let program: Vec<u32> = (0..100).collect();
+    let w = SparseWorld::big_bang_with_program(0, 5, &program);
+    let cell = w.get(Coord::ORIGIN).unwrap();
+    assert_eq!(cell.memory.len(), 5);
+    assert_eq!(cell.memory, vec![0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn big_bang_with_empty_program_matches_big_bang() {
+    let a = SparseWorld::big_bang(123, 32);
+    let b = SparseWorld::big_bang_with_program(123, 32, &[]);
+    let ca = a.get(Coord::ORIGIN).unwrap();
+    let cb = b.get(Coord::ORIGIN).unwrap();
+    assert_eq!(ca.memory, cb.memory);
+    assert_eq!(ca.origin_tag, cb.origin_tag);
+}
+
+#[test]
 fn big_bang_origin_tag_is_set() {
     let w = SparseWorld::big_bang(99, 8);
     let cell = w.get(Coord::ORIGIN).unwrap();

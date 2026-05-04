@@ -123,9 +123,17 @@ PC stays numerically the same across the insert (body-snatch vs. continuity per 
 
 `Sinflow` (0x14), `Sself` (0x15), `Srate` (0x16) opcodes wired through `Cell::inflow`, `vm::execute_instruction`, and the inflow-tracking pass in `tick::apply_outflow`. Programs can now observe (a) how many slots arrived from each face in the last tick, (b) their own current energy / memSize, (c) their own combined per-direction rate. Total opcode count: 23 of 256 (= 9 % density). **Done 2026-05-04.**
 
+### Phase 7 — Program injection ✓
+
+`SparseWorld::big_bang_with_program(seed, energy, &[u32])` writes a programmer-supplied prefix into the origin cell's memory; the rest of the slots come from the deterministic RNG. RNG is **not** advanced for program-covered slots, so the suffix from `(seed, energy)` is identical regardless of the program supplied — matches prototype 9's `bigBang(eTotal, programSlots)`.
+
+WASM exposes this as `World.newWithProgram(seed, energy, Uint32Array)`. The frontend's config panel has a textarea (`Program v centrální buňce`) accepting one slot per line, decimal or `0x`-hex, with `;`-comments. On Reset the parser produces a `Uint32Array` and posts it to the worker.
+
+This closes the prototype-9 parity gap on the initial-state semantics: pure RNG noise (random emergence) vs deterministic seeded program (intentional experiments) is now a textarea-level choice rather than a code-level one. Mnemonic assembler (parsing `set 5, 42` etc. into slots) is still pending — see "Later". **Done 2026-05-04.**
+
 ### Later
+- **Mnemonic assembler / disassembler** — phase 7 lands raw u32 program injection; the next step is parsing `set 5, 42` / `port 0, 10` / `jmp 0` mnemonics into slots, plus rendering the inspector's memory dump as a disassembly with PC marker. Pairs naturally with preset programs (`burner`, `repli`, `orbiter`) that prototype 9 had.
 - **Lineage tracker** + manual tag + war paint as a UI overlay.
-- **Sensor expansion**: `sinflow`, `sself`, `srate` opcodes.
 - **Z80-density opcodes**: bitwise, arithmetic, conditional jumps, stack. Goal: ~60 % meaningful opcodes for emergent appearance from random noise.
 - **Persistence**: `bincode` save / load with an explicit version byte in the header.
 - **Aging counter** as a debug metric (open: per-slot vs aggregated, see `questions.md`).

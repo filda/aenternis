@@ -55,6 +55,23 @@ impl World {
         }
     }
 
+    /// Construct a new world with a programmer-supplied prefix written
+    /// into the origin cell's memory. The first `min(program.length,
+    /// energy)` slots are taken verbatim from `program`, the rest from
+    /// the deterministic per-cell RNG.
+    ///
+    /// Matches prototype 9's `bigBang(eTotal, programSlots)` semantics:
+    /// program-covered slots do not advance the RNG, so the suffix
+    /// generated from `(seed, energy)` is identical regardless of the
+    /// program supplied.
+    #[wasm_bindgen(js_name = newWithProgram)]
+    #[must_use]
+    pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
+        Self {
+            inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
+        }
+    }
+
     /// Run one simulation tick.
     ///
     /// `coeff` is the diffusion coefficient (typical range 0.15-0.30);

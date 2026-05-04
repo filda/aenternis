@@ -31,7 +31,16 @@ self.onmessage = (ev) => {
   const msg = ev.data;
   if (msg.type === "init") {
     if (world) world.free();
-    world = new World(msg.seed, msg.energy);
+    if (msg.program && msg.program.length > 0) {
+      // wasm-bindgen `Vec<u32>` arg: pass a Uint32Array (or array of
+      // numbers). We accept either for ergonomic JS.
+      const programArr = msg.program instanceof Uint32Array
+        ? msg.program
+        : new Uint32Array(msg.program);
+      world = World.newWithProgram(msg.seed, msg.energy, programArr);
+    } else {
+      world = new World(msg.seed, msg.energy);
+    }
     coeff = msg.coeff;
     k = msg.k;
     running = true;

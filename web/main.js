@@ -43,13 +43,57 @@ worker.onmessage = (ev) => {
   }
 };
 
+/// Parse the `Program v centrální buňce` textarea into an array of u32
+/// slots. One slot per line. Decimal or `0x`-prefixed hex. Lines
+/// starting with `;` and blank lines are ignored. Returns `[slots,
+/// errorMessage]` — `errorMessage` is non-empty if any line failed to
+/// parse.
+function parseProgramText(text) {
+  const slots = [];
+  const errors = [];
+  const lines = text.split(/\r?\n/);
+  for (let lineNo = 0; lineNo < lines.length; lineNo++) {
+    let line = lines[lineNo].trim();
+    if (line.length === 0) continue;
+    if (line.startsWith(";")) continue;
+    // Strip inline `;` comment.
+    const commentAt = line.indexOf(";");
+    if (commentAt !== -1) line = line.slice(0, commentAt).trim();
+    if (line.length === 0) continue;
+
+    let value;
+    if (line.startsWith("0x") || line.startsWith("0X")) {
+      value = parseInt(line.slice(2), 16);
+    } else {
+      value = parseInt(line, 10);
+    }
+    if (Number.isNaN(value) || value < 0 || value > 0xFFFFFFFF) {
+      errors.push(`line ${lineNo + 1}: cannot parse "${line}"`);
+      continue;
+    }
+    slots.push(value >>> 0);
+  }
+  return [slots, errors];
+}
+
 function sendInit() {
+  let program = [];
+  if (dom.programText) {
+    const [parsed, errors] = parseProgramText(dom.programText.value);
+    program = parsed;
+    if (dom.programStatus) {
+      dom.programStatus.textContent = errors.length > 0
+        ? `${errors.length} parse error(s): ${errors.join("; ")}`
+        : `${parsed.length} slot(s) parsed`;
+    }
+  }
   worker.postMessage({
     type: "init",
     seed: config.seed,
     energy: config.energy,
     coeff: config.coeff,
     k: config.k,
+    program,
   });
   cameraFitDirty = true;
   tracker.trail = [];
@@ -333,6 +377,8 @@ const dom = {
   trailLen: document.getElementById("trailLen"),
   trailLenVal: document.getElementById("trailLenVal"),
   trackerPos: document.getElementById("trackerPos"),
+  programText: document.getElementById("programText"),
+  programStatus: document.getElementById("programStatus"),
 };
 
 let running = true;

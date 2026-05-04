@@ -17,6 +17,26 @@ fn new_constructs_world_with_initial_energy() {
 }
 
 #[test]
+fn new_with_program_writes_prefix() {
+    let w = World::new_with_program(7, 16, &[0xCAFE, 0xBABE]);
+    assert_eq!(w.cell_count(), 1);
+    assert_eq!(w.total_energy(), 16);
+    let dump = w.cell_inspect(0, 0, 0);
+    // memory starts at offset 28
+    assert_eq!(dump[28], 0xCAFE);
+    assert_eq!(dump[29], 0xBABE);
+}
+
+#[test]
+fn new_with_empty_program_matches_new() {
+    let a = World::new(42, 32);
+    let b = World::new_with_program(42, 32, &[]);
+    let dump_a = a.cell_inspect(0, 0, 0);
+    let dump_b = b.cell_inspect(0, 0, 0);
+    assert_eq!(dump_a, dump_b);
+}
+
+#[test]
 fn new_with_zero_energy_yields_empty_world() {
     let w = World::new(7, 0);
     assert_eq!(w.total_energy(), 0);

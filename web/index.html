@@ -200,6 +200,26 @@
     </div>
 
     <div class="panel">
+      <h3>Program v centrální buňce</h3>
+      <div class="hint" style="margin-bottom: 4px;">
+        Jeden slot na řádek. Decimal nebo <code>0xHEX</code>. Komentáře <code>;</code>
+        a prázdné řádky se ignorují. Aplikuje se po Reset.
+      </div>
+      <textarea id="programText" rows="6" style="
+        width: 100%;
+        background: #0a0a10;
+        color: #e0e0e0;
+        border: 1px solid #2a2a30;
+        border-radius: 3px;
+        padding: 6px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        resize: vertical;
+      "></textarea>
+      <div id="programStatus" class="hint" style="margin-top: 4px;">empty</div>
+    </div>
+
+    <div class="panel">
       <h3>Tracker</h3>
       <div class="row">
         <label>sledovat</label>

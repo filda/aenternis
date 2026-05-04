@@ -82,13 +82,39 @@ impl SparseWorld {
     /// a cell with zero energy does not exist by the world invariant.
     #[must_use]
     pub fn big_bang(world_seed: u64, energy: u32) -> Self {
+        Self::big_bang_with_program(world_seed, energy, &[])
+    }
+
+    /// Big bang with a programmer-supplied prefix written into the origin
+    /// cell's memory. The first `min(program.len(), energy)` slots are
+    /// taken verbatim from `program`; the remaining slots (if `energy >
+    /// program.len()`) are filled from the per-cell-at-tick RNG stream.
+    ///
+    /// Matches prototype 9's `bigBang(eTotal, programSlots)` semantics:
+    /// the RNG is **not** advanced for slots covered by the program, so
+    /// for a fixed seed, `big_bang_with_program(seed, n, &[a, b, c])` and
+    /// `big_bang_with_program(seed, n, &[d, e, f])` produce identical
+    /// memory at indices 3..n.
+    ///
+    /// `program.len() > energy` truncates: extra slots are discarded.
+    /// An empty `program` is exactly equivalent to [`SparseWorld::big_bang`].
+    #[must_use]
+    pub fn big_bang_with_program(world_seed: u64, energy: u32, program: &[u32]) -> Self {
         let mut world = Self::new(world_seed);
         if energy == 0 {
             return world;
         }
         let mut rng = Rng::for_cell_at_tick(world_seed, 0, Coord::ORIGIN);
         let origin_tag = rng.next_u32();
-        let memory: Vec<u32> = (0..energy).map(|_| rng.next_u32()).collect();
+
+        let energy_usize = energy as usize;
+        let n_program = program.len().min(energy_usize);
+        let mut memory = Vec::with_capacity(energy_usize);
+        memory.extend_from_slice(&program[..n_program]);
+        for _ in n_program..energy_usize {
+            memory.push(rng.next_u32());
+        }
+
         let mut cell = Cell::with_memory(memory);
         cell.origin_tag = origin_tag;
         world.cells.insert(Coord::ORIGIN, cell);
