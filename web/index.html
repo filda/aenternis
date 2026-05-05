@@ -322,6 +322,21 @@
     <pre class="mem" id="iMemory"></pre>
   </aside>
 
+  <!--
+    Importmap pro static deploy (GitHub Pages). V dev módu Vite přepíše
+    bare importy na URL z node_modules ještě než se HTML dostane do
+    prohlížeče, takže importmap zůstává nepoužitá. V buildu/staticky
+    servírovaném výstupu prohlížeč narazí na neresolvnutý `import "three"`
+    a sáhne sem.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.170.0",
+      "three/addons/": "https://esm.sh/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
   <script type="module" src="./main.js"></script>
 </body>
 </html>

@@ -3,11 +3,19 @@ name: CI
 # Runs the verification gate (`npm run check` = vitest+coverage + Stryker)
 # on every push to main and on every pull request.
 #
-# Two jobs run in parallel for fast feedback:
+# Jobs that run in parallel for fast feedback:
 #   - `test`     - vitest with coverage thresholds
 #   - `mutation` - Stryker mutation testing
+#   - `rust`     - cargo fmt + clippy + test (workspace)
 #
-# Both upload their HTML reports as artifacts (14-day retention).
+# After `test` and `rust` pass on `main`, the `deploy` job builds the
+# wasm-pack bundle fresh and publishes the static site (root rozcestník,
+# prototypes, web/) to GitHub Pages. Mutation testing is intentionally
+# NOT a deploy gate — it runs ~30 min and isn't load-bearing for the
+# user-facing artifact.
+#
+# `test`, `mutation`, `rust` upload their HTML reports as artifacts
+# (14-day retention).
 #
 # Prototypes under `prototypes/**` are deliberately excluded from the gate
 # (see vitest.config.js and stryker.conf.json). Lab experiments are not
@@ -121,3 +129,84 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --all-targets
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [test, rust]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Pages-specific concurrency: deploys serialize cleanly, never cancel an
+    # in-flight upload. The repo-wide group above (`ci-${{ github.ref }}`)
+    # handles cancelling stale CI runs; deploys live in their own lane.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-deploy-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-deploy-
+            cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build WASM bundle
+        run: wasm-pack build crates/aenternis-wasm --target web --release
+
+      # The site is a flat copy of the static parts of the repo:
+      #   index.html, prototypes/, web/, src/, docs/, and the freshly
+      #   built crates/aenternis-wasm/pkg/. No bundling — `web/` works
+      #   via the importmap we added inline.
+      #
+      # The sed call rewrites `href="/foo"` → `href="foo"` in the root
+      # rozcestník so the absolute paths land under Pages' `/<repo>/`
+      # subpath. Local dev (vite serving from `/`) still works because
+      # browsers resolve the rewritten relatives against the page URL.
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -r prototypes _site/
+          cp -r web _site/
+          cp -r src _site/
+          cp -r docs _site/
+          mkdir -p _site/crates/aenternis-wasm
+          cp -r crates/aenternis-wasm/pkg _site/crates/aenternis-wasm/pkg
+          sed -i 's|href="/|href="|g' _site/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

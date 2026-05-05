@@ -39,7 +39,7 @@
 // 0x14..=0x16 (sinflow/sself/srate, Rust-only) as unknown to match JS
 // prototype 9-B's 20-opcode set.
 
-import init, { World } from "/crates/aenternis-wasm/pkg/aenternis_wasm.js";
+import init, { World } from "../crates/aenternis-wasm/pkg/aenternis_wasm.js";
 
 await init();
 postMessage({ type: "ready" });
