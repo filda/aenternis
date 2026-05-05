@@ -190,6 +190,19 @@ impl Opcode {
 /// snapshot is the right shape: a cell cannot observe live changes in
 /// a neighbor mid-instruction.
 ///
+/// `legacy_port_wrap` toggles `port`'s accumulation semantics:
+///
+/// - `false` (default) — `saturating_add`, the safer Rust-native path.
+///   When noise memory triggers many `port` ops in one tick, every
+///   targeted direction saturates at `u32::MAX` and the proportional
+///   clamp later splits outflow evenly across them.
+/// - `true` — `wrapping_add`, matching JS prototype 9-B's
+///   `(activeOutflow + arg1) >>> 0`. Individual directions hold
+///   residual `mod 2^32` values that vary direction-by-direction, so
+///   the dominant direction takes most of the outflow after clamp.
+///   This is the source of 9-B's visible asymmetric expansion that the
+///   saturating path doesn't reproduce.
+///
 /// **Empty cells** (`memory.len() == 0`) are a no-op — there is no
 /// program to run. Callers don't need to special-case them.
 ///
@@ -200,7 +213,12 @@ impl Opcode {
 /// All addresses are taken modulo `memory.len()` (modular addressing,
 /// never out of bounds). All arithmetic is wrapping.
 #[allow(clippy::too_many_lines)] // 20 opcodes per match; splitting hurts more than it helps
-pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction::COUNT]) {
+pub fn execute_instruction(
+    cell: &mut Cell,
+    neighbor_energies: &[u32; Direction::COUNT],
+    legacy_port_wrap: bool,
+    legacy_opcode_set: bool,
+) {
     let mem_size = cell.memory.len();
     if mem_size == 0 {
         return;
@@ -213,6 +231,14 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         cell.pc = ((pc_u + 1) % mem_size) as u32;
         return;
     };
+
+    // Legacy opcode set: JS prototype 9-B stops at 0x13 (`paint`).
+    // Treating 0x14..=0x16 as unknown here keeps PC-walk identical to
+    // JS when noise memory encodes one of those bytes.
+    if legacy_opcode_set && (opcode_slot & 0xFF) > 0x13 {
+        cell.pc = ((pc_u + 1) % mem_size) as u32;
+        return;
+    }
 
     let length = op.length() as usize;
 
@@ -311,7 +337,11 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
 
         Opcode::Port => {
             let dir = (arg1 as usize) % Direction::COUNT;
-            cell.active_outflow[dir] = cell.active_outflow[dir].saturating_add(arg2);
+            cell.active_outflow[dir] = if legacy_port_wrap {
+                cell.active_outflow[dir].wrapping_add(arg2)
+            } else {
+                cell.active_outflow[dir].saturating_add(arg2)
+            };
         }
         Opcode::Senergy => {
             let dir = (arg1 as usize) % Direction::COUNT;

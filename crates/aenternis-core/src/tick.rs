@@ -60,7 +60,7 @@ use crate::{Coord, Direction, Rng, SparseWorld};
 /// Empty cells (`energy == 0`) get all-zero rates and are otherwise left
 /// alone. They normally would have been removed by [`SparseWorld::gc_empty`]
 /// before this point, but the function is tolerant if they're still around.
-pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
+pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // Phase 1: snapshot energies. Immutable borrow of `world.cells`.
     let snapshot: BTreeMap<Coord, u32> = world
         .cells
@@ -107,9 +107,16 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
             let rate = if my_energy > neighbor_energy {
                 let delta = my_energy - neighbor_energy;
                 if full_precision {
-                    rng.stochastic_floor_f64(f64::from(delta) * f64::from(coeff))
+                    // `coeff` is `f64`, so JS `Number(0.15)` flows
+                    // through unchanged — no `f32(0.15)→f64` artifact.
+                    rng.stochastic_floor_f64(f64::from(delta) * coeff)
                 } else {
-                    rng.stochastic_floor(delta_to_f32(delta) * coeff)
+                    // Production path: stay in `f32` end-to-end. The
+                    // `coeff as f32` cast accepts an `f64` parameter
+                    // but rounds it once on entry; this matches the
+                    // historical f32-only API.
+                    #[allow(clippy::cast_possible_truncation)]
+                    rng.stochastic_floor(delta_to_f32(delta) * coeff as f32)
                 }
             } else {
                 0
@@ -156,19 +163,25 @@ pub type Outflow = BTreeMap<Coord, [Vec<u32>; Direction::COUNT]>;
 ///
 /// For each cell `C` and each direction `d`:
 ///
-/// - `rate = C.rates[d]`
+/// - `combined = C.rates[d] + C.active_outflow[d]`
+/// - the per-cell six-element `combined` vector is then **proportionally
+///   clamped** so its sum does not exceed `C.energy()` (= memory size)
 /// - `ptr = C.pointers[d]`
-/// - the slice `C.memory[ptr .. ptr+rate]` (modular wrap on memory length)
-///   is copied into `outflow[&C.coord][d.index()]`.
+/// - the slice `C.memory[ptr .. ptr + combined[d]]` (modular wrap on
+///   memory length) is copied into `outflow[&C.coord][d.index()]`.
 ///
-/// **Pre-condition:** `total_rate(C) ≤ C.energy()` for every cell — i.e.
-/// [`compute_natural_rates`] has been called and proportionally clamped
-/// rates as needed. The function is tolerant if the invariant is violated
-/// (modular wrap will read slots more than once), but the result is then
-/// not physically meaningful.
+/// Why combined-and-clamped, not just `rates`: a cell that ran `port`
+/// during the CPU phase has accumulated `active_outflow` in some
+/// direction(s); the spec (and JS prototype 9-B) say the actual
+/// per-tick emission size in that direction is `rates + active_outflow`,
+/// scaled down proportionally if their sum exceeds memory. Without this
+/// clamp here, `port` would only shift *which* slots get emitted (via
+/// pointer layout) and never grow the *amount*, which silently breaks
+/// the `port` instruction's whole purpose.
 ///
 /// **Determinism:** iterates the world in `BTreeMap` order; the result is
-/// reproducible for a given `(rates, pointers, memory)` triple per cell.
+/// reproducible for a given `(rates, active_outflow, pointers, memory)`
+/// quadruple per cell.
 ///
 /// **Allocation:** allocates one `Vec<u32>` per direction per cell, even
 /// when the rate is zero. That's six small allocations per cell per tick,
@@ -181,8 +194,10 @@ pub fn collect_outflow(world: &SparseWorld) -> Outflow {
         let mem_size = cell.memory.len();
         let mut per_direction: [Vec<u32>; Direction::COUNT] = Default::default();
         if mem_size > 0 {
+            let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
+            let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
             for &d in &Direction::ALL {
-                let rate = cell.rates[d.index()] as usize;
+                let rate = combined[d.index()] as usize;
                 let ptr = cell.pointers[d.index()] as usize;
                 let mut buf = Vec::with_capacity(rate);
                 for k in 0..rate {
@@ -199,20 +214,104 @@ pub fn collect_outflow(world: &SparseWorld) -> Outflow {
 /// Lay out per-direction pointers for every cell in the world.
 ///
 /// Uses each cell's combined rate (`rates + active_outflow`) as the
-/// per-direction consumption budget. Honors any `pointer_override`
-/// flags set by a CPU-phase `setp` / `setpv` instruction this tick.
+/// per-direction consumption budget, **clamped** to the cell's memory
+/// size so that total emission never exceeds what the cell actually
+/// holds. Honors any `pointer_override` flags set by a CPU-phase
+/// `setp` / `setpv` instruction this tick.
 ///
-/// This is the sub-tick reflow step from `docs/mechanics.md`. In the
-/// diffusion-only phase 1 there is no CPU phase, so `active_outflow`
-/// is always all-zero and the combined rate equals the natural rate —
-/// but the function is written for the general case so it doesn't need
-/// rewriting once the VM lands.
+/// This is the sub-tick reflow step from `docs/mechanics.md`, matching
+/// JS prototype 9-B's `applyCombinedLayout`. See [`combined_clamped`]
+/// for the per-direction `u64` accumulation that keeps Rust bit-aligned
+/// with JS `Number` arithmetic when `rates + active_outflow` exceeds
+/// `u32::MAX`.
 pub fn lay_out_pointers(world: &mut SparseWorld) {
     for cell in world.cells.values_mut() {
-        let combined: [u32; Direction::COUNT] =
-            std::array::from_fn(|i| cell.rates[i].saturating_add(cell.active_outflow[i]));
+        let mem_size = cell.memory.len();
+        if mem_size == 0 {
+            continue;
+        }
+        let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
+        let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
         cell.lay_out_pointers(&combined);
     }
+}
+
+/// Compute clamped combined per-direction rate for one cell.
+///
+/// `combined = rates[d] + active_outflow[d]`, summed in `u64` so the
+/// addition never saturates on `u32` overflow the way JS `Number`
+/// addition wouldn't, then proportionally clamped to `cap` and
+/// returned as `u32` per direction.
+///
+/// Centralized here because both [`lay_out_pointers`] (sub-tick reflow)
+/// and [`collect_outflow`] need exactly the same clamped combined for
+/// pointer layout and outflow amounts respectively, and both calls
+/// must agree to the bit. Splitting the logic into two open-coded
+/// blocks left a saturating-`u32`-add bug in earlier revisions where
+/// the two paths could disagree on the clamp output by ~1500 slots
+/// per direction.
+///
+/// The clamp uses `f64` for `cap / total` and the per-direction
+/// `combined * scale` step, matching JS prototype 9-B's
+/// `Math.floor(combined * cap / total)` to the bit. `u64` integer
+/// division would also be correct mathematically but disagrees with
+/// JS at boundary values (truncation vs round-to-nearest-then-floor).
+#[must_use]
+pub fn combined_clamped(
+    rates: &[u32; Direction::COUNT],
+    active_outflow: &[u32; Direction::COUNT],
+    cap: u32,
+) -> [u32; Direction::COUNT] {
+    let combined_u64: [u64; Direction::COUNT] =
+        std::array::from_fn(|i| u64::from(rates[i]) + u64::from(active_outflow[i]));
+    let total: u64 = combined_u64.iter().sum();
+    let cap64 = u64::from(cap);
+    if total <= cap64 {
+        // Each `combined_u64[i]` is bounded above by `total <= cap` here,
+        // so `as u32` is lossless.
+        #[allow(clippy::cast_possible_truncation)]
+        return std::array::from_fn(|i| combined_u64[i] as u32);
+    }
+    // Clamp via `f64` to bit-match JS. `total` reaches at most
+    // `6 * (u32::MAX + small_natural_rate)` ≈ `2^34.6`, well under
+    // `f64`'s `2^53` exact-integer ceiling.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let scale = f64::from(cap) / total as f64;
+    let mut clamped: [u32; Direction::COUNT] = [0; Direction::COUNT];
+    let mut new_total: u32 = 0;
+    for i in 0..Direction::COUNT {
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let scaled = (combined_u64[i] as f64 * scale).floor();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let val = scaled as u32;
+        clamped[i] = val;
+        new_total = new_total.saturating_add(val);
+    }
+    // Distribute leftover (floor rounding may have lost up to DIRS - 1).
+    let mut leftover = cap.saturating_sub(new_total);
+    while leftover > 0 {
+        let mut added = false;
+        for r in &mut clamped {
+            if *r > 0 && leftover > 0 {
+                *r += 1;
+                leftover -= 1;
+                added = true;
+                break;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    clamped
 }
 
 /// Apply an [`Outflow`] snapshot to the world with collision-as-soft-mixing
@@ -447,6 +546,8 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     }
 
     let k_safe = k.max(1);
+    let legacy_port_wrap = world.legacy_port_wrap;
+    let legacy_opcode_set = world.legacy_opcode_set;
 
     // Phase 2: run each cell's instruction budget against the snapshot.
     for (coord, cell) in &mut world.cells {
@@ -456,7 +557,7 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
             .unwrap_or([0; Direction::COUNT]);
         let budget = cell.energy() / k_safe;
         for _ in 0..budget {
-            crate::vm::execute_instruction(cell, &neighbors);
+            crate::vm::execute_instruction(cell, &neighbors, legacy_port_wrap, legacy_opcode_set);
         }
     }
 }
@@ -478,7 +579,7 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
 /// 7. Increment `world.tick`.
 ///
 /// Energy is conserved across the cycle.
-pub fn step(world: &mut SparseWorld, coeff: f32, k: u32) {
+pub fn step(world: &mut SparseWorld, coeff: f64, k: u32) {
     initialize(world, coeff);
     cpu_phase(world, k);
     lay_out_pointers(world);
@@ -496,7 +597,7 @@ pub fn step(world: &mut SparseWorld, coeff: f32, k: u32) {
 /// canonical order. Useful as a one-shot setup after manual world
 /// construction (insert / remove cells outside the step cycle), and as
 /// the leading phase of [`step_diffusion`] itself.
-pub fn initialize(world: &mut SparseWorld, coeff: f32) {
+pub fn initialize(world: &mut SparseWorld, coeff: f64) {
     compute_natural_rates(world, coeff);
     lay_out_pointers(world);
 }
@@ -518,7 +619,7 @@ pub fn initialize(world: &mut SparseWorld, coeff: f32) {
 ///
 /// Energy is conserved across the cycle: every slot that leaves a
 /// source ends up appended into exactly one neighbor.
-pub fn step_diffusion(world: &mut SparseWorld, coeff: f32) {
+pub fn step_diffusion(world: &mut SparseWorld, coeff: f64) {
     initialize(world, coeff);
     let outflow = collect_outflow(world);
     apply_outflow(world, &outflow);

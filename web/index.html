@@ -164,6 +164,7 @@
       <div class="row"><span class="label">tick</span><span class="value" id="tick">0</span></div>
       <div class="row"><span class="label">cells</span><span class="value" id="cells">0</span></div>
       <div class="row"><span class="label">total energy</span><span class="value" id="energy">0</span></div>
+      <div class="row"><span class="label">bbox</span><span class="value" id="bbox">-</span></div>
       <div class="row"><span class="label">FPS</span><span class="value" id="fps">-</span></div>
       <div class="row"><span class="label">ms/tick</span><span class="value" id="msPerTick">-</span></div>
       <div class="row"><span class="label">ticks/s</span><span class="value" id="ticksPerSec">-</span></div>
@@ -223,9 +224,23 @@
           f64 (jako 9-B)
         </label>
       </div>
+      <div class="row">
+        <label>port</label>
+        <label style="font-weight: normal;">
+          <input id="legacyPortWrap" type="checkbox">
+          wrap (jako 9-B)
+        </label>
+      </div>
+      <div class="row">
+        <label>opcodes</label>
+        <label style="font-weight: normal;">
+          <input id="legacyOpcodeSet" type="checkbox">
+          0x00-0x13 (jako 9-B)
+        </label>
+      </div>
       <div class="hint" style="font-size: 11px; margin-top: 4px;">
-        Ke 9-B paritě potřebuješ všechny tři. RNG se aplikuje po Reset,
-        off-by-one i precision flipují za běhu.
+        Ke 9-B paritě potřebuješ všech pět. RNG se aplikuje po Reset,
+        ostatní flipují za běhu.
       </div>
     </div>
 

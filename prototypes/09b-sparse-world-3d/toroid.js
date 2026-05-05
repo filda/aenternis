@@ -12,28 +12,40 @@ const {
 
 const LAYOUT_ORDER_FROM_END = [5, 4, 3, 2, 1, 0];
 
-function cellSeed(worldSeed, x, y, z) {
+// Hash precision flag matches the sparse world's `useMathImul` — see
+// `world.js` for full discussion. Both reference (toroid) and sparse must
+// pick the same backend or the equivalence harness diverges before tick 1.
+function mulMod32F64(a, b) {
+  return (a * b) >>> 0;
+}
+function imulMod32(a, b) {
+  return Math.imul(a, b) >>> 0;
+}
+
+function cellSeed(worldSeed, x, y, z, useMathImul = false) {
+  const mul = useMathImul ? imulMod32 : mulMod32F64;
   let h = (worldSeed >>> 0) ^ 0x9E3779B9;
-  h = ((h + (x | 0)) * 374761393) >>> 0;
+  h = mul(h + (x | 0), 374761393);
   h ^= h >>> 13;
-  h = ((h + (y | 0)) * 668265263) >>> 0;
+  h = mul(h + (y | 0), 668265263);
   h ^= h >>> 16;
-  h = ((h + (z | 0)) * 1274126177) >>> 0;
+  h = mul(h + (z | 0), 1274126177);
   h ^= h >>> 13;
   if (h === 0) h = 1;
   return h;
 }
 
-function cellTickSeed(worldSeed, x, y, z, tick) {
-  let h = cellSeed(worldSeed, x, y, z);
-  h = ((h + (tick | 0)) * 2246822507) >>> 0;
+function cellTickSeed(worldSeed, x, y, z, tick, useMathImul = false) {
+  const mul = useMathImul ? imulMod32 : mulMod32F64;
+  let h = cellSeed(worldSeed, x, y, z, useMathImul);
+  h = mul(h + (tick | 0), 2246822507);
   h ^= h >>> 16;
   if (h === 0) h = 1;
   return h;
 }
 
-function makeCell(x, y, z, worldSeed) {
-  const seed = cellSeed(worldSeed, x, y, z);
+function makeCell(x, y, z, worldSeed, useMathImul = false) {
+  const seed = cellSeed(worldSeed, x, y, z, useMathImul);
   return {
     x, y, z,
     energy: 0,
@@ -61,6 +73,7 @@ class ToroidWorld {
     this.cpuK = opts.cpuK ?? 1;
     this.moveThreshold = opts.moveThreshold ?? 2.0;
     this.worldSeed = (opts.seed ?? 1) >>> 0;
+    this.useMathImul = opts.useMathImul ?? false;
     this.tick = 0;
     const N = this.N;
     this.cells = new Array(N * N * N);
@@ -74,7 +87,7 @@ class ToroidWorld {
           const cx = x - this.half;
           const cy = y - this.half;
           const cz = z - this.half;
-          this.cells[(z * N + y) * N + x] = makeCell(cx, cy, cz, this.worldSeed);
+          this.cells[(z * N + y) * N + x] = makeCell(cx, cy, cz, this.worldSeed, this.useMathImul);
         }
       }
     }
@@ -184,7 +197,7 @@ class ToroidWorld {
   recomputeAllLayouts() {
     const coeff = this.diffusionCoeff;
     for (const cell of this.cells) {
-      const rng = makeRng(cellTickSeed(this.worldSeed, cell.x, cell.y, cell.z, this.tick));
+      const rng = makeRng(cellTickSeed(this.worldSeed, cell.x, cell.y, cell.z, this.tick, this.useMathImul));
       const myE = cell.energy;
       let totalRate = 0;
       for (let d = 0; d < DIRS; d++) {

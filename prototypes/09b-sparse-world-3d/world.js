@@ -96,16 +96,44 @@ function rngFloat(rng) {
   return rng() / 0x100000000;
 }
 
+// 32-bit u32 multiplication helpers used by the cell-seed hash.
+//
+// `mulMod32F64` is the historical (broken-by-design) implementation of
+// the prototype: `*` runs in `Number` (f64), and for u32 × u32 = up to
+// 2^64, f64's 53-bit mantissa loses the bottom 8-11 bits before `>>> 0`
+// can salvage them. Each multiply step in `cellSeed` adds error of up to
+// ±128, which compounds through three multiplies + xors into a hash value
+// that diverges by ~10^9 from the bit-correct answer.
+//
+// `imulMod32` uses `Math.imul`, which performs *exact* 32-bit signed
+// multiplication mod 2^32 (the same operation Rust's `wrapping_mul`
+// gives). Use this when bit-comparing 9-B against the Rust port; use the
+// f64 path when reproducing the original 9-B (and 9, and the toroid)
+// snapshot stream that all the existing equivalence tests are baked
+// against.
+function mulMod32F64(a, b) {
+  return (a * b) >>> 0;
+}
+function imulMod32(a, b) {
+  return Math.imul(a, b) >>> 0;
+}
+
 // Seed per buňku pomocí hashe souřadnic + globálního worldSeed. Tím má
 // každá buňka deterministický termální mikrostav bez ohledu na pořadí
 // iterace, což je klíčové pro fair ekvivalenci se toroidem.
-function cellSeed(worldSeed, x, y, z) {
+//
+// Páraně `useMathImul` přepíná mezi původní f64-precision-loss verzí
+// (false, default — match historického 9-B chování) a Math.imul-based
+// exact u32 verzí (true — match Rust portu). Viz komentář u `mulMod32F64`
+// pro důvody, proč to není jeden správný hash.
+function cellSeed(worldSeed, x, y, z, useMathImul = false) {
+  const mul = useMathImul ? imulMod32 : mulMod32F64;
   let h = (worldSeed >>> 0) ^ 0x9E3779B9;
-  h = ((h + (x | 0)) * 374761393) >>> 0;
+  h = mul(h + (x | 0), 374761393);
   h ^= h >>> 13;
-  h = ((h + (y | 0)) * 668265263) >>> 0;
+  h = mul(h + (y | 0), 668265263);
   h ^= h >>> 16;
-  h = ((h + (z | 0)) * 1274126177) >>> 0;
+  h = mul(h + (z | 0), 1274126177);
   h ^= h >>> 13;
   if (h === 0) h = 1; // xorshift32 nesmí být 0
   return h;
@@ -116,9 +144,13 @@ function cellSeed(worldSeed, x, y, z) {
 // Sparse i toroid implementace produkují stejnou sekvenci stochasticFloor
 // hodnot per (coord, tick), bez ohledu na to, jestli buňka existovala
 // kontinuálně nebo byla GC'd a re-alokovaná.
-function cellTickSeed(worldSeed, x, y, z, tick) {
-  let h = cellSeed(worldSeed, x, y, z);
-  h = ((h + (tick | 0)) * 2246822507) >>> 0;
+//
+// `useMathImul` musí matchnout to, co dostal `cellSeed` — jinak by se
+// per-cell-tick stream rozjel s per-cell base seedem.
+function cellTickSeed(worldSeed, x, y, z, tick, useMathImul = false) {
+  const mul = useMathImul ? imulMod32 : mulMod32F64;
+  let h = cellSeed(worldSeed, x, y, z, useMathImul);
+  h = mul(h + (tick | 0), 2246822507);
   h ^= h >>> 16;
   if (h === 0) h = 1;
   return h;
@@ -126,8 +158,8 @@ function cellTickSeed(worldSeed, x, y, z, tick) {
 
 // ----- Cell -----
 
-function makeCell(x, y, z, worldSeed) {
-  const seed = cellSeed(worldSeed, x, y, z);
+function makeCell(x, y, z, worldSeed, useMathImul = false) {
+  const seed = cellSeed(worldSeed, x, y, z, useMathImul);
   return {
     x, y, z,
     energy: 0,
@@ -159,6 +191,11 @@ class SparseWorld {
     this.moveThreshold = opts.moveThreshold ?? 2.0;
     this.worldSeed = (opts.seed ?? 1) >>> 0;
     this.tick = 0;
+    // Hash precision flag — see comments on `cellSeed` / `mulMod32F64`.
+    // Default `false` reproduces the original 9-B (and 9, and toroid)
+    // f64-precision-loss bit stream that all baked snapshots assume; set
+    // `true` for bit-correct u32 hashes that match the Rust port.
+    this.useMathImul = opts.useMathImul ?? false;
     // E_total se neukládá jako parametr — kdykoli ho lze spočítat ze sumy.
     // Drží se ale výchozí hodnota pro asserce a UI.
     this.initialETotal = 0;
@@ -177,7 +214,7 @@ class SparseWorld {
   // Alokace nové buňky s prázdnou pamětí (E = 0). Volá se z inflow fáze
   // při prvním zápisu do dosud neexistující pozice.
   allocateCell(x, y, z) {
-    const cell = makeCell(x, y, z, this.worldSeed);
+    const cell = makeCell(x, y, z, this.worldSeed, this.useMathImul);
     this.cells.set(packCoord(x, y, z), cell);
     return cell;
   }
@@ -186,7 +223,7 @@ class SparseWorld {
     const key = packCoord(x, y, z);
     let cell = this.cells.get(key);
     if (!cell) {
-      cell = makeCell(x, y, z, this.worldSeed);
+      cell = makeCell(x, y, z, this.worldSeed, this.useMathImul);
       this.cells.set(key, cell);
     }
     return cell;
@@ -395,7 +432,7 @@ class SparseWorld {
     const coeff = this.diffusionCoeff;
     for (const cell of this.cells.values()) {
       // Fresh rng per (coord, tick) — viz cellTickSeed komentář.
-      const rng = makeRng(cellTickSeed(this.worldSeed, cell.x, cell.y, cell.z, this.tick));
+      const rng = makeRng(cellTickSeed(this.worldSeed, cell.x, cell.y, cell.z, this.tick, this.useMathImul));
       const myE = cell.energy;
       let totalRate = 0;
       for (let d = 0; d < DIRS; d++) {

@@ -9,9 +9,9 @@
 //
 //   main → worker:
 //     { type: "init", seed, energy, coeff, k, moveThreshold, rngKind,
-//       legacyTickOffset, legacyFullPrecision, program }
+//       legacyTickOffset, legacyFullPrecision, legacyPortWrap, program }
 //     { type: "config", coeff, k, moveThreshold, legacyTickOffset,
-//       legacyFullPrecision }
+//       legacyFullPrecision, legacyPortWrap }
 //     { type: "running", running }
 //     { type: "inspect", x, y, z }
 //
@@ -30,6 +30,14 @@
 // `legacyFullPrecision` is a boolean — when true, the stochastic-floor
 // comparison runs in `f64` with all 32 bits of RNG entropy, matching JS
 // prototype 9-B's `Number`-throughout arithmetic.
+//
+// `legacyPortWrap` is a boolean — when true, the `port` opcode
+// accumulates into `active_outflow` with `wrapping_add` (mod 2^32)
+// instead of `saturating_add`, matching JS `(activeOutflow + arg1) >>> 0`.
+//
+// `legacyOpcodeSet` is a boolean — when true, the VM treats opcodes
+// 0x14..=0x16 (sinflow/sself/srate, Rust-only) as unknown to match JS
+// prototype 9-B's 20-opcode set.
 
 import init, { World } from "/crates/aenternis-wasm/pkg/aenternis_wasm.js";
 
@@ -43,6 +51,8 @@ let k = 1;
 let moveThreshold = 2.0;
 let legacyTickOffset = false;
 let legacyFullPrecision = false;
+let legacyPortWrap = false;
+let legacyOpcodeSet = false;
 
 self.onmessage = (ev) => {
   const msg = ev.data;
@@ -64,6 +74,10 @@ self.onmessage = (ev) => {
     world.setLegacyTickOffset(legacyTickOffset);
     legacyFullPrecision = !!msg.legacyFullPrecision;
     world.setLegacyFullPrecision(legacyFullPrecision);
+    legacyPortWrap = !!msg.legacyPortWrap;
+    world.setLegacyPortWrap(legacyPortWrap);
+    legacyOpcodeSet = !!msg.legacyOpcodeSet;
+    world.setLegacyOpcodeSet(legacyOpcodeSet);
     running = true;
     sendSnapshot(); // initial state, before any tick has run
     schedule();
@@ -81,6 +95,14 @@ self.onmessage = (ev) => {
     if (typeof msg.legacyFullPrecision === "boolean") {
       legacyFullPrecision = msg.legacyFullPrecision;
       if (world) world.setLegacyFullPrecision(legacyFullPrecision);
+    }
+    if (typeof msg.legacyPortWrap === "boolean") {
+      legacyPortWrap = msg.legacyPortWrap;
+      if (world) world.setLegacyPortWrap(legacyPortWrap);
+    }
+    if (typeof msg.legacyOpcodeSet === "boolean") {
+      legacyOpcodeSet = msg.legacyOpcodeSet;
+      if (world) world.setLegacyOpcodeSet(legacyOpcodeSet);
     }
   } else if (msg.type === "running") {
     const wasRunning = running;
@@ -128,6 +150,9 @@ function loop() {
 function sendSnapshot() {
   if (!world) return;
   const snap = world.cellsSnapshot();
+  // bbox is a freshly-allocated Int32Array; transfer it for zero-copy.
+  // Empty array (length 0) means an empty world; main thread renders "—".
+  const bbox = world.boundingBox();
   postMessage(
     {
       type: "snapshot",
@@ -137,7 +162,8 @@ function sendSnapshot() {
       msPerTick: lastMsPerTick,
       snap,
       stride: world.snapshotStride,
+      bbox,
     },
-    [snap.buffer], // transferable — zero-copy ownership handoff
+    [snap.buffer, bbox.buffer], // transferable — zero-copy ownership handoff
   );
 }

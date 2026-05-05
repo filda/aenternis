@@ -263,6 +263,19 @@ fn xs32_for_cell_at_tick_differs_from_pcg() {
 }
 
 #[test]
+fn xs32_cell_seed_matches_js_math_imul_at_origin() {
+    // Reference value from JS prototype 9-B with the `Math.imul` checkbox
+    // enabled — i.e. the hash with f64 precision loss removed:
+    //   cellSeed(1234, 0, 0, 0, true) === 535601943
+    // The Rust port uses `wrapping_mul` (exact u32 mod 2^32), which is
+    // semantically what `Math.imul(a, b) >>> 0` computes in JS. The two
+    // must therefore agree to the bit. If this test fails, the divergence
+    // we've been chasing in the simulation has its root here, in the
+    // very first hash call.
+    assert_eq!(cell_seed_xs32(1234, Coord::new(0, 0, 0)), 535_601_943);
+}
+
+#[test]
 fn xs32_cell_seed_independent_across_coords() {
     // Different coordinates must produce different per-cell seeds; otherwise
     // adjacent cells would get identical thermal microstates.

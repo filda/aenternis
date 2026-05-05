@@ -32,6 +32,15 @@ use crate::rng::cell_seed_xs32;
 use crate::{Cell, Coord, Direction, Rng, RngKind};
 
 /// Sparse world container.
+///
+/// The four `legacy_*` bool fields are independent diagnostic toggles
+/// that select between Rust-native semantics and JS prototype 9-B
+/// compat for each phase that has a known divergence (RNG-tick offset,
+/// `f64` precision in stochastic-floor, `port` wrapping, opcode set).
+/// Refactoring them into a single state enum would conflate orthogonal
+/// concerns; `clippy::struct_excessive_bools` is silenced here on
+/// purpose.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct SparseWorld {
     /// Cells indexed by coordinate. Iteration order is the `BTreeMap`
@@ -79,6 +88,32 @@ pub struct SparseWorld {
     /// values where the two paths can disagree per draw. Toggling
     /// mid-run is safe; the change applies on the next tick.
     pub legacy_full_precision: bool,
+
+    /// When `true`, the `port` opcode accumulates into `active_outflow`
+    /// with **wrapping** addition (modulo `2^32`), matching JS prototype
+    /// 9-B's `(activeOutflow + arg1) >>> 0`. When `false` (default),
+    /// the addition saturates at `u32::MAX` — safer for production code
+    /// but produces a *much* more symmetric outflow pattern when noise
+    /// memory triggers many `port` opcodes in one tick: every triggered
+    /// direction saturates, so the proportional clamp splits emission
+    /// evenly. With wrap, individual directions hold residual values
+    /// from `mod 2^32` arithmetic and the dominant direction wins,
+    /// which is what 9-B's visible asymmetric expansion comes from.
+    /// Toggling mid-run is safe.
+    pub legacy_port_wrap: bool,
+
+    /// When `true`, the VM treats opcodes `0x14` (`sinflow`), `0x15`
+    /// (`sself`), and `0x16` (`srate`) as **unknown** — same as any
+    /// `> 0x16` byte: PC advances by 1 slot and nothing else happens.
+    /// JS prototype 9-B only defines 20 opcodes (`0x00..=0x13`), so
+    /// the three Rust additions don't exist there; without this flag,
+    /// noise memory that happens to encode one of those bytes triggers
+    /// a sinflow / sself / srate execution in Rust but a single-slot
+    /// nop in JS. Over a tick of 9830 random instructions that's
+    /// ~115 PC-walk divergences per cell, more than enough to drift
+    /// the post-clamp outflow distribution.
+    /// Toggling mid-run is safe.
+    pub legacy_opcode_set: bool,
 }
 
 impl SparseWorld {
@@ -99,6 +134,8 @@ impl SparseWorld {
             rng_kind: RngKind::Pcg,
             legacy_tick_offset: false,
             legacy_full_precision: false,
+            legacy_port_wrap: false,
+            legacy_opcode_set: false,
         }
     }
 
@@ -113,6 +150,8 @@ impl SparseWorld {
             rng_kind,
             legacy_tick_offset: false,
             legacy_full_precision: false,
+            legacy_port_wrap: false,
+            legacy_opcode_set: false,
         }
     }
 
@@ -275,6 +314,47 @@ impl SparseWorld {
     #[must_use]
     pub fn total_energy(&self) -> u64 {
         self.cells.values().map(|c| u64::from(c.energy())).sum()
+    }
+
+    /// Bounding box across all live cells, as
+    /// `(x_min, x_max, y_min, y_max, z_min, z_max)`. Returns `None` when
+    /// the world is empty.
+    ///
+    /// `O(n)` in the cell count — walks the whole map. Cheap enough at
+    /// the prototype's million-cell scale (one tick of `step` is already
+    /// `O(n)`); upgrade to a maintained-on-write bbox if profiling ever
+    /// flags this.
+    #[must_use]
+    pub fn bounding_box(&self) -> Option<(i32, i32, i32, i32, i32, i32)> {
+        let mut iter = self.cells.keys();
+        let first = iter.next()?;
+        let mut x_min = first.x;
+        let mut x_max = first.x;
+        let mut y_min = first.y;
+        let mut y_max = first.y;
+        let mut z_min = first.z;
+        let mut z_max = first.z;
+        for c in iter {
+            if c.x < x_min {
+                x_min = c.x;
+            }
+            if c.x > x_max {
+                x_max = c.x;
+            }
+            if c.y < y_min {
+                y_min = c.y;
+            }
+            if c.y > y_max {
+                y_max = c.y;
+            }
+            if c.z < z_min {
+                z_min = c.z;
+            }
+            if c.z > z_max {
+                z_max = c.z;
+            }
+        }
+        Some((x_min, x_max, y_min, y_max, z_min, z_max))
     }
 
     /// Drop every cell whose memory is empty (energy == 0). This is the

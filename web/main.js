@@ -36,6 +36,17 @@ const config = {
   // bits of RNG entropy, matching JS prototype 9-B's `Number`-throughout
   // arithmetic. Independent of `rngKind`. Toggling is live.
   legacyFullPrecision: false,
+  // When true, `port` accumulates into `active_outflow` with `wrapping_add`
+  // (mod 2^32) instead of `saturating_add`. Required for 9-B parity when
+  // noise memory triggers many `port` ops; saturate gives clean symmetric
+  // emission, wrap gives 9-B's asymmetric per-direction dominance.
+  // Toggling is live.
+  legacyPortWrap: false,
+  // When true, the VM treats opcodes 0x14..=0x16 (Rust-only sinflow,
+  // sself, srate) as unknown so noise memory that encodes them produces
+  // a single-slot nop, matching JS prototype 9-B's 20-opcode set.
+  // Toggling is live.
+  legacyOpcodeSet: false,
 };
 
 // ----- Worker setup ----------------------------------------------------------
@@ -78,6 +89,8 @@ function sendInit() {
     rngKind: config.rngKind,
     legacyTickOffset: config.legacyTickOffset,
     legacyFullPrecision: config.legacyFullPrecision,
+    legacyPortWrap: config.legacyPortWrap,
+    legacyOpcodeSet: config.legacyOpcodeSet,
     program,
   });
   cameraFitDirty = true;
@@ -94,6 +107,8 @@ function sendConfig() {
     moveThreshold: config.moveThreshold,
     legacyTickOffset: config.legacyTickOffset,
     legacyFullPrecision: config.legacyFullPrecision,
+    legacyPortWrap: config.legacyPortWrap,
+    legacyOpcodeSet: config.legacyOpcodeSet,
   });
 }
 
@@ -354,6 +369,7 @@ const dom = {
   tick: document.getElementById("tick"),
   cells: document.getElementById("cells"),
   energy: document.getElementById("energy"),
+  bbox: document.getElementById("bbox"),
   fps: document.getElementById("fps"),
   msPerTick: document.getElementById("msPerTick"),
   ticksPerSec: document.getElementById("ticksPerSec"),
@@ -377,6 +393,8 @@ const dom = {
   rngXs32: document.getElementById("rngXs32"),
   legacyTickOffset: document.getElementById("legacyTickOffset"),
   legacyFullPrecision: document.getElementById("legacyFullPrecision"),
+  legacyPortWrap: document.getElementById("legacyPortWrap"),
+  legacyOpcodeSet: document.getElementById("legacyOpcodeSet"),
 };
 
 // ----- Slice (z = 0 only) — proto-9-style 2D view ----------------------------
@@ -402,6 +420,8 @@ dom.resetBtn.addEventListener("click", () => {
   config.rngKind = dom.rngXs32.checked ? "xorshift32" : "pcg";
   config.legacyTickOffset = dom.legacyTickOffset.checked;
   config.legacyFullPrecision = dom.legacyFullPrecision.checked;
+  config.legacyPortWrap = dom.legacyPortWrap.checked;
+  config.legacyOpcodeSet = dom.legacyOpcodeSet.checked;
   running = true;
   dom.pauseBtn.textContent = "Pause";
   sendInit();
@@ -424,6 +444,20 @@ dom.legacyTickOffset.addEventListener("change", () => {
 // `world.legacy_full_precision` fresh each tick.
 dom.legacyFullPrecision.addEventListener("change", () => {
   config.legacyFullPrecision = dom.legacyFullPrecision.checked;
+  sendConfig();
+});
+// And the port-wrap checkbox — `cpu_phase` reads `world.legacy_port_wrap`
+// fresh, so toggling is live (already-accumulated `active_outflow` from
+// previous ticks isn't retroactively rewrapped, just future ports change).
+dom.legacyPortWrap.addEventListener("change", () => {
+  config.legacyPortWrap = dom.legacyPortWrap.checked;
+  sendConfig();
+});
+// And the opcode-set checkbox — `execute_instruction` reads
+// `world.legacy_opcode_set` fresh per opcode, so flipping live just
+// changes how the next instructions are decoded.
+dom.legacyOpcodeSet.addEventListener("change", () => {
+  config.legacyOpcodeSet = dom.legacyOpcodeSet.checked;
   sendConfig();
 });
 dom.coeff.addEventListener("input", () => {
@@ -512,6 +546,18 @@ function frame(now) {
     dom.tick.textContent = latestSnapshot.tick;
     dom.cells.textContent = latestSnapshot.cellCount.toLocaleString();
     dom.energy.textContent = latestSnapshot.totalEnergy.toLocaleString();
+    // bbox: 6-element Int32Array [xMin,xMax,yMin,yMax,zMin,zMax], or
+    // length 0 when the world is empty. Format mirrors the 9-B HUD so a
+    // side-by-side comparison reads cleanly.
+    if (latestSnapshot.bbox && latestSnapshot.bbox.length === 6) {
+      const b = latestSnapshot.bbox;
+      const dx = b[1] - b[0] + 1;
+      const dy = b[3] - b[2] + 1;
+      const dz = b[5] - b[4] + 1;
+      dom.bbox.textContent = `(${b[0]}..${b[1]}, ${b[2]}..${b[3]}, ${b[4]}..${b[5]}) = ${dx}×${dy}×${dz}`;
+    } else {
+      dom.bbox.textContent = "-";
+    }
   }
   dom.fps.textContent = fpsAvg.toFixed(1);
   dom.msPerTick.textContent = msPerTickAvg.toFixed(1);

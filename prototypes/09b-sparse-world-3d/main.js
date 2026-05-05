@@ -31,6 +31,7 @@ const dom = {
   moveThreshold: document.getElementById("moveThresholdInput"),
   moveThresholdVal: document.getElementById("moveThresholdValue"),
   seed: document.getElementById("seedInput"),
+  useMathImul: document.getElementById("useMathImulInput"),
   run: document.getElementById("runButton"),
   step: document.getElementById("stepButton"),
   reset: document.getElementById("resetButton"),
@@ -199,8 +200,9 @@ function reset() {
   const diffusionCoeff = parseFloat(dom.diffusion.value);
   const cpuK = clamp(parseInt(dom.cpuK.value, 10) || 1, 1, 64);
   const moveThreshold = parseFloat(dom.moveThreshold.value);
+  const useMathImul = !!(dom.useMathImul && dom.useMathImul.checked);
 
-  ui.world = new SparseWorld({ seed, diffusionCoeff, cpuK, moveThreshold });
+  ui.world = new SparseWorld({ seed, diffusionCoeff, cpuK, moveThreshold, useMathImul });
   ui.initialETotal = eTotal;
 
   let programSlots = [];
@@ -546,6 +548,7 @@ dom.conservationBtn.addEventListener("click", () => {
   const diffusionCoeff = parseFloat(dom.diffusion.value);
   const cpuK = clamp(parseInt(dom.cpuK.value, 10) || 1, 1, 64);
   const moveThreshold = parseFloat(dom.moveThreshold.value);
+  const useMathImul = !!(dom.useMathImul && dom.useMathImul.checked);
 
   const programs = ["pure_noise", "counter", "self_xp_replicator"];
   const results = [];
@@ -555,7 +558,7 @@ dom.conservationBtn.addEventListener("click", () => {
     let progSlots = [];
     if (name === "counter") progSlots = parseProgram(PRESETS.counter).slots;
     else if (name === "self_xp_replicator") progSlots = parseProgram(PRESETS.self_xp).slots;
-    const w = new SparseWorld({ seed, diffusionCoeff, cpuK, moveThreshold });
+    const w = new SparseWorld({ seed, diffusionCoeff, cpuK, moveThreshold, useMathImul });
     w.bigBang(e, progSlots);
     let conservationFails = 0;
     let capFails = 0;

@@ -210,33 +210,65 @@ impl Default for Cell {
 /// **Determinism:** the leftover-distribution loop walks directions in the
 /// order they appear in the array, so the result is independent of cell
 /// allocation order or other ambient state.
+///
+/// **Total in `u64`:** the sum of six `u32` rates can exceed `u32::MAX`
+/// when `port` accumulates `active_outflow` close to its saturation
+/// boundary across multiple directions. Computing the sum (and the
+/// scaling denominator) in `u64` is the only way to keep the
+/// `rates[d] * cap / total` ratio mathematically correct in that case;
+/// a `u32` saturating sum would underestimate `total` and let the post-
+/// clamp sum spill over `cap`.
 pub fn proportional_clamp(rates: &mut [u32; Direction::COUNT], cap: u32) {
-    let total: u32 = rates.iter().copied().fold(0u32, u32::saturating_add);
-    if total <= cap || total == 0 {
+    let total: u64 = rates.iter().copied().map(u64::from).sum();
+    let cap64 = u64::from(cap);
+    if total <= cap64 || total == 0 {
         return;
     }
-    // Floor-rounded scale: rates[d] = floor(rates[d] * cap / total).
-    // Compute in u64 to avoid overflow during multiplication.
-    let mut new_total: u32 = 0;
-    for r in &mut *rates {
-        let scaled = (u64::from(*r) * u64::from(cap)) / u64::from(total);
-        *r = scaled as u32;
-        new_total = new_total.saturating_add(*r);
-    }
-    // Distribute leftover (floor rounding may have lost up to DIRS - 1 units).
-    let mut leftover = cap.saturating_sub(new_total);
-    while leftover > 0 {
-        let mut added = false;
+    // Floor-rounded scale via `f64` arithmetic to bit-match JS prototype
+    // 9-B's `Math.floor(rate * (cap / total))`. Pure `u64` integer
+    // division would be exact but produces results that disagree with
+    // JS at boundary cases — JS `cap / total` is rounded-to-nearest
+    // f64, then `rate * scale` carries that rounding through, then
+    // `Math.floor` may step the result down by 1 vs the integer-exact
+    // value. Replicating that path keeps the dominance / intrusion
+    // distribution of inflows aligned with 9-B; without it, the
+    // last-mile equivalence diff bleeds 1351-1890-slot shifts between
+    // adjacent directions per cell. Rates and `cap` always fit in
+    // `f64` exactly (well under `2^53`), so this path is safe.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    {
+        // `total` is `u64` and can reach 6 * u32::MAX ≈ 2^34.6 — well
+        // under f64's 2^53 precision boundary, so `as f64` is exact for
+        // any value we'll see. (No `From<u64> for f64` impl exists, so
+        // we can't use the lossless cast here.) `cap` and `r` are u32,
+        // so `f64::from` is safe and idiomatic.
+        let scale = f64::from(cap) / total as f64;
+        let mut new_total: u32 = 0;
         for r in &mut *rates {
-            if *r > 0 && leftover > 0 {
-                *r += 1;
-                leftover -= 1;
-                added = true;
+            let scaled = (f64::from(*r) * scale).floor();
+            let scaled_u32 = scaled as u32;
+            *r = scaled_u32;
+            new_total = new_total.saturating_add(scaled_u32);
+        }
+        // Distribute leftover (floor rounding may have lost up to DIRS - 1 units).
+        let mut leftover = cap.saturating_sub(new_total);
+        while leftover > 0 {
+            let mut added = false;
+            for r in &mut *rates {
+                if *r > 0 && leftover > 0 {
+                    *r += 1;
+                    leftover -= 1;
+                    added = true;
+                    break;
+                }
+            }
+            if !added {
                 break;
             }
-        }
-        if !added {
-            break;
         }
     }
 }

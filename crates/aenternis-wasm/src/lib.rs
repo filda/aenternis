@@ -113,8 +113,11 @@ impl World {
     ///
     /// `coeff` is the diffusion coefficient (typical range 0.15-0.30);
     /// `k` is the CPU compute constant (typical value 1, where
-    /// `instructions_per_cell = floor(energy / k)`).
-    pub fn step(&mut self, coeff: f32, k: u32) {
+    /// `instructions_per_cell = floor(energy / k)`). `coeff` is passed
+    /// as `f64` so that JS `Number(0.15)` reaches the rate computation
+    /// without a lossy `f32` round-trip — important for bit-identity
+    /// against JS prototype 9-B in `legacy_full_precision` mode.
+    pub fn step(&mut self, coeff: f64, k: u32) {
         tick::step(&mut self.inner, coeff, k);
     }
 
@@ -178,6 +181,49 @@ impl World {
         self.inner.legacy_full_precision
     }
 
+    /// Toggle JS-prototype-9-B's wrapping `port` accumulation. When
+    /// enabled, the `port` opcode's contribution to `active_outflow`
+    /// uses `wrapping_add` (matches `(activeOutflow + arg1) >>> 0`)
+    /// instead of `saturating_add`. This is what makes 9-B's
+    /// asymmetric expansion appear when noise memory triggers many
+    /// `port` ops in a tick — without it, every targeted direction
+    /// saturates and the proportional clamp distributes outflow
+    /// evenly. Toggling mid-run is safe.
+    #[wasm_bindgen(js_name = setLegacyPortWrap)]
+    pub fn set_legacy_port_wrap(&mut self, enabled: bool) {
+        self.inner.legacy_port_wrap = enabled;
+    }
+
+    /// Current `legacy_port_wrap` value. See
+    /// [`World::set_legacy_port_wrap`] for what it controls.
+    #[wasm_bindgen(getter, js_name = legacyPortWrap)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn legacy_port_wrap(&self) -> bool {
+        self.inner.legacy_port_wrap
+    }
+
+    /// Toggle the JS-prototype-9-B opcode-set restriction. When
+    /// enabled, the VM treats opcodes `0x14..=0x16` (`sinflow`,
+    /// `sself`, `srate`) as unknown — same as any byte `> 0x16`. JS
+    /// prototype 9-B stops at `0x13` (`paint`), so noise memory that
+    /// happens to encode `0x14`/`0x15`/`0x16` produces a single-slot
+    /// nop in JS but a 3-slot opcode in default Rust. Toggling
+    /// mid-run is safe.
+    #[wasm_bindgen(js_name = setLegacyOpcodeSet)]
+    pub fn set_legacy_opcode_set(&mut self, enabled: bool) {
+        self.inner.legacy_opcode_set = enabled;
+    }
+
+    /// Current `legacy_opcode_set` value. See
+    /// [`World::set_legacy_opcode_set`] for what it controls.
+    #[wasm_bindgen(getter, js_name = legacyOpcodeSet)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn legacy_opcode_set(&self) -> bool {
+        self.inner.legacy_opcode_set
+    }
+
     /// Total energy summed across every cell. Conserved across ticks
     /// (cardinal physical invariant).
     ///
@@ -203,6 +249,24 @@ impl World {
     #[must_use]
     pub fn tick(&self) -> u32 {
         u32::try_from(self.inner.tick).unwrap_or(u32::MAX)
+    }
+
+    /// Bounding box across all live cells, returned as a flat 6-element
+    /// `Int32Array`: `[x_min, x_max, y_min, y_max, z_min, z_max]`. Empty
+    /// `Int32Array` if the world has no cells.
+    ///
+    /// Compute is `O(n)` over cells — fine at the prototype's typical
+    /// million-cell ceiling, but call once per snapshot rather than once
+    /// per render frame.
+    #[must_use]
+    #[wasm_bindgen(js_name = boundingBox)]
+    pub fn bounding_box(&self) -> Vec<i32> {
+        match self.inner.bounding_box() {
+            Some((x_min, x_max, y_min, y_max, z_min, z_max)) => {
+                vec![x_min, x_max, y_min, y_max, z_min, z_max]
+            }
+            None => Vec::new(),
+        }
     }
 
     /// Snapshot of every cell, packed into a flat array. Returns

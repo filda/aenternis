@@ -91,6 +91,28 @@ fn big_bang_xs32_diverges_from_pcg() {
 }
 
 #[test]
+fn bounding_box_is_none_for_empty_world() {
+    let w = SparseWorld::new(0);
+    assert_eq!(w.bounding_box(), None);
+}
+
+#[test]
+fn bounding_box_for_single_cell_at_origin() {
+    let w = SparseWorld::big_bang(1, 4);
+    assert_eq!(w.bounding_box(), Some((0, 0, 0, 0, 0, 0)));
+}
+
+#[test]
+fn bounding_box_spans_inserted_cells() {
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(-3, 5, 7), Cell::with_memory(vec![1]));
+    w.insert(Coord::new(2, -1, 7), Cell::with_memory(vec![1]));
+    w.insert(Coord::new(0, 5, -4), Cell::with_memory(vec![1]));
+    // x: -3..2, y: -1..5, z: -4..7
+    assert_eq!(w.bounding_box(), Some((-3, 2, -1, 5, -4, 7)));
+}
+
+#[test]
 fn rng_kind_persisted_on_world() {
     // The choice survives through the world struct so subsequent ticks
     // (fresh_cell on alloc-on-write, compute_natural_rates on layout)
