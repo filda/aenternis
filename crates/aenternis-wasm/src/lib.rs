@@ -140,6 +140,25 @@ impl World {
         self.inner.move_threshold
     }
 
+    /// Toggle the JS-prototype-9-B layout-tick-offset quirk. When
+    /// enabled, `compute_natural_rates` keys its per-cell-tick RNG
+    /// with `tick - 1` so xorshift32 + legacy reproduces 9-B's
+    /// per-tick stream bit-for-bit. Toggling mid-run is safe; the
+    /// change applies on the next `step` call.
+    #[wasm_bindgen(js_name = setLegacyTickOffset)]
+    pub fn set_legacy_tick_offset(&mut self, enabled: bool) {
+        self.inner.legacy_tick_offset = enabled;
+    }
+
+    /// Current `legacy_tick_offset` value. See
+    /// [`World::set_legacy_tick_offset`] for what it controls.
+    #[wasm_bindgen(getter, js_name = legacyTickOffset)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn legacy_tick_offset(&self) -> bool {
+        self.inner.legacy_tick_offset
+    }
+
     /// Total energy summed across every cell. Conserved across ticks
     /// (cardinal physical invariant).
     ///

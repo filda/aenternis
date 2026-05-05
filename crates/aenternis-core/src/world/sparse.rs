@@ -58,6 +58,17 @@ pub struct SparseWorld {
     /// initial cell state inconsistent — set this on the world *before*
     /// the first cell is allocated, or via [`Self::big_bang_with_kind`].
     pub rng_kind: RngKind,
+
+    /// When `true`, [`crate::tick::compute_natural_rates`] keys the
+    /// per-cell-tick RNG with `tick - 1` instead of `tick` (saturating
+    /// at zero for the very first step). This matches JS prototype
+    /// 9-B's quirk of running `recomputeAllLayouts()` at the end of
+    /// `step()` *before* incrementing `this.tick`, so layouts that
+    /// drive step #N's CPU phase were computed with `rng_tick = N - 2`.
+    /// Default `false` (Rust native: layout for tick N uses `rng_tick`
+    /// = N). Toggling mid-run is safe — the change applies on the next
+    /// tick.
+    pub legacy_tick_offset: bool,
 }
 
 impl SparseWorld {
@@ -76,6 +87,7 @@ impl SparseWorld {
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             rng_kind: RngKind::Pcg,
+            legacy_tick_offset: false,
         }
     }
 
@@ -88,6 +100,7 @@ impl SparseWorld {
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             rng_kind,
+            legacy_tick_offset: false,
         }
     }
 

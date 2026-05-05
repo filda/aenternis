@@ -8,8 +8,9 @@
 // Protocol:
 //
 //   main → worker:
-//     { type: "init", seed, energy, coeff, k, moveThreshold, rngKind, program }
-//     { type: "config", coeff, k, moveThreshold }
+//     { type: "init", seed, energy, coeff, k, moveThreshold, rngKind,
+//       legacyTickOffset, program }
+//     { type: "config", coeff, k, moveThreshold, legacyTickOffset }
 //     { type: "running", running }
 //     { type: "inspect", x, y, z }
 //
@@ -20,6 +21,10 @@
 //
 // `rngKind` is "pcg" (default) or "xorshift32"; the worker translates to
 // the u8 the WASM bridge expects (0 / 1).
+//
+// `legacyTickOffset` is a boolean — when true, the world's
+// `compute_natural_rates` keys its per-cell-tick RNG with `tick - 1` to
+// match JS prototype 9-B's "compute layout pre-increment" quirk.
 
 import init, { World } from "/crates/aenternis-wasm/pkg/aenternis_wasm.js";
 
@@ -31,6 +36,7 @@ let running = false;
 let coeff = 0.20;
 let k = 1;
 let moveThreshold = 2.0;
+let legacyTickOffset = false;
 
 self.onmessage = (ev) => {
   const msg = ev.data;
@@ -48,6 +54,8 @@ self.onmessage = (ev) => {
     k = msg.k;
     moveThreshold = msg.moveThreshold ?? 2.0;
     world.setMoveThreshold(moveThreshold);
+    legacyTickOffset = !!msg.legacyTickOffset;
+    world.setLegacyTickOffset(legacyTickOffset);
     running = true;
     sendSnapshot(); // initial state, before any tick has run
     schedule();
@@ -57,6 +65,10 @@ self.onmessage = (ev) => {
     if (typeof msg.moveThreshold === "number") {
       moveThreshold = msg.moveThreshold;
       if (world) world.setMoveThreshold(moveThreshold);
+    }
+    if (typeof msg.legacyTickOffset === "boolean") {
+      legacyTickOffset = msg.legacyTickOffset;
+      if (world) world.setLegacyTickOffset(legacyTickOffset);
     }
   } else if (msg.type === "running") {
     const wasRunning = running;

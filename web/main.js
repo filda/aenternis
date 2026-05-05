@@ -28,6 +28,10 @@ const config = {
   // bit-for-bit). Changing this only takes effect on Reset, since RNG
   // backend determines the big bang's initial state.
   rngKind: "pcg",
+  // When true, `compute_natural_rates` keys its per-cell-tick RNG with
+  // `tick - 1` to match JS prototype 9-B's "compute layout pre-increment"
+  // quirk. Independent of `rngKind`. Toggling is live (no Reset needed).
+  legacyTickOffset: false,
 };
 
 // ----- Worker setup ----------------------------------------------------------
@@ -68,6 +72,7 @@ function sendInit() {
     k: config.k,
     moveThreshold: config.moveThreshold,
     rngKind: config.rngKind,
+    legacyTickOffset: config.legacyTickOffset,
     program,
   });
   cameraFitDirty = true;
@@ -82,6 +87,7 @@ function sendConfig() {
     coeff: config.coeff,
     k: config.k,
     moveThreshold: config.moveThreshold,
+    legacyTickOffset: config.legacyTickOffset,
   });
 }
 
@@ -363,6 +369,7 @@ const dom = {
   programStatus: document.getElementById("programStatus"),
   sliceEnabled: document.getElementById("sliceEnabled"),
   rngXs32: document.getElementById("rngXs32"),
+  legacyTickOffset: document.getElementById("legacyTickOffset"),
 };
 
 // ----- Slice (z = 0 only) — proto-9-style 2D view ----------------------------
@@ -386,6 +393,7 @@ dom.resetBtn.addEventListener("click", () => {
   config.seed = parseInt(dom.seed.value, 10) || 0;
   config.energy = parseInt(dom.energyIn.value, 10) || 0;
   config.rngKind = dom.rngXs32.checked ? "xorshift32" : "pcg";
+  config.legacyTickOffset = dom.legacyTickOffset.checked;
   running = true;
   dom.pauseBtn.textContent = "Pause";
   sendInit();
@@ -396,6 +404,13 @@ dom.resetBtn.addEventListener("click", () => {
 dom.rngXs32.addEventListener("change", () => {
   // No live update; the user has to press Reset for the change to take
   // effect. Visual hint comes from the help text under the checkbox.
+});
+// Tick-offset checkbox CAN flip live — `compute_natural_rates` reads
+// `world.legacy_tick_offset` fresh on every tick, so we just sync the
+// flag through `setLegacyTickOffset` and the next step picks it up.
+dom.legacyTickOffset.addEventListener("change", () => {
+  config.legacyTickOffset = dom.legacyTickOffset.checked;
+  sendConfig();
 });
 dom.coeff.addEventListener("input", () => {
   config.coeff = parseFloat(dom.coeff.value);

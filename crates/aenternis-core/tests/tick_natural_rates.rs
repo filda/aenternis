@@ -21,6 +21,63 @@ fn empty_world_is_a_noop() {
     assert!(w.is_empty());
 }
 
+// ----- legacy tick offset -----
+
+#[test]
+fn legacy_tick_offset_is_off_by_default() {
+    let w = SparseWorld::new(42);
+    assert!(!w.legacy_tick_offset);
+}
+
+#[test]
+fn legacy_tick_offset_at_tick_zero_matches_native() {
+    // saturating_sub(1) of 0 gives 0, so the very first step's rates
+    // are identical with or without the legacy flag.
+    let mut native = SparseWorld::big_bang(7, 256);
+    let mut legacy = SparseWorld::big_bang(7, 256);
+    legacy.legacy_tick_offset = true;
+    compute_natural_rates(&mut native, 0.15);
+    compute_natural_rates(&mut legacy, 0.15);
+    let cn = native.get(Coord::ORIGIN).unwrap();
+    let cl = legacy.get(Coord::ORIGIN).unwrap();
+    assert_eq!(cn.rates, cl.rates);
+}
+
+#[test]
+fn legacy_tick_offset_at_tick_one_diverges_from_native() {
+    // At tick=1, native uses rng_tick=1, legacy uses rng_tick=0. Rates
+    // should differ at least in one direction (with overwhelming
+    // probability — both backends produce different streams for adjacent
+    // tick seeds).
+    let mut native = SparseWorld::big_bang(7, 256);
+    native.tick = 1;
+    let mut legacy = SparseWorld::big_bang(7, 256);
+    legacy.tick = 1;
+    legacy.legacy_tick_offset = true;
+    compute_natural_rates(&mut native, 0.15);
+    compute_natural_rates(&mut legacy, 0.15);
+    let cn = native.get(Coord::ORIGIN).unwrap();
+    let cl = legacy.get(Coord::ORIGIN).unwrap();
+    assert_ne!(cn.rates, cl.rates);
+}
+
+#[test]
+fn legacy_tick_offset_n_minus_one_matches_native_n_minus_two_at_tick_n() {
+    // Definition of the quirk: at tick N with legacy ON, rng_tick = N-1.
+    // At tick N-1 with native, rng_tick = N-1 too. Same world state, same
+    // rng_tick → same rates. This pins down what "off-by-one" means.
+    let mut native_at_4 = SparseWorld::big_bang(7, 256);
+    native_at_4.tick = 4;
+    let mut legacy_at_5 = SparseWorld::big_bang(7, 256);
+    legacy_at_5.tick = 5;
+    legacy_at_5.legacy_tick_offset = true;
+    compute_natural_rates(&mut native_at_4, 0.15);
+    compute_natural_rates(&mut legacy_at_5, 0.15);
+    let cn = native_at_4.get(Coord::ORIGIN).unwrap();
+    let cl = legacy_at_5.get(Coord::ORIGIN).unwrap();
+    assert_eq!(cn.rates, cl.rates);
+}
+
 #[test]
 fn empty_cell_gets_all_zero_rates() {
     let mut w = SparseWorld::new(0);

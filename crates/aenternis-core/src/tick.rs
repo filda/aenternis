@@ -73,6 +73,17 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
     let world_seed = world.world_seed;
     let tick = world.tick;
     let rng_kind = world.rng_kind;
+    // JS prototype 9-B computes the layout for step #N at the end of
+    // step #(N-1), *before* incrementing `this.tick` — so the rng_tick
+    // used is N-2 (saturated at 0). The `legacy_tick_offset` flag opts
+    // into that quirk so xs32 + legacy reproduces 9-B bit-for-bit; with
+    // the flag off, Rust uses its native "rates for tick N use rng_tick
+    // N" semantics.
+    let rng_tick = if world.legacy_tick_offset {
+        tick.saturating_sub(1)
+    } else {
+        tick
+    };
 
     // Phase 2: compute rates per cell. Mutable borrow of `world.cells`.
     for (coord, cell) in &mut world.cells {
@@ -82,7 +93,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
             continue;
         }
 
-        let mut rng = Rng::for_cell_at_tick_with_kind(rng_kind, world_seed, tick, *coord);
+        let mut rng = Rng::for_cell_at_tick_with_kind(rng_kind, world_seed, rng_tick, *coord);
 
         for &d in &Direction::ALL {
             let neighbor_coord = coord.neighbor(d);

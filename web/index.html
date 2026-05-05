@@ -209,9 +209,16 @@
           xorshift32 (jako 9-B)
         </label>
       </div>
+      <div class="row">
+        <label>tick seed</label>
+        <label style="font-weight: normal;">
+          <input id="legacyTickOffset" type="checkbox">
+          off-by-one (jako 9-B)
+        </label>
+      </div>
       <div class="hint" style="font-size: 11px; margin-top: 4px;">
-        Defaultně PCG. Zaškrtni pro xorshift32 a Reset — pak by simulace
-        měla vypadat blíž 9-B prototypu.
+        RNG i tick seed jsou nezávislé — ke 9-B paritě potřebuješ obojí.
+        RNG se aplikuje až po Reset, off-by-one funguje za běhu.
       </div>
     </div>
 
