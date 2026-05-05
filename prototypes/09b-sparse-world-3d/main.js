@@ -194,7 +194,7 @@ function reset() {
   ui.running = false;
   dom.run.textContent = "Spustit";
 
-  const eTotal = clamp(parseInt(dom.eTotal.value, 10) || 1, 1, 65536);
+  const eTotal = clamp(parseInt(dom.eTotal.value, 10) || 1, 1, 1000000);
   const seed = parseInt(dom.seed.value, 10) || 1;
   const diffusionCoeff = parseFloat(dom.diffusion.value);
   const cpuK = clamp(parseInt(dom.cpuK.value, 10) || 1, 1, 64);
@@ -541,7 +541,7 @@ dom.conservationBtn.addEventListener("click", () => {
     dom.run.textContent = "Spustit";
   }
   const N_TICKS = 10000;
-  const e = clamp(parseInt(dom.eTotal.value, 10) || 1, 1, 65536);
+  const e = clamp(parseInt(dom.eTotal.value, 10) || 1, 1, 1000000);
   const seed = parseInt(dom.seed.value, 10) || 1;
   const diffusionCoeff = parseFloat(dom.diffusion.value);
   const cpuK = clamp(parseInt(dom.cpuK.value, 10) || 1, 1, 64);

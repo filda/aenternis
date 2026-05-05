@@ -7,7 +7,7 @@
 // pokud sparse svět nepřekročí toroidní bbox.
 
 const {
-  OPCODES, DIR_NAMES, DIR_OFFSET, OPPOSITE, MAX_MEMORY, DIRS, makeRng,
+  OPCODES, DIR_NAMES, DIR_OFFSET, OPPOSITE, DIRS, makeRng,
 } = require("./world.js");
 
 const LAYOUT_ORDER_FROM_END = [5, 4, 3, 2, 1, 0];
@@ -430,12 +430,11 @@ class ToroidWorld {
         const writeStart = Math.max(0, currentSize - intrusionDepth);
 
         const newSize = currentSize + slots.length;
-        const cappedSize = Math.min(newSize, MAX_MEMORY);
-        const merged = new Uint32Array(cappedSize);
+        const merged = new Uint32Array(newSize);
         let pos = 0;
-        for (let k = 0; k < writeStart && pos < cappedSize; k++) merged[pos++] = workMem[k];
-        for (let k = 0; k < slots.length && pos < cappedSize; k++) merged[pos++] = slots[k];
-        for (let k = writeStart; k < currentSize && pos < cappedSize; k++) merged[pos++] = workMem[k];
+        for (let k = 0; k < writeStart; k++) merged[pos++] = workMem[k];
+        for (let k = 0; k < slots.length; k++) merged[pos++] = slots[k];
+        for (let k = writeStart; k < currentSize; k++) merged[pos++] = workMem[k];
         workMem = merged;
       }
 

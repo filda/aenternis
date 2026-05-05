@@ -29,11 +29,6 @@ const DIR_OFFSET = [
 const DIR_NAMES = ["xp", "xn", "yp", "yn", "zp", "zn"];
 const LAYOUT_ORDER_FROM_END = [5, 4, 3, 2, 1, 0]; // zn, zp, yn, yp, xn, xp
 
-// Praktický cap na velikost paměti jedné buňky. Sparse svět ho dosáhne
-// jen pokud do jediné buňky natlačí celé E_total — což je počáteční stav
-// big bangu. Po prvním ticku je energie rozprostřená a cap je bezpečně mimo.
-const MAX_MEMORY = 65536;
-
 const OPCODES = {
   0x00: { name: "nop",     len: 1 },
   0x01: { name: "set",     len: 3 },
@@ -634,12 +629,11 @@ class SparseWorld {
         const writeStart = Math.max(0, currentSize - intrusionDepth);
 
         const newSize = currentSize + slots.length;
-        const cappedSize = Math.min(newSize, MAX_MEMORY);
-        const merged = new Uint32Array(cappedSize);
+        const merged = new Uint32Array(newSize);
         let pos = 0;
-        for (let k = 0; k < writeStart && pos < cappedSize; k++) merged[pos++] = workMem[k];
-        for (let k = 0; k < slots.length && pos < cappedSize; k++) merged[pos++] = slots[k];
-        for (let k = writeStart; k < currentSize && pos < cappedSize; k++) merged[pos++] = workMem[k];
+        for (let k = 0; k < writeStart; k++) merged[pos++] = workMem[k];
+        for (let k = 0; k < slots.length; k++) merged[pos++] = slots[k];
+        for (let k = writeStart; k < currentSize; k++) merged[pos++] = workMem[k];
         workMem = merged;
       }
 
@@ -781,7 +775,7 @@ function parseValue(token, labels, errors) {
 
 const _exports = {
   SparseWorld, parseProgram, OPCODES, DIR_NAMES, DIR_OFFSET, OPPOSITE,
-  makeRng, packCoord, unpackCoord, MAX_MEMORY, DIRS,
+  makeRng, packCoord, unpackCoord, DIRS,
 };
 
 if (typeof window !== "undefined") {

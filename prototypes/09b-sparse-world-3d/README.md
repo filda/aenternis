@@ -93,7 +93,6 @@ Stejná jako u prototypu 9, plus:
 - **Žádný inspector buněk.** Klik na voxel zatím nic nedělá (raycast picking jen TODO).
 - **Žádný entity tracking.**
 - **Žádná stopa historicky obsazených pozic.**
-- **`MAX_MEMORY = 65536` cap.** Stejný důvod jako v 2D.
 - **Voxel mesh kapacita = `E_total`.** Měnit `E_total` za běhu znamená realokovat InstancedMesh; primární cesta je proto Reset. Safety check v render loop přealokuje, kdyby se `world.size()` přesto dostala přes kapacitu, ale to by indikovalo bug v cap invariantu.
 - **CDN dependency.** UI vyžaduje přístup k `unpkg.com` pro three.js a OrbitControls; testy v Node tuto závislost nemají.
 - **Reference grid `N=32`.** Comparison harness (`toroid.js`, `N×N×N` mřížka s wrap-around — to je jediné místo, kde má smysl mluvit o toroidu) má memory footprint `N³` × cell, který roste rychle. Pro `N=64` je cca 8× pomalejší a 8× větší paměť — pro 200 ticek `self_xp_replicator` zvládá `N=32`, pro pomalu se šířící programy (`counter`) je `N=32` dostatečný i na 1000 ticek.
