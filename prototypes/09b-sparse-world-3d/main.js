@@ -1,14 +1,15 @@
 "use strict";
 
-// Prototyp 9-B (3D) — UI a renderování. Vlastní fyzika je v world.js.
+// Prototyp 9-B (3D) — UI a renderování přes three.js. Vlastní fyzika je v world.js.
 //
-// Renderer: jednoduchá izometrická projekce na 2D canvas (žádné WebGL,
-// žádný three.js). Cílem je laboratorní čitelnost, ne pohledová věrnost —
-// stačí, abychom viděli expanzi do všech 6 směrů. Buňky se kreslí
-// painter's algorithmem (back-to-front), depth = (x + y + z).
+// Renderer: WebGL (three.js r146 UMD), InstancedMesh boxů s kapacitou rovnou
+// aktuálnímu E_total. Per-frame se nastavuje `count = world.cells.size` a pro
+// každou živou buňku setMatrixAt + setColorAt. Bbox je drátový kvádr (LineSegments
+// z EdgesGeometry), origin červený křížek, centroid bílá koule.
+//
+// THREE a THREE.OrbitControls jsou globály z UMD scriptů v index.html.
 
-// Presety stejné jako v prototypu 9, plus self_omni rozšířený o 6 směrů
-// a self_zp pro pozorování asymetrie podél z osy.
+// Presety stejné jako v 9 + self_zp/self_omni (6 směrů).
 const PRESETS = {
   counter: "loop:\n  inc 0x10\n  jmp loop",
   self_xp: "start:\n  setp xp, start\n  jmp start",
@@ -22,7 +23,7 @@ const PRESETS = {
 // ===== DOM =====
 
 const dom = {
-  canvas: document.getElementById("worldCanvas"),
+  container: document.getElementById("canvasContainer"),
   eTotal: document.getElementById("eTotalInput"),
   diffusion: document.getElementById("diffusionInput"),
   diffusionVal: document.getElementById("diffusionValue"),
@@ -34,8 +35,10 @@ const dom = {
   step: document.getElementById("stepButton"),
   reset: document.getElementById("resetButton"),
   spf: document.getElementById("stepsPerFrameInput"),
-  zoom: document.getElementById("zoomInput"),
-  zoomVal: document.getElementById("zoomValue"),
+  voxelSize: document.getElementById("voxelSizeInput"),
+  voxelSizeVal: document.getElementById("voxelSizeValue"),
+  followCentroid: document.getElementById("followCentroidInput"),
+  showBbox: document.getElementById("showBboxInput"),
   viz: Array.from(document.querySelectorAll("input[name='viz']")),
   preset: document.getElementById("presetInput"),
   program: document.getElementById("programInput"),
@@ -45,11 +48,10 @@ const dom = {
   bbox: document.getElementById("bboxValue"),
   centroid: document.getElementById("centroidValue"),
   cap: document.getElementById("capValue"),
+  fps: document.getElementById("fpsValue"),
   conservationBtn: document.getElementById("conservationCheckButton"),
   conservationOut: document.getElementById("conservationOutput"),
 };
-
-const ctx = dom.canvas.getContext("2d");
 
 // Naplň presety
 for (const k of Object.keys(PRESETS)) {
@@ -65,9 +67,126 @@ const ui = {
   world: null,
   running: false,
   viz: "energy",
-  zoom: 8,
+  voxelSize: 0.85,
+  followCentroid: true,
+  showBbox: true,
   initialETotal: 0,
 };
+
+// ===== Three.js scéna =====
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050507);
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  Math.max(1, dom.container.clientWidth) / Math.max(1, dom.container.clientHeight),
+  0.1,
+  20000,
+);
+camera.position.set(40, 30, 40);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(dom.container.clientWidth, dom.container.clientHeight);
+dom.container.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.target.set(0, 0, 0);
+
+// Světla
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+dirLight.position.set(80, 120, 60);
+scene.add(dirLight);
+const fillLight = new THREE.DirectionalLight(0x88aaff, 0.25);
+fillLight.position.set(-60, -40, -80);
+scene.add(fillLight);
+
+// Origin marker (3 osové úsečky, červené)
+const ORIGIN_LEN = 1.5;
+{
+  const geo = new THREE.BufferGeometry();
+  const verts = new Float32Array([
+    -ORIGIN_LEN, 0, 0,  ORIGIN_LEN, 0, 0,
+    0, -ORIGIN_LEN, 0,  0, ORIGIN_LEN, 0,
+    0, 0, -ORIGIN_LEN,  0, 0, ORIGIN_LEN,
+  ]);
+  geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+  const mat = new THREE.LineBasicMaterial({ color: 0xdc5050, transparent: true, opacity: 0.85 });
+  const cross = new THREE.LineSegments(geo, mat);
+  scene.add(cross);
+}
+
+// Centroid marker (bílá koule)
+const centroidMesh = (() => {
+  const geo = new THREE.SphereGeometry(0.4, 12, 8);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+  const m = new THREE.Mesh(geo, mat);
+  scene.add(m);
+  return m;
+})();
+
+// Bbox wireframe — přebudovává se per frame z aktuálního bbox.
+let bboxMesh = null;
+function updateBboxMesh(bb) {
+  if (bboxMesh) {
+    scene.remove(bboxMesh);
+    bboxMesh.geometry.dispose();
+    bboxMesh.material.dispose();
+    bboxMesh = null;
+  }
+  if (!bb || !ui.showBbox) return;
+  const w = bb.xMax - bb.xMin + 1;
+  const h = bb.yMax - bb.yMin + 1;
+  const d = bb.zMax - bb.zMin + 1;
+  const cx = (bb.xMin + bb.xMax + 1) / 2 - 0.5;
+  const cy = (bb.yMin + bb.yMax + 1) / 2 - 0.5;
+  const cz = (bb.zMin + bb.zMax + 1) / 2 - 0.5;
+  const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d));
+  const mat = new THREE.LineBasicMaterial({ color: 0x3a8c4f, transparent: true, opacity: 0.6 });
+  const line = new THREE.LineSegments(geo, mat);
+  line.position.set(cx, cy, cz);
+  scene.add(line);
+  bboxMesh = line;
+}
+
+// Voxel InstancedMesh — kapacita = aktuální E_total. Každá živá buňka má
+// jeden instance slot. Při change E_total se realokuje (createVoxelMesh).
+let voxelMesh = null;
+let voxelCapacity = 0;
+const _tmpMatrix = new THREE.Matrix4();
+const _tmpQuat = new THREE.Quaternion();
+const _tmpPos = new THREE.Vector3();
+const _tmpScale = new THREE.Vector3();
+const _tmpColor = new THREE.Color();
+
+function createVoxelMesh(capacity) {
+  if (voxelMesh) {
+    scene.remove(voxelMesh);
+    voxelMesh.geometry.dispose();
+    voxelMesh.material.dispose();
+  }
+  voxelCapacity = Math.max(1, capacity);
+  // Krychlové voxely 1×1×1 — sparse svět má diskrétní celočíselné souřadnice.
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: false });
+  voxelMesh = new THREE.InstancedMesh(geo, mat, voxelCapacity);
+  voxelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  // Inicializace: všechny instance scale=0 (skryté), barva černá.
+  _tmpScale.set(0, 0, 0);
+  _tmpPos.set(0, 0, 0);
+  const black = new THREE.Color(0, 0, 0);
+  for (let i = 0; i < voxelCapacity; i++) {
+    _tmpMatrix.compose(_tmpPos, _tmpQuat, _tmpScale);
+    voxelMesh.setMatrixAt(i, _tmpMatrix);
+    voxelMesh.setColorAt(i, black);
+  }
+  voxelMesh.count = 0;
+  scene.add(voxelMesh);
+}
 
 // ===== Reset =====
 
@@ -95,141 +214,98 @@ function reset() {
   }
   ui.world.bigBang(eTotal, programSlots);
 
+  // Realokace voxel meshe na novou kapacitu (E_total = horní mez počtu buněk).
+  createVoxelMesh(eTotal);
+
+  // Naprahnu kameru tak, aby viděla počáteční bbox z odstupu.
+  recenterCamera(true);
+
   render();
   updateHud();
 }
 
-// ===== Render =====
-
-// Izometrická projekce: x → SE, z → SW, y ↓.
-// sx = (x - z) * cos(30°) * zoom
-// sy = (y + (x + z) * sin(30°)) * zoom
-const ISO_COS = 0.8660254;
-const ISO_SIN = 0.5;
-
-function project(dx, dy, dz, zoom) {
-  return [
-    (dx - dz) * ISO_COS * zoom,
-    (dy + (dx + dz) * ISO_SIN) * zoom,
-  ];
-}
-
-function resizeCanvas() {
-  const cw = Math.floor(dom.canvas.clientWidth);
-  const ch = Math.floor(dom.canvas.clientHeight);
-  if (cw > 0 && ch > 0 && (dom.canvas.width !== cw || dom.canvas.height !== ch)) {
-    dom.canvas.width = cw;
-    dom.canvas.height = ch;
+function recenterCamera(initial) {
+  const c = ui.world ? ui.world.centroid() : null;
+  if (!c) return;
+  if (initial) {
+    // Při resetu posunu kameru i target. Při běhu (followCentroid) jen target.
+    const dist = 30;
+    controls.target.set(c.x, c.y, c.z);
+    camera.position.set(c.x + dist, c.y + dist * 0.7, c.z + dist);
+  } else if (ui.followCentroid) {
+    controls.target.set(c.x, c.y, c.z);
   }
 }
 
+// ===== Render =====
+
+let visibleCount = 0;
+
 function render() {
-  resizeCanvas();
-  const w = dom.canvas.width;
-  const h = dom.canvas.height;
-  ctx.fillStyle = "#050507";
-  ctx.fillRect(0, 0, w, h);
+  if (!voxelMesh || !ui.world) return;
 
-  if (!ui.world || ui.world.cells.size === 0) return;
+  // Pokud E_total v UI změnil a překračuje kapacitu, realokuj. Není ale
+  // ideální to dělat za běhu — primární cesta je přes Reset. Tady jen safety.
+  if (ui.world.size() > voxelCapacity) {
+    createVoxelMesh(Math.max(ui.world.size(), ui.initialETotal));
+  }
 
-  const zoom = ui.zoom;
-  const cx = w / 2;
-  const cy = h / 2;
-
-  // Defaultní kamera míří na energetický centroid (3D).
-  const c = ui.world.centroid();
-  const camX = c ? c.x : 0;
-  const camY = c ? c.y : 0;
-  const camZ = c ? c.z : 0;
-
-  // Vizualizace: spočítáme rozsah hodnot pro auto-scale
+  // Předpočet maxValue pro paletu (relativní škála).
   let maxValue = 1;
   if (ui.viz === "energy") {
     for (const cell of ui.world.cells.values()) {
       if (cell.energy > maxValue) maxValue = cell.energy;
     }
-  } else {
-    for (const cell of ui.world.cells.values()) {
-      const v = cellRawValue(cell);
-      if (v > maxValue) maxValue = v;
+  } else if (ui.viz === "memory_top" || ui.viz === "memory_bottom") {
+    maxValue = 255; // byte rozsah
+  } // origin_tag nepotřebuje scale
+
+  let i = 0;
+  const voxelScale = ui.voxelSize;
+  for (const cell of ui.world.cells.values()) {
+    const v = cellRawValue(cell);
+    const t = ui.viz === "energy"
+      ? Math.sqrt(Math.max(0, v) / maxValue)
+      : (ui.viz === "origin_tag" ? 0 : Math.max(0, v) / maxValue);
+
+    let r, g, b;
+    if (ui.viz === "origin_tag") {
+      const tag = (cell.originTag >>> 0);
+      const hue = (tag % 360) / 360;
+      const rgb = hsvToRgb(hue, 0.7, 0.9);
+      r = rgb[0]; g = rgb[1]; b = rgb[2];
+    } else {
+      const rgb = heatColor(t);
+      r = rgb[0]; g = rgb[1]; b = rgb[2];
     }
+
+    _tmpPos.set(cell.x, cell.y, cell.z);
+    _tmpScale.set(voxelScale, voxelScale, voxelScale);
+    _tmpMatrix.compose(_tmpPos, _tmpQuat, _tmpScale);
+    voxelMesh.setMatrixAt(i, _tmpMatrix);
+    _tmpColor.setRGB(r, g, b);
+    voxelMesh.setColorAt(i, _tmpColor);
+    i++;
+    if (i >= voxelCapacity) break; // safety
   }
+  visibleCount = i;
+  voxelMesh.count = i;
+  voxelMesh.instanceMatrix.needsUpdate = true;
+  if (voxelMesh.instanceColor) voxelMesh.instanceColor.needsUpdate = true;
 
-  // Painter's algorithm: cells back-to-front. Větší (x + y + z) = blíže
-  // k pozorovateli (vlevo dole na obrazovce při této projekci), kreslíme
-  // později a překryjí ty vzadu.
-  const sorted = Array.from(ui.world.cells.values());
-  sorted.sort((a, b) => (a.x + a.y + a.z) - (b.x + b.y + b.z));
-
-  ctx.imageSmoothingEnabled = false;
-  for (const cell of sorted) {
-    const [px, py] = project(cell.x - camX, cell.y - camY, cell.z - camZ, zoom);
-    const sx = Math.floor(cx + px);
-    const sy = Math.floor(cy + py);
-    if (sx + zoom < 0 || sy + zoom < 0 || sx >= w || sy >= h) continue;
-    const v = cellRawValue(cell) / maxValue;
-    const color = colorForValue(v);
-    ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
-    ctx.fillRect(sx, sy, zoom, zoom);
-  }
-
-  // Bbox jako drátový kvádr (12 hran).
-  const bb = ui.world.boundingBox();
-  if (bb) {
-    drawWireBox(bb, camX, camY, camZ, zoom, cx, cy);
-  }
-
-  // Centroid jako bílá tečka uprostřed (camera mu sleduje, takže je
-  // přímo v středu obrazovky).
+  // Centroid + bbox
+  const c = ui.world.centroid();
   if (c) {
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.beginPath();
-    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-    ctx.fill();
+    centroidMesh.position.set(c.x, c.y, c.z);
+    centroidMesh.visible = true;
+    if (ui.followCentroid) controls.target.set(c.x, c.y, c.z);
+  } else {
+    centroidMesh.visible = false;
   }
 
-  // Origin (0,0,0) jako červené plus.
-  const [opx, opy] = project(0 - camX, 0 - camY, 0 - camZ, zoom);
-  const ox = Math.floor(cx + opx + zoom / 2);
-  const oy = Math.floor(cy + opy + zoom / 2);
-  ctx.strokeStyle = "rgba(220,80,80,0.7)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(ox - 4, oy);
-  ctx.lineTo(ox + 4, oy);
-  ctx.moveTo(ox, oy - 4);
-  ctx.lineTo(ox, oy + 4);
-  ctx.stroke();
-}
+  updateBboxMesh(ui.world.boundingBox());
 
-function drawWireBox(bb, camX, camY, camZ, zoom, cx, cy) {
-  const x0 = bb.xMin, x1 = bb.xMax + 1;
-  const y0 = bb.yMin, y1 = bb.yMax + 1;
-  const z0 = bb.zMin, z1 = bb.zMax + 1;
-
-  const corners = [
-    [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
-    [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],
-  ];
-  const projected = corners.map(([x, y, z]) => {
-    const [px, py] = project(x - camX, y - camY, z - camZ, zoom);
-    return [cx + px, cy + py];
-  });
-
-  const edges = [
-    [0, 1], [1, 2], [2, 3], [3, 0], // dolní stěna (z0)
-    [4, 5], [5, 6], [6, 7], [7, 4], // horní stěna (z1)
-    [0, 4], [1, 5], [2, 6], [3, 7], // svislé hrany
-  ];
-
-  ctx.strokeStyle = "#3a8c4f";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (const [a, b] of edges) {
-    ctx.moveTo(projected[a][0] + 0.5, projected[a][1] + 0.5);
-    ctx.lineTo(projected[b][0] + 0.5, projected[b][1] + 0.5);
-  }
-  ctx.stroke();
+  renderer.render(scene, camera);
 }
 
 function cellRawValue(cell) {
@@ -242,31 +318,47 @@ function cellRawValue(cell) {
     const m = cell.memory;
     return m.length > 0 ? (m[0] & 0xFF) : 0;
   }
+  if (ui.viz === "origin_tag") return 0;
   return 0;
 }
 
-// Inferno-like paleta z prototypu 6
-function colorForValue(v) {
+// Heat paleta — adaptace inferno z prototypu 9 (RGB v 0..1).
+function heatColor(v) {
   v = Math.max(0, Math.min(1, v));
-  const t = Math.sqrt(v);
   const stops = [
-    [0.00,  10,   5,  20],
-    [0.25,  90,  20,  90],
-    [0.50, 220,  60,  60],
-    [0.75, 250, 160,  60],
-    [1.00, 255, 240, 200],
+    [0.00, 0.04, 0.02, 0.08],
+    [0.25, 0.35, 0.08, 0.35],
+    [0.50, 0.86, 0.24, 0.24],
+    [0.75, 0.98, 0.63, 0.24],
+    [1.00, 1.00, 0.94, 0.78],
   ];
   let i = 0;
-  while (i < stops.length - 1 && t > stops[i + 1][0]) i++;
+  while (i < stops.length - 1 && v > stops[i + 1][0]) i++;
   const a = stops[i];
   const b = stops[Math.min(i + 1, stops.length - 1)];
   const span = b[0] - a[0];
-  const lerp = span > 0 ? (t - a[0]) / span : 0;
+  const lerp = span > 0 ? (v - a[0]) / span : 0;
   return [
-    Math.round(a[1] + (b[1] - a[1]) * lerp),
-    Math.round(a[2] + (b[2] - a[2]) * lerp),
-    Math.round(a[3] + (b[3] - a[3]) * lerp),
+    a[1] + (b[1] - a[1]) * lerp,
+    a[2] + (b[2] - a[2]) * lerp,
+    a[3] + (b[3] - a[3]) * lerp,
   ];
+}
+
+function hsvToRgb(h, s, v) {
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  switch (i % 6) {
+    case 0: return [v, t, p];
+    case 1: return [q, v, p];
+    case 2: return [p, v, t];
+    case 3: return [p, q, v];
+    case 4: return [t, p, v];
+    default: return [v, p, q];
+  }
 }
 
 // ===== HUD =====
@@ -286,21 +378,103 @@ function updateHud() {
   dom.centroid.textContent = c
     ? `(${c.x.toFixed(2)}, ${c.y.toFixed(2)}, ${c.z.toFixed(2)})`
     : "—";
-  // Cap = world.size / E_total. Klíčový invariant — pokud kdy překročí 100%, je to bug.
   const ratio = ui.initialETotal > 0 ? (size / ui.initialETotal * 100) : 0;
   dom.cap.textContent = `${size} / ${ui.initialETotal} (${ratio.toFixed(1)}%)`;
 }
 
-// ===== Loop =====
+// ===== Loop (animation frame) =====
 
-let animationFrame = null;
-function tick() {
-  if (!ui.running) return;
-  const spf = clamp(parseInt(dom.spf.value, 10) || 1, 1, 50);
-  for (let s = 0; s < spf; s++) ui.world.step();
+const perf = { lastTs: 0, samples: [], lastHudUpdate: 0 };
+function avgFps() {
+  if (perf.samples.length === 0) return 0;
+  let s = 0;
+  for (const v of perf.samples) s += v;
+  return s / perf.samples.length;
+}
+
+function frame(ts) {
+  const dt = perf.lastTs > 0 ? (ts - perf.lastTs) : 16;
+  perf.lastTs = ts;
+  if (dt > 0 && dt < 1000) {
+    perf.samples.push(1000 / dt);
+    if (perf.samples.length > 30) perf.samples.shift();
+  }
+
+  applyWsad(dt);
+  controls.update();
+
+  if (ui.running && ui.world) {
+    const spf = clamp(parseInt(dom.spf.value, 10) || 1, 1, 50);
+    for (let s = 0; s < spf; s++) ui.world.step();
+  }
+
   render();
-  updateHud();
-  animationFrame = requestAnimationFrame(tick);
+
+  // HUD update jen ~10× za sekundu, ať nezahlcuje DOM
+  if (ts - perf.lastHudUpdate > 100) {
+    updateHud();
+    dom.fps.textContent = avgFps().toFixed(1);
+    perf.lastHudUpdate = ts;
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ===== WSAD pohyb kamery (přejaté z prototypu 8, lehce zjednodušené) =====
+//
+// W/S = dopředu/dozadu po směru pohledu
+// A/D = vlevo/vpravo (perpendikulárně)
+// Q/E = dolů/nahoru (world Y)
+// Shift = sprint (3×)
+
+const keyState = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+
+function isInputFocused(target) {
+  const tag = (target && target.tagName) || "";
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+}
+
+window.addEventListener("keydown", (ev) => {
+  if (isInputFocused(ev.target)) return;
+  const k = ev.key.toLowerCase();
+  if (k in keyState) keyState[k] = true;
+  if (k === "shift") keyState.shift = true;
+});
+window.addEventListener("keyup", (ev) => {
+  const k = ev.key.toLowerCase();
+  if (k in keyState) keyState[k] = false;
+  if (k === "shift") keyState.shift = false;
+});
+window.addEventListener("blur", () => {
+  for (const k of Object.keys(keyState)) keyState[k] = false;
+});
+
+const _camForward = new THREE.Vector3();
+const _camRight = new THREE.Vector3();
+const _worldUp = new THREE.Vector3(0, 1, 0);
+const _moveDelta = new THREE.Vector3();
+
+function applyWsad(dtMs) {
+  if (!keyState.w && !keyState.a && !keyState.s && !keyState.d && !keyState.q && !keyState.e) return;
+  // Rychlost úměrná průměru bbox, aby pohyb škáloval s velikostí světa.
+  const bb = ui.world ? ui.world.boundingBox() : null;
+  const span = bb
+    ? Math.max(bb.xMax - bb.xMin, bb.yMax - bb.yMin, bb.zMax - bb.zMin) + 4
+    : 16;
+  const baseSpeed = span * 0.025 * (dtMs / 16);
+  const speed = baseSpeed * (keyState.shift ? 3 : 1);
+
+  camera.getWorldDirection(_camForward);
+  _camRight.crossVectors(_camForward, _worldUp).normalize();
+  _moveDelta.set(0, 0, 0);
+  if (keyState.w) _moveDelta.addScaledVector(_camForward, speed);
+  if (keyState.s) _moveDelta.addScaledVector(_camForward, -speed);
+  if (keyState.d) _moveDelta.addScaledVector(_camRight, speed);
+  if (keyState.a) _moveDelta.addScaledVector(_camRight, -speed);
+  if (keyState.e) _moveDelta.y += speed;
+  if (keyState.q) _moveDelta.y -= speed;
+  camera.position.add(_moveDelta);
+  controls.target.add(_moveDelta);
 }
 
 // ===== Listenery =====
@@ -308,10 +482,10 @@ function tick() {
 dom.run.addEventListener("click", () => {
   ui.running = !ui.running;
   dom.run.textContent = ui.running ? "Pauza" : "Spustit";
-  if (ui.running) tick();
 });
 
 dom.step.addEventListener("click", () => {
+  if (!ui.world) return;
   ui.world.step();
   render();
   updateHud();
@@ -337,27 +511,30 @@ dom.cpuK.addEventListener("change", () => {
   if (ui.world) ui.world.cpuK = v;
 });
 
-dom.zoom.addEventListener("input", () => {
-  ui.zoom = clamp(parseInt(dom.zoom.value, 10) || 8, 2, 32);
-  dom.zoomVal.textContent = ui.zoom;
-  render();
+dom.voxelSize.addEventListener("input", () => {
+  ui.voxelSize = parseFloat(dom.voxelSize.value);
+  dom.voxelSizeVal.textContent = ui.voxelSize.toFixed(2);
+});
+
+dom.followCentroid.addEventListener("change", () => {
+  ui.followCentroid = dom.followCentroid.checked;
+});
+
+dom.showBbox.addEventListener("change", () => {
+  ui.showBbox = dom.showBbox.checked;
+  if (!ui.showBbox) updateBboxMesh(null);
 });
 
 dom.viz.forEach(r => r.addEventListener("change", () => {
-  if (r.checked) {
-    ui.viz = r.value;
-    render();
-  }
+  if (r.checked) ui.viz = r.value;
 }));
 
 dom.preset.addEventListener("change", () => {
   const k = dom.preset.value;
-  if (k && PRESETS[k]) {
-    dom.program.value = PRESETS[k];
-  }
+  if (k && PRESETS[k]) dom.program.value = PRESETS[k];
 });
 
-// Konzervační batch test pro definici hotového prototypu.
+// Konzervační batch test (čistě výpočetní, bez rendering kroku).
 dom.conservationBtn.addEventListener("click", () => {
   if (ui.running) {
     ui.running = false;
@@ -394,10 +571,7 @@ dom.conservationBtn.addEventListener("click", () => {
     const bb = w.boundingBox();
     const c = w.centroid();
     results.push({
-      name,
-      conservationFails,
-      capFails,
-      maxSize,
+      name, conservationFails, capFails, maxSize,
       finalSize: w.size(),
       finalE: w.totalEnergy(),
       bbox: bb ? `(${bb.xMin}..${bb.xMax}, ${bb.yMin}..${bb.yMax}, ${bb.zMin}..${bb.zMax})` : "(empty)",
@@ -423,14 +597,23 @@ dom.conservationBtn.addEventListener("click", () => {
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 window.addEventListener("resize", () => {
-  if (ui.world) render();
+  const w = dom.container.clientWidth;
+  const h = dom.container.clientHeight;
+  if (w > 0 && h > 0) {
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
 });
 
 // ===== Init =====
 
 dom.diffusionVal.textContent = parseFloat(dom.diffusion.value).toFixed(2);
 dom.moveThresholdVal.textContent = parseFloat(dom.moveThreshold.value).toFixed(1);
-dom.zoomVal.textContent = dom.zoom.value;
-ui.zoom = parseInt(dom.zoom.value, 10);
+dom.voxelSizeVal.textContent = parseFloat(dom.voxelSize.value).toFixed(2);
+ui.voxelSize = parseFloat(dom.voxelSize.value);
+ui.followCentroid = dom.followCentroid.checked;
+ui.showBbox = dom.showBbox.checked;
 
 reset();
+requestAnimationFrame(frame);

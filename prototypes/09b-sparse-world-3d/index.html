@@ -4,12 +4,15 @@
 <meta charset="utf-8">
 <title>Aenternis — prototyp 9-B: sparse svět (3D)</title>
 <link rel="stylesheet" href="styles.css">
+<!-- Three.js r146 UMD — bez ES modules, funguje i z file:// -->
+<script src="https://unpkg.com/three@0.146.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
 
 <header>
   <h1>Aenternis — prototyp 9-B: sparse svět (3D)</h1>
-  <span class="lead">buňka existuje ⇔ E&nbsp;&gt;&nbsp;0 · <code>cells&nbsp;≤&nbsp;E_total</code> · big bang z 1×1×1 · DIRS&nbsp;=&nbsp;6</span>
+  <span class="lead">buňka existuje ⇔ E&nbsp;&gt;&nbsp;0 · <code>cells&nbsp;≤&nbsp;E_total</code> · big bang z 1×1×1 · DIRS&nbsp;=&nbsp;6 · three.js viewer</span>
 </header>
 
 <main>
@@ -57,7 +60,20 @@
     <label><input type="radio" name="viz" value="energy" checked> energie</label>
     <label><input type="radio" name="viz" value="memory_top"> mem (top)</label>
     <label><input type="radio" name="viz" value="memory_bottom"> mem (bottom)</label>
-    <label>zoom <input id="zoomInput" type="range" min="2" max="32" step="1" value="8"><span id="zoomValue">8</span></label>
+    <label><input type="radio" name="viz" value="origin_tag"> origin tag</label>
+    <label>
+      voxel size
+      <input id="voxelSizeInput" type="range" min="0.3" max="1.0" step="0.05" value="0.85">
+      <span id="voxelSizeValue">0.85</span>
+    </label>
+    <label>
+      <input id="followCentroidInput" type="checkbox" checked>
+      kamera sleduje centroid
+    </label>
+    <label>
+      <input id="showBboxInput" type="checkbox" checked>
+      drátový bbox
+    </label>
   </fieldset>
 
   <fieldset>
@@ -70,6 +86,11 @@ start:
   setp xp, start
   jmp start"></textarea>
   </fieldset>
+
+  <fieldset class="cam-help">
+    <legend>Kamera</legend>
+    <p class="hint">drag = rotace · scroll = zoom · pravé tl. = pan · WSAD + Q/E (dolů/nahoru) · Shift = sprint</p>
+  </fieldset>
 </section>
 
 <section class="viz">
@@ -80,16 +101,15 @@ start:
     <span>bbox: <strong id="bboxValue">—</strong></span>
     <span>centroid: <strong id="centroidValue">—</strong></span>
     <span class="cap">cap: <strong id="capValue">—</strong></span>
+    <span>fps: <strong id="fpsValue">—</strong></span>
   </div>
-  <div class="canvas-wrap">
-    <canvas id="worldCanvas" width="640" height="640"></canvas>
-  </div>
+  <div class="canvas-wrap" id="canvasContainer"></div>
 </section>
 
 <section class="diagnostics">
   <h2>Batch</h2>
   <button id="conservationCheckButton">10 000 ticek (3 scénáře)</button>
-  <div id="conservationOutput" class="diagnostics-box mono">Bílá tečka = centroid · červený kříž = origin (0,0,0) · zelený rámec = bbox · isometrická projekce, x→SE, y↓, z→SW</div>
+  <div id="conservationOutput" class="diagnostics-box mono">Bílá koule = centroid · červený křížek = origin (0,0,0) · zelený drát = bbox</div>
 </section>
 
 </main>

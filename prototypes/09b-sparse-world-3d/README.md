@@ -38,7 +38,7 @@ Fyzika je identická. Rozdíl je v dimenzi a tedy v počtu směrů:
 - **Big bang v `(0, 0, 0)`.** Jedna buňka v počátku 3D mřížky drží celé `E_total`. Po prvním ticku má svět typicky 7 buněk (původní + 6 sousedů).
 - **Centroid + bbox v 3D.** `boundingBox()` vrací `{ xMin..xMax, yMin..yMax, zMin..zMax }`, `centroid()` vrací `{ x, y, z }`.
 - **3D toroid pro equivalence test.** `toroid.js` je `N×N×N` grid s wrap-around ve všech třech osách. Defaultní `N=32` (≈ 32 768 buněk) drží paměť a runtime na rozumné úrovni; pro 2D byl default `N=64` (4 096 buněk), v 3D by to bylo 64³ = 262 144 buněk a test by trval minuty.
-- **UI: izometrická projekce.** Sparse svět se renderuje na 2D canvas přes jednoduchou izometrickou projekci (`x → SE`, `y ↓`, `z → SW`). Painter's algorithm (back-to-front podle `x + y + z`) umožňuje vidět překryvy. Bbox je drátový kvádr (12 hran). Žádné WebGL, žádný `three.js` — drží se ducha laboratorního prototypu.
+- **UI: three.js viewer.** Sparse svět se renderuje přes WebGL (three.js r146 UMD ze CDN), `InstancedMesh` boxů s kapacitou rovnou aktuálnímu `E_total`. Per-frame se nastavuje `mesh.count = world.cells.size` a pro každou živou buňku `setMatrixAt + setColorAt`. OrbitControls (drag = rotace, scroll = zoom, pravé tl. = pan) plus WSAD + Q/E pro pohyb kamery (Shift = sprint). Bbox je dynamický drátový kvádr (`LineSegments` z `EdgesGeometry`), origin červený 3-osý křížek, centroid bílá koule. Defaultní kamera míří na centroid a volitelně ho i sleduje. Volitelná vizualizace: energie (heat paleta), `mem[top]`, `mem[bottom]`, origin tag (HSV podle hashe). Kvůli three.js dependency je teď UI závislé na CDN — testy v Node (`test-headless.js`, `test-equivalence.js`, `test-debug.js`) běží beze změny, protože importují jen `world.js` / `toroid.js`.
 
 Žádné nové opcody nejsou potřeba. Asembler rozpoznává `zp` a `zn` stejně jako `xp/xn/yp/yn`. Programy z prototypu 9 napsané pro 4 směry běží v 3D světě beze změny — vidí jen 4 sousedy z 6 a `senergy` na nepoužité ose stále vrací 0 pro neexistujícího souseda, což je stejné chování jako v 2D sparse.
 
@@ -90,11 +90,12 @@ Implementace prošla těmito testy (viz `test-headless.js` a `test-equivalence.j
 
 Stejná jako u prototypu 9, plus:
 
-- **Žádný inspector buněk.** Klik na canvas zatím nic nedělá.
+- **Žádný inspector buněk.** Klik na voxel zatím nic nedělá (raycast picking jen TODO).
 - **Žádný entity tracking.**
 - **Žádná stopa historicky obsazených pozic.**
 - **`MAX_MEMORY = 65536` cap.** Stejný důvod jako v 2D.
-- **Renderer je úmyslně jednoduchý.** Izometrická projekce se voxely jako čtverce — čitelné pro malý svět, ale pro `E_total > 2 000` nebo dlouhé chvosty bbox přestává být užitečné. Pro detailní 3D inspekci je tu prototyp 8 (`viewer-3d`) se three.js.
+- **Voxel mesh kapacita = `E_total`.** Měnit `E_total` za běhu znamená realokovat InstancedMesh; primární cesta je proto Reset. Safety check v render loop přealokuje, kdyby se `world.size()` přesto dostala přes kapacitu, ale to by indikovalo bug v cap invariantu.
+- **CDN dependency.** UI vyžaduje přístup k `unpkg.com` pro three.js a OrbitControls; testy v Node tuto závislost nemají.
 - **Reference grid `N=32`.** Comparison harness (`toroid.js`, `N×N×N` mřížka s wrap-around — to je jediné místo, kde má smysl mluvit o toroidu) má memory footprint `N³` × cell, který roste rychle. Pro `N=64` je cca 8× pomalejší a 8× větší paměť — pro 200 ticek `self_xp_replicator` zvládá `N=32`, pro pomalu se šířící programy (`counter`) je `N=32` dostatečný i na 1000 ticek.
 
 ## Soubory
