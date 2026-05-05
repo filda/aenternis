@@ -1,0 +1,237 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0a0a0d;
+  color: #ddd;
+  line-height: 1.3;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid #222;
+  flex: 0 0 auto;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  display: inline-block;
+  margin-right: 1rem;
+}
+
+.lead {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #888;
+  display: inline;
+}
+
+main {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  min-height: 0;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+fieldset {
+  border: 1px solid #2a2a30;
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem 0.4rem;
+  background: #14141a;
+}
+
+legend {
+  padding: 0 0.3rem;
+  font-size: 0.7rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.78rem;
+}
+
+label:last-child { margin-bottom: 0; }
+
+label input[type="number"], label input[type="range"], label select {
+  background: #1d1d24;
+  color: #ddd;
+  border: 1px solid #2a2a30;
+  padding: 0.15rem 0.3rem;
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: 0.78rem;
+}
+
+label input[type="number"] { width: 4.5rem; }
+label input[type="range"] { flex: 1; min-width: 5rem; }
+label span { font-family: "SF Mono", Consolas, monospace; min-width: 2.5rem; color: #aaa; font-size: 0.75rem; }
+
+button {
+  background: #1f3f30;
+  color: #cfe;
+  border: 1px solid #355f48;
+  padding: 0.2rem 0.5rem;
+  border-radius: 2px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  margin-right: 0.2rem;
+}
+
+button:hover { background: #2a553f; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+textarea {
+  width: 100%;
+  background: #0e0e12;
+  color: #ddd;
+  border: 1px solid #2a2a30;
+  border-radius: 2px;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 0.72rem;
+  padding: 0.3rem;
+  resize: vertical;
+  min-height: 4em;
+}
+
+select {
+  width: 100%;
+  margin-bottom: 0.3rem;
+}
+
+.hint {
+  font-size: 0.68rem;
+  color: #666;
+  margin: 0.2rem 0 0;
+  line-height: 1.3;
+}
+
+.viz {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 0;
+}
+
+.hud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  font-size: 0.78rem;
+  color: #aaa;
+  padding: 0.3rem 0.5rem;
+  background: #14141a;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.hud strong {
+  color: #ddd;
+  font-family: "SF Mono", Consolas, monospace;
+  font-weight: 500;
+  margin-left: 0.2rem;
+}
+
+.hud .cap strong { color: #ffce5e; }
+
+#worldCanvas {
+  background: #050507;
+  border: 1px solid #222;
+  image-rendering: pixelated;
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.canvas-wrap {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+}
+
+.diagnostics {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid #222;
+  margin-top: 0.3rem;
+  max-height: 8rem;
+}
+
+.diagnostics h2 {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #888;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 0.5rem;
+}
+
+.diagnostics-box {
+  background: #14141a;
+  border: 1px solid #2a2a30;
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+  flex: 1 1 auto;
+  overflow: auto;
+  min-width: 0;
+}
+
+.diagnostics-box p { margin: 0; }
+
+.diagnostics-box.mono {
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 0.7rem;
+  white-space: pre;
+  color: #aae;
+}
+
+.diagnostics button { flex: 0 0 auto; align-self: center; }
+
+/* Skryté sekce (hint atd.) — aby nezabíraly výšku canvasu */
+.viz .hint { display: none; }
+
+@media (max-height: 700px) {
+  .diagnostics { display: none; }
+}
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .controls { order: 2; max-height: 40vh; }
+}
