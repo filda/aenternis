@@ -32,6 +32,10 @@ const config = {
   // `tick - 1` to match JS prototype 9-B's "compute layout pre-increment"
   // quirk. Independent of `rngKind`. Toggling is live (no Reset needed).
   legacyTickOffset: false,
+  // When true, the stochastic-floor comparison runs in `f64` with all 32
+  // bits of RNG entropy, matching JS prototype 9-B's `Number`-throughout
+  // arithmetic. Independent of `rngKind`. Toggling is live.
+  legacyFullPrecision: false,
 };
 
 // ----- Worker setup ----------------------------------------------------------
@@ -73,6 +77,7 @@ function sendInit() {
     moveThreshold: config.moveThreshold,
     rngKind: config.rngKind,
     legacyTickOffset: config.legacyTickOffset,
+    legacyFullPrecision: config.legacyFullPrecision,
     program,
   });
   cameraFitDirty = true;
@@ -88,6 +93,7 @@ function sendConfig() {
     k: config.k,
     moveThreshold: config.moveThreshold,
     legacyTickOffset: config.legacyTickOffset,
+    legacyFullPrecision: config.legacyFullPrecision,
   });
 }
 
@@ -370,6 +376,7 @@ const dom = {
   sliceEnabled: document.getElementById("sliceEnabled"),
   rngXs32: document.getElementById("rngXs32"),
   legacyTickOffset: document.getElementById("legacyTickOffset"),
+  legacyFullPrecision: document.getElementById("legacyFullPrecision"),
 };
 
 // ----- Slice (z = 0 only) — proto-9-style 2D view ----------------------------
@@ -394,6 +401,7 @@ dom.resetBtn.addEventListener("click", () => {
   config.energy = parseInt(dom.energyIn.value, 10) || 0;
   config.rngKind = dom.rngXs32.checked ? "xorshift32" : "pcg";
   config.legacyTickOffset = dom.legacyTickOffset.checked;
+  config.legacyFullPrecision = dom.legacyFullPrecision.checked;
   running = true;
   dom.pauseBtn.textContent = "Pause";
   sendInit();
@@ -410,6 +418,12 @@ dom.rngXs32.addEventListener("change", () => {
 // flag through `setLegacyTickOffset` and the next step picks it up.
 dom.legacyTickOffset.addEventListener("change", () => {
   config.legacyTickOffset = dom.legacyTickOffset.checked;
+  sendConfig();
+});
+// Same story for the precision checkbox — `compute_natural_rates` reads
+// `world.legacy_full_precision` fresh each tick.
+dom.legacyFullPrecision.addEventListener("change", () => {
+  config.legacyFullPrecision = dom.legacyFullPrecision.checked;
   sendConfig();
 });
 dom.coeff.addEventListener("input", () => {

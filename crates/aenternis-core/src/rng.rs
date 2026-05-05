@@ -204,6 +204,36 @@ impl Rng {
         let r = self.next_f32();
         (whole as u32).saturating_add(u32::from(r < frac))
     }
+
+    /// Pseudo-random `f64` in `[0, 1)` using all 32 bits of one `next_u32`
+    /// output divided by `2^32`. Both bits and divisor are exactly
+    /// representable in `f64`, so the result preserves full RNG entropy
+    /// without any rounding loss — matching JS prototype 9-B's
+    /// `rngFloat = rng() / 0x100000000` to bit precision.
+    pub fn next_f64(&mut self) -> f64 {
+        f64::from(self.next_u32()) / 4_294_967_296.0
+    }
+
+    /// Same contract as [`Self::stochastic_floor`] but the entire
+    /// comparison runs in `f64`. The tail-end `u32` cast is safe — by
+    /// construction the integer part of `value` is bounded by world
+    /// energy, well under `u32::MAX`. Use in place of
+    /// [`Self::stochastic_floor`] when you need to match JS prototype
+    /// 9-B's `f64`-throughout arithmetic.
+    pub fn stochastic_floor_f64(&mut self, value: f64) -> u32 {
+        if !value.is_finite() || value <= 0.0 {
+            return 0;
+        }
+        let whole = value.floor();
+        let frac = value - whole;
+        let r = self.next_f64();
+        // `whole as u32` saturates on overflow — same defensive shape as
+        // the f32 path; in practice cell energies stay under `2^24` so
+        // the cast is lossless.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let whole_u32 = whole as u32;
+        whole_u32.saturating_add(u32::from(r < frac))
+    }
 }
 
 /// JS `cellSeed(worldSeed, x, y, z)` ported verbatim. Used by the

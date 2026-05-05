@@ -216,9 +216,16 @@
           off-by-one (jako 9-B)
         </label>
       </div>
+      <div class="row">
+        <label>precision</label>
+        <label style="font-weight: normal;">
+          <input id="legacyFullPrecision" type="checkbox">
+          f64 (jako 9-B)
+        </label>
+      </div>
       <div class="hint" style="font-size: 11px; margin-top: 4px;">
-        RNG i tick seed jsou nezávislé — ke 9-B paritě potřebuješ obojí.
-        RNG se aplikuje až po Reset, off-by-one funguje za běhu.
+        Ke 9-B paritě potřebuješ všechny tři. RNG se aplikuje po Reset,
+        off-by-one i precision flipují za běhu.
       </div>
     </div>
 

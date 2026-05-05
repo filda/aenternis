@@ -69,6 +69,16 @@ pub struct SparseWorld {
     /// = N). Toggling mid-run is safe — the change applies on the next
     /// tick.
     pub legacy_tick_offset: bool,
+
+    /// When `true`, [`crate::tick::compute_natural_rates`] computes the
+    /// stochastic-floor comparison in `f64` using all 32 bits of the
+    /// RNG output (matches JS prototype 9-B, where `Number` is `f64`
+    /// natively). When `false` (default), Rust truncates the RNG output
+    /// to 24 bits and runs the comparison in `f32` — clean for
+    /// production but leaves a sub-ULP gap around `frac` boundary
+    /// values where the two paths can disagree per draw. Toggling
+    /// mid-run is safe; the change applies on the next tick.
+    pub legacy_full_precision: bool,
 }
 
 impl SparseWorld {
@@ -88,6 +98,7 @@ impl SparseWorld {
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             rng_kind: RngKind::Pcg,
             legacy_tick_offset: false,
+            legacy_full_precision: false,
         }
     }
 
@@ -101,6 +112,7 @@ impl SparseWorld {
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             rng_kind,
             legacy_tick_offset: false,
+            legacy_full_precision: false,
         }
     }
 

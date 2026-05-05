@@ -84,6 +84,12 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
     } else {
         tick
     };
+    // When `legacy_full_precision` is set, run the stochastic-floor
+    // comparison in `f64` with all 32 bits of RNG entropy, matching JS
+    // prototype 9-B's `f64`-throughout arithmetic. Otherwise stay in
+    // `f32` (24-bit RNG truncation, `f32` `frac`) for the cleaner Rust
+    // production path.
+    let full_precision = world.legacy_full_precision;
 
     // Phase 2: compute rates per cell. Mutable borrow of `world.cells`.
     for (coord, cell) in &mut world.cells {
@@ -100,7 +106,11 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
             let neighbor_energy = snapshot.get(&neighbor_coord).copied().unwrap_or(0);
             let rate = if my_energy > neighbor_energy {
                 let delta = my_energy - neighbor_energy;
-                rng.stochastic_floor(delta_to_f32(delta) * coeff)
+                if full_precision {
+                    rng.stochastic_floor_f64(f64::from(delta) * f64::from(coeff))
+                } else {
+                    rng.stochastic_floor(delta_to_f32(delta) * coeff)
+                }
             } else {
                 0
             };

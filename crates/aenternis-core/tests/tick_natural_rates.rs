@@ -78,6 +78,30 @@ fn legacy_tick_offset_n_minus_one_matches_native_n_minus_two_at_tick_n() {
     assert_eq!(cn.rates, cl.rates);
 }
 
+// ----- legacy full precision -----
+
+#[test]
+fn legacy_full_precision_is_off_by_default() {
+    let w = SparseWorld::new(42);
+    assert!(!w.legacy_full_precision);
+}
+
+#[test]
+fn legacy_full_precision_preserves_conservation() {
+    // The f64 path must still respect the per-cell rate budget — a single
+    // cell with E=256 can never emit more than 256 slots total per tick.
+    let mut w = SparseWorld::big_bang(7, 256);
+    w.legacy_full_precision = true;
+    compute_natural_rates(&mut w, 0.15);
+    let cell = w.get(Coord::ORIGIN).unwrap();
+    let total: u32 = cell.rates.iter().copied().sum();
+    assert!(
+        total <= cell.energy(),
+        "f64 path emitted {total} slots from a cell with energy {}",
+        cell.energy()
+    );
+}
+
 #[test]
 fn empty_cell_gets_all_zero_rates() {
     let mut w = SparseWorld::new(0);

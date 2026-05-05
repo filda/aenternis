@@ -159,6 +159,25 @@ impl World {
         self.inner.legacy_tick_offset
     }
 
+    /// Toggle the JS-prototype-9-B `f64`-arithmetic precision mode.
+    /// When enabled, `compute_natural_rates` runs the stochastic-floor
+    /// comparison in `f64` with all 32 bits of RNG entropy, matching
+    /// 9-B exactly. Toggling mid-run is safe; the change applies on
+    /// the next `step` call.
+    #[wasm_bindgen(js_name = setLegacyFullPrecision)]
+    pub fn set_legacy_full_precision(&mut self, enabled: bool) {
+        self.inner.legacy_full_precision = enabled;
+    }
+
+    /// Current `legacy_full_precision` value. See
+    /// [`World::set_legacy_full_precision`] for what it controls.
+    #[wasm_bindgen(getter, js_name = legacyFullPrecision)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn legacy_full_precision(&self) -> bool {
+        self.inner.legacy_full_precision
+    }
+
     /// Total energy summed across every cell. Conserved across ticks
     /// (cardinal physical invariant).
     ///

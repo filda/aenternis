@@ -315,3 +315,88 @@ fn xs32_stochastic_floor_expectation_matches_input() {
         "xs32 stochastic_floor(0.3) mean was {mean}, expected ≈ 0.3",
     );
 }
+
+// ===== f64 precision path (matches JS prototype 9-B) =======================
+
+#[test]
+fn next_f64_in_unit_range() {
+    let mut r = Rng::new(123);
+    for _ in 0..1000 {
+        let x = r.next_f64();
+        assert!(
+            (0.0..1.0).contains(&x),
+            "next_f64 produced {x}, out of range",
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // injectivity check, exact equality is the contract
+fn next_f64_uses_full_32_bit_entropy() {
+    // The conversion is `u32 / 2^32` in `f64`; bits and divisor are exact
+    // in `f64`, so two distinct `u32` outputs must produce two distinct
+    // `f64` values (no collision through rounding). Exact `!=` is exactly
+    // what we want here — the lint is normally right that `f64 == f64` is
+    // suspicious, but for an injectivity check it's the correct comparison.
+    let mut r1 = Rng::new(1);
+    let mut r2 = Rng::new(1);
+    let _a = r1.next_u32(); // advance r1 to differ from r2
+    let f1 = r1.next_f64();
+    let f2 = r2.next_f64();
+    assert_ne!(f1, f2);
+}
+
+#[test]
+fn stochastic_floor_f64_expectation_matches_input() {
+    // Same contract as f32 path: `mean → frac` over many samples.
+    let mut r = Rng::new(42);
+    let n: u32 = 10_000;
+    let mut sum: u32 = 0;
+    for _ in 0..n {
+        sum += r.stochastic_floor_f64(0.3);
+    }
+    let mean = f64::from(sum) / f64::from(n);
+    assert!(
+        (mean - 0.3).abs() < 0.05,
+        "stochastic_floor_f64(0.3) mean was {mean}, expected ≈ 0.3",
+    );
+}
+
+#[test]
+fn stochastic_floor_f64_zero_for_non_positive() {
+    let mut r = Rng::new(0);
+    assert_eq!(r.stochastic_floor_f64(0.0), 0);
+    assert_eq!(r.stochastic_floor_f64(-0.5), 0);
+    assert_eq!(r.stochastic_floor_f64(f64::NAN), 0);
+    assert_eq!(r.stochastic_floor_f64(f64::NEG_INFINITY), 0);
+}
+
+#[test]
+fn f32_and_f64_paths_diverge_on_constructed_boundary() {
+    // The disagreement window for `frac = 0.15` lives in `u32 bits` space
+    // between `0x26666666` (where `r_f64 < 0.14999999999...` flips to
+    // `>=`) and `0x266666FF` (where the 24-bit-truncated `r_f32` is still
+    // below the f32 representation `0.15000000596...`). Pick a value
+    // squarely inside that ~150-wide window and verify both paths see
+    // opposite sides of their respective `frac` boundaries — this is the
+    // precision difference, isolated from the RNG stream.
+    let bits = 0x2666_6690_u32;
+
+    #[allow(clippy::cast_precision_loss)]
+    let r_f32 = ((bits >> 8) as f32) * (1.0 / 16_777_216.0);
+    let r_f64 = f64::from(bits) / 4_294_967_296.0;
+
+    let frac_f32 = 0.15_f32;
+    let frac_f64 = 0.15_f64;
+
+    // f32 representation of 0.15 ≈ 0.15000000596; r_f32 ≈ 0.14999998.
+    assert!(
+        r_f32 < frac_f32,
+        "f32 path: r_f32 = {r_f32} should be < {frac_f32}",
+    );
+    // f64 representation of 0.15 ≈ 0.14999999999999999; r_f64 ≈ 0.15000004.
+    assert!(
+        r_f64 >= frac_f64,
+        "f64 path: r_f64 = {r_f64} should be >= {frac_f64}",
+    );
+}
