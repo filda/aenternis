@@ -10,7 +10,8 @@
 //!    just confidence that two adjacent seeds, ticks, or coordinates don't
 //!    alias.
 
-use aenternis_core::{Coord, Rng};
+use aenternis_core::rng::{cell_seed_xs32, cell_tick_seed_xs32};
+use aenternis_core::{Coord, Rng, RngKind};
 
 #[test]
 fn new_is_deterministic() {
@@ -206,4 +207,111 @@ fn rng_clone_diverges_after_independent_advance() {
     // Advance only `a`; the streams diverge from now on.
     let _ = a.next_u32();
     assert_ne!(a.next_u32(), b.next_u32());
+}
+
+// ===== xorshift32 backend (matches JS prototype 9-B) ========================
+
+#[test]
+fn xs32_matches_js_reference_stream() {
+    // Reference stream from JS prototype 9-B's `makeRng(1)`, verified by
+    // tracing the three xorshift phases (^=<<13, ^=>>17, ^=<<5) by hand.
+    // The Rust implementation is a verbatim port and must reproduce these
+    // values bit-for-bit; the test guards against accidental drift in shift
+    // counts or operation order.
+    let mut r = Rng::new_xs32(1);
+    let expected = [270_369u32, 67_634_689, 2_647_435_461];
+    for &want in &expected {
+        assert_eq!(r.next_u32(), want);
+    }
+}
+
+#[test]
+fn xs32_seed_zero_is_forced_to_one() {
+    // xorshift cannot escape from all-zeros; JS forces seed 0 to 1.
+    let mut a = Rng::new_xs32(0);
+    let mut b = Rng::new_xs32(1);
+    for _ in 0..16 {
+        assert_eq!(a.next_u32(), b.next_u32());
+    }
+}
+
+#[test]
+fn xs32_for_cell_at_tick_is_deterministic() {
+    let coord = Coord::new(3, -7, 11);
+    let mut a = Rng::for_cell_at_tick_with_kind(RngKind::Xorshift32, 0xDEAD_BEEF, 42, coord);
+    let mut b = Rng::for_cell_at_tick_with_kind(RngKind::Xorshift32, 0xDEAD_BEEF, 42, coord);
+    for _ in 0..100 {
+        assert_eq!(a.next_u32(), b.next_u32());
+    }
+}
+
+#[test]
+fn xs32_for_cell_at_tick_differs_from_pcg() {
+    // The two backends must produce different streams for the same inputs —
+    // otherwise the comparison checkbox is meaningless.
+    let coord = Coord::new(0, 0, 0);
+    let mut pcg = Rng::for_cell_at_tick_with_kind(RngKind::Pcg, 1234, 0, coord);
+    let mut xs = Rng::for_cell_at_tick_with_kind(RngKind::Xorshift32, 1234, 0, coord);
+    let mut diverged = false;
+    for _ in 0..20 {
+        if pcg.next_u32() != xs.next_u32() {
+            diverged = true;
+            break;
+        }
+    }
+    assert!(diverged, "PCG and Xorshift32 streams should differ");
+}
+
+#[test]
+fn xs32_cell_seed_independent_across_coords() {
+    // Different coordinates must produce different per-cell seeds; otherwise
+    // adjacent cells would get identical thermal microstates.
+    let s = cell_seed_xs32(1234, Coord::new(0, 0, 0));
+    let sx = cell_seed_xs32(1234, Coord::new(1, 0, 0));
+    let sy = cell_seed_xs32(1234, Coord::new(0, 1, 0));
+    let sz = cell_seed_xs32(1234, Coord::new(0, 0, 1));
+    assert_ne!(s, sx);
+    assert_ne!(s, sy);
+    assert_ne!(s, sz);
+    assert_ne!(sx, sy);
+    assert_ne!(sy, sz);
+}
+
+#[test]
+fn xs32_cell_tick_seed_advances_with_tick() {
+    let coord = Coord::new(5, -3, 2);
+    let s0 = cell_tick_seed_xs32(42, 0, coord);
+    let s1 = cell_tick_seed_xs32(42, 1, coord);
+    let s2 = cell_tick_seed_xs32(42, 2, coord);
+    assert_ne!(s0, s1);
+    assert_ne!(s1, s2);
+}
+
+#[test]
+fn xs32_next_f32_in_unit_range() {
+    let mut r = Rng::new_xs32(99);
+    for _ in 0..1000 {
+        let x = r.next_f32();
+        assert!(
+            (0.0..1.0).contains(&x),
+            "xs32 next_f32 produced {x}, out of range"
+        );
+    }
+}
+
+#[test]
+fn xs32_stochastic_floor_expectation_matches_input() {
+    // Same statistical contract as PCG path — the dispatcher in
+    // `stochastic_floor` must not bias the result.
+    let mut r = Rng::new_xs32(42);
+    let n: u32 = 10_000;
+    let mut sum: u32 = 0;
+    for _ in 0..n {
+        sum += r.stochastic_floor(0.3);
+    }
+    let mean = f64::from(sum) / f64::from(n);
+    assert!(
+        (mean - 0.3).abs() < 0.05,
+        "xs32 stochastic_floor(0.3) mean was {mean}, expected ≈ 0.3",
+    );
 }

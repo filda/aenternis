@@ -28,7 +28,8 @@
 use std::collections::btree_map::{Iter, IterMut, Keys};
 use std::collections::BTreeMap;
 
-use crate::{Cell, Coord, Direction, Rng};
+use crate::rng::cell_seed_xs32;
+use crate::{Cell, Coord, Direction, Rng, RngKind};
 
 /// Sparse world container.
 #[derive(Debug, Clone)]
@@ -49,6 +50,14 @@ pub struct SparseWorld {
     /// `dominance = clamp(1 - target_E / (attacker_E_post_burn *
     /// move_threshold), 0, 1)`. Default `2.0`.
     pub move_threshold: f32,
+
+    /// Which RNG backend powers per-cell-tick streams and origin-tag
+    /// derivation. Default [`RngKind::Pcg`] for production; switch to
+    /// [`RngKind::Xorshift32`] for bit-identity comparison against JS
+    /// prototype 9-B. Mutating after [`Self::big_bang`] runs leaves the
+    /// initial cell state inconsistent — set this on the world *before*
+    /// the first cell is allocated, or via [`Self::big_bang_with_kind`].
+    pub rng_kind: RngKind,
 }
 
 impl SparseWorld {
@@ -57,7 +66,8 @@ impl SparseWorld {
 
     /// Build an empty world. No cells exist yet; the caller is responsible
     /// for inserting any initial state (typically via [`big_bang`](Self::big_bang)).
-    /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
+    /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`] and
+    /// `rng_kind` defaults to [`RngKind::Pcg`].
     #[must_use]
     pub const fn new(world_seed: u64) -> Self {
         Self {
@@ -65,6 +75,19 @@ impl SparseWorld {
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
+            rng_kind: RngKind::Pcg,
+        }
+    }
+
+    /// Same as [`Self::new`] but with an explicit RNG backend choice.
+    #[must_use]
+    pub const fn new_with_kind(world_seed: u64, rng_kind: RngKind) -> Self {
+        Self {
+            cells: BTreeMap::new(),
+            world_seed,
+            tick: 0,
+            move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
+            rng_kind,
         }
     }
 
@@ -100,19 +123,49 @@ impl SparseWorld {
     /// An empty `program` is exactly equivalent to [`SparseWorld::big_bang`].
     #[must_use]
     pub fn big_bang_with_program(world_seed: u64, energy: u32, program: &[u32]) -> Self {
-        let mut world = Self::new(world_seed);
+        Self::big_bang_with_program_and_kind(world_seed, energy, program, RngKind::Pcg)
+    }
+
+    /// Big bang with both a program and an explicit RNG backend. The
+    /// `Xorshift32` path matches JS prototype 9-B's `bigBang` semantics
+    /// bit-for-bit: origin cell's `origin_tag` is `cellSeed(seed, ORIGIN)`
+    /// directly (not the first RNG draw, as PCG does), and the noise
+    /// suffix in memory is the `xorshift32(cellSeed)` stream.
+    #[must_use]
+    pub fn big_bang_with_program_and_kind(
+        world_seed: u64,
+        energy: u32,
+        program: &[u32],
+        rng_kind: RngKind,
+    ) -> Self {
+        let mut world = Self::new_with_kind(world_seed, rng_kind);
         if energy == 0 {
             return world;
         }
-        let mut rng = Rng::for_cell_at_tick(world_seed, 0, Coord::ORIGIN);
-        let origin_tag = rng.next_u32();
+
+        let (origin_tag, mut noise_rng) = match rng_kind {
+            RngKind::Pcg => {
+                let mut rng = Rng::for_cell_at_tick(world_seed, 0, Coord::ORIGIN);
+                let tag = rng.next_u32();
+                (tag, rng)
+            }
+            RngKind::Xorshift32 => {
+                // JS prototype 9-B: `originTag = cellSeed(seed, x, y, z)`
+                // (the seed value itself), and `cell.rng = makeRng(seed)`
+                // is a separate xorshift32 stream from that same seed —
+                // the tag is *not* the first draw, it's the seed value.
+                let tag = cell_seed_xs32(world_seed, Coord::ORIGIN);
+                let rng = Rng::new_xs32(tag);
+                (tag, rng)
+            }
+        };
 
         let energy_usize = energy as usize;
         let n_program = program.len().min(energy_usize);
         let mut memory = Vec::with_capacity(energy_usize);
         memory.extend_from_slice(&program[..n_program]);
         for _ in n_program..energy_usize {
-            memory.push(rng.next_u32());
+            memory.push(noise_rng.next_u32());
         }
 
         let mut cell = Cell::with_memory(memory);
@@ -131,9 +184,10 @@ impl SparseWorld {
     /// alloc-on-write during the inflow phase.
     pub fn get_or_alloc(&mut self, coord: Coord) -> &mut Cell {
         let world_seed = self.world_seed;
+        let rng_kind = self.rng_kind;
         self.cells
             .entry(coord)
-            .or_insert_with(|| fresh_cell(world_seed, coord))
+            .or_insert_with(|| fresh_cell(world_seed, coord, rng_kind))
     }
 
     /// Number of cells currently in the world.
@@ -222,13 +276,24 @@ impl SparseWorld {
     }
 }
 
-/// Build an empty cell whose `origin_tag` is the first `u32` from the
-/// per-cell-at-tick stream `(world_seed, 0, coord)`. Used by
-/// [`SparseWorld::get_or_alloc`] for the alloc-on-write path.
-fn fresh_cell(world_seed: u64, coord: Coord) -> Cell {
-    let mut rng = Rng::for_cell_at_tick(world_seed, 0, coord);
+/// Build an empty cell whose `origin_tag` is deterministic in
+/// `(world_seed, coord)`. Used by [`SparseWorld::get_or_alloc`] for the
+/// alloc-on-write path during inflow.
+///
+/// The two backends derive the tag differently — see
+/// [`SparseWorld::big_bang_with_program_and_kind`] for the rationale:
+/// PCG draws the tag from a fresh per-cell-tick stream, `Xorshift32`
+/// uses the JS `cellSeed` value verbatim as the tag.
+fn fresh_cell(world_seed: u64, coord: Coord, rng_kind: RngKind) -> Cell {
+    let origin_tag = match rng_kind {
+        RngKind::Pcg => {
+            let mut rng = Rng::for_cell_at_tick(world_seed, 0, coord);
+            rng.next_u32()
+        }
+        RngKind::Xorshift32 => cell_seed_xs32(world_seed, coord),
+    };
     let mut cell = Cell::new();
-    cell.origin_tag = rng.next_u32();
+    cell.origin_tag = origin_tag;
     cell
 }
 

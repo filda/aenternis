@@ -72,6 +72,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
     // doesn't conflict with shared borrows.
     let world_seed = world.world_seed;
     let tick = world.tick;
+    let rng_kind = world.rng_kind;
 
     // Phase 2: compute rates per cell. Mutable borrow of `world.cells`.
     for (coord, cell) in &mut world.cells {
@@ -81,7 +82,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f32) {
             continue;
         }
 
-        let mut rng = Rng::for_cell_at_tick(world_seed, tick, *coord);
+        let mut rng = Rng::for_cell_at_tick_with_kind(rng_kind, world_seed, tick, *coord);
 
         for &d in &Direction::ALL {
             let neighbor_coord = coord.neighbor(d);

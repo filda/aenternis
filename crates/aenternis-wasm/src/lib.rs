@@ -27,8 +27,18 @@
 //! single-`u32` seed gives `2^32` distinct simulations — plenty for a
 //! prototype, and easy to upgrade to `u64`/`BigInt` later if needed.
 
-use aenternis_core::{tick, SparseWorld};
+use aenternis_core::{tick, RngKind, SparseWorld};
 use wasm_bindgen::prelude::*;
+
+/// Map a `u8` flag from the JS bridge to a Rust [`RngKind`]. The two
+/// JS-visible values (`0` = PCG, `1` = xorshift32) match the order in
+/// which the toggles appear in the Aenternis web UI.
+const fn rng_kind_from_u8(value: u8) -> RngKind {
+    match value {
+        1 => RngKind::Xorshift32,
+        _ => RngKind::Pcg,
+    }
+}
 
 /// Aenternis simulation world handle.
 ///
@@ -47,6 +57,8 @@ impl World {
     ///
     /// `seed` and `energy` are deterministic — same pair yields the
     /// same initial state on every run, on every host platform.
+    /// Uses the default PCG backend; pass [`World::new_with_kind`] to
+    /// pick a backend explicitly.
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(seed: u32, energy: u32) -> Self {
@@ -69,6 +81,31 @@ impl World {
     pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
         Self {
             inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
+        }
+    }
+
+    /// Construct a new world with both a program and an explicit RNG
+    /// backend choice. `rng_kind` is `0` for PCG (Aenternis default) or
+    /// `1` for xorshift32 (matches JS prototype 9-B bit-for-bit).
+    ///
+    /// Use this when you need to compare against the JS prototype — the
+    /// xorshift32 path reproduces the exact same per-cell-tick stream and
+    /// origin-tag derivation that 9-B's `world.js` produces.
+    #[wasm_bindgen(js_name = newWithProgramAndKind)]
+    #[must_use]
+    pub fn new_with_program_and_kind(
+        seed: u32,
+        energy: u32,
+        program: &[u32],
+        rng_kind: u8,
+    ) -> Self {
+        Self {
+            inner: SparseWorld::big_bang_with_program_and_kind(
+                u64::from(seed),
+                energy,
+                program,
+                rng_kind_from_u8(rng_kind),
+            ),
         }
     }
 

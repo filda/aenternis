@@ -8,14 +8,18 @@
 // Protocol:
 //
 //   main → worker:
-//     { type: "init", seed, energy, coeff, k }
-//     { type: "config", coeff, k }
+//     { type: "init", seed, energy, coeff, k, moveThreshold, rngKind, program }
+//     { type: "config", coeff, k, moveThreshold }
 //     { type: "running", running }
+//     { type: "inspect", x, y, z }
 //
 //   worker → main:
 //     { type: "ready" }                                — after WASM init
 //     { type: "snapshot", tick, cellCount, totalEnergy, snap, stride }
 //                                                     — every tick
+//
+// `rngKind` is "pcg" (default) or "xorshift32"; the worker translates to
+// the u8 the WASM bridge expects (0 / 1).
 
 import init, { World } from "/crates/aenternis-wasm/pkg/aenternis_wasm.js";
 
@@ -32,16 +36,14 @@ self.onmessage = (ev) => {
   const msg = ev.data;
   if (msg.type === "init") {
     if (world) world.free();
-    if (msg.program && msg.program.length > 0) {
-      // wasm-bindgen `Vec<u32>` arg: pass a Uint32Array (or array of
-      // numbers). We accept either for ergonomic JS.
-      const programArr = msg.program instanceof Uint32Array
-        ? msg.program
-        : new Uint32Array(msg.program);
-      world = World.newWithProgram(msg.seed, msg.energy, programArr);
-    } else {
-      world = new World(msg.seed, msg.energy);
-    }
+    // RNG backend: 0 = PCG (Aenternis default), 1 = xorshift32 (matches
+    // JS prototype 9-B). The string form on the wire keeps the protocol
+    // self-describing; translate to the u8 that the WASM bridge wants.
+    const rngKindU8 = msg.rngKind === "xorshift32" ? 1 : 0;
+    const programArr = msg.program && msg.program.length > 0
+      ? (msg.program instanceof Uint32Array ? msg.program : new Uint32Array(msg.program))
+      : new Uint32Array(0);
+    world = World.newWithProgramAndKind(msg.seed, msg.energy, programArr, rngKindU8);
     coeff = msg.coeff;
     k = msg.k;
     moveThreshold = msg.moveThreshold ?? 2.0;

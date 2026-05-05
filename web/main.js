@@ -20,10 +20,14 @@ import { assemble } from "../src/asm.js";
 
 const config = {
   seed: 1234,
-  energy: 65536,
+  energy: 10_000_000,
   coeff: 0.15,
   k: 1,
   moveThreshold: 1.0,
+  // "pcg" (Aenternis default) or "xorshift32" (matches JS prototype 9-B
+  // bit-for-bit). Changing this only takes effect on Reset, since RNG
+  // backend determines the big bang's initial state.
+  rngKind: "pcg",
 };
 
 // ----- Worker setup ----------------------------------------------------------
@@ -63,6 +67,7 @@ function sendInit() {
     coeff: config.coeff,
     k: config.k,
     moveThreshold: config.moveThreshold,
+    rngKind: config.rngKind,
     program,
   });
   cameraFitDirty = true;
@@ -357,6 +362,7 @@ const dom = {
   programText: document.getElementById("programText"),
   programStatus: document.getElementById("programStatus"),
   sliceEnabled: document.getElementById("sliceEnabled"),
+  rngXs32: document.getElementById("rngXs32"),
 };
 
 // ----- Slice (z = 0 only) — proto-9-style 2D view ----------------------------
@@ -379,9 +385,17 @@ dom.pauseBtn.addEventListener("click", () => {
 dom.resetBtn.addEventListener("click", () => {
   config.seed = parseInt(dom.seed.value, 10) || 0;
   config.energy = parseInt(dom.energyIn.value, 10) || 0;
+  config.rngKind = dom.rngXs32.checked ? "xorshift32" : "pcg";
   running = true;
   dom.pauseBtn.textContent = "Pause";
   sendInit();
+});
+// RNG checkbox change is captured into config.rngKind only on Reset —
+// switching backends mid-run would leave existing cells inconsistent
+// (origin tags came from one hash, new cells would use the other).
+dom.rngXs32.addEventListener("change", () => {
+  // No live update; the user has to press Reset for the change to take
+  // effect. Visual hint comes from the help text under the checkbox.
 });
 dom.coeff.addEventListener("input", () => {
   config.coeff = parseFloat(dom.coeff.value);

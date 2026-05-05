@@ -1,6 +1,7 @@
 //! Integration tests for the sparse world container.
 
-use aenternis_core::{Cell, Coord, Direction, SparseWorld};
+use aenternis_core::rng::cell_seed_xs32;
+use aenternis_core::{Cell, Coord, Direction, RngKind, SparseWorld};
 
 // ----- new / big_bang -----
 
@@ -65,6 +66,39 @@ fn big_bang_with_program_writes_prefix() {
     assert_eq!(cell.memory[0], 0xCAFE);
     assert_eq!(cell.memory[1], 0xBABE);
     assert_eq!(cell.memory[2], 0xDEAD);
+}
+
+#[test]
+fn big_bang_xs32_uses_cell_seed_as_origin_tag() {
+    // JS prototype 9-B sets `originTag = cellSeed(seed, x, y, z)` directly
+    // (not the first RNG draw). The Xorshift32 path must reproduce that.
+    let w = SparseWorld::big_bang_with_program_and_kind(7, 16, &[], RngKind::Xorshift32);
+    let cell = w.get(Coord::ORIGIN).unwrap();
+    assert_eq!(cell.origin_tag, cell_seed_xs32(7, Coord::ORIGIN));
+}
+
+#[test]
+fn big_bang_xs32_diverges_from_pcg() {
+    // Same seed/energy, different RNG backends → different memory streams.
+    let pcg = SparseWorld::big_bang(7, 16);
+    let xs = SparseWorld::big_bang_with_program_and_kind(7, 16, &[], RngKind::Xorshift32);
+    let cp = pcg.get(Coord::ORIGIN).unwrap();
+    let cx = xs.get(Coord::ORIGIN).unwrap();
+    assert_ne!(cp.memory, cx.memory);
+    // Tags differ too — PCG draws from splitmix-PCG chain, xs32 hashes
+    // coords directly.
+    assert_ne!(cp.origin_tag, cx.origin_tag);
+}
+
+#[test]
+fn rng_kind_persisted_on_world() {
+    // The choice survives through the world struct so subsequent ticks
+    // (fresh_cell on alloc-on-write, compute_natural_rates on layout)
+    // see the right backend without callers having to thread it.
+    let w = SparseWorld::big_bang_with_program_and_kind(1, 4, &[], RngKind::Xorshift32);
+    assert_eq!(w.rng_kind, RngKind::Xorshift32);
+    let pcg = SparseWorld::big_bang(1, 4);
+    assert_eq!(pcg.rng_kind, RngKind::Pcg);
 }
 
 #[test]
