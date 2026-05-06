@@ -399,3 +399,94 @@ fn direction_operand_wraps_modulo_six() {
     assert!(c.pointer_override[Direction::Yp.index()]);
     assert!(!c.pointer_override[Direction::Xp.index()]);
 }
+
+// ----- legacy_opcode_set --------------------------------------------------------
+//
+// JS prototype 9-B's opcode table stops at 0x13 (`paint`); the Rust VM
+// continues with `sinflow` (0x14), `sself` (0x15), `srate` (0x16). When
+// `legacy_opcode_set` is on, the executor skips those three the same way
+// the JS prototype would: pc advances by exactly 1, no operands consumed,
+// no side effects. Each test below pins down a different aspect of that
+// branch (lines tick.rs:238-239) so the bit-mask, comparison, addition,
+// and modulo mutations there all become observable.
+
+#[test]
+fn legacy_opcode_set_skips_sinflow_advancing_pc_by_one() {
+    // Sinflow normally has length 3. With the legacy flag the executor
+    // must treat it as a single-slot nop and emit no inflow read.
+    // mem_size = 10, pc = 5 → expected pc = 6 = (5 + 1) % 10.
+    let mut c = cell_with(&[0; 10]);
+    c.memory[5] = op(Opcode::Sinflow);
+    c.memory[6] = 0; // would be `d` operand if Sinflow ran — must stay unread
+    c.memory[7] = 9; // would be `a` operand
+    c.inflow[0] = 42; // a real Sinflow would copy this into mem[9]
+    c.pc = 5;
+    execute_instruction(&mut c, &VOID, false, true);
+    assert_eq!(c.pc, 6, "legacy skip must advance pc by exactly 1");
+    assert_eq!(c.memory[9], 0, "legacy skip must not execute Sinflow");
+}
+
+#[test]
+fn legacy_opcode_set_runs_sinflow_when_disabled() {
+    // Counter-test: with the flag *off*, Sinflow runs normally and pc
+    // advances by its full length (3). Catches mutations that ignore
+    // the `legacy_opcode_set &&` guard and skip unconditionally.
+    let mut c = cell_with(&[0; 10]);
+    c.memory[5] = op(Opcode::Sinflow);
+    c.memory[6] = 0;
+    c.memory[7] = 9;
+    c.inflow[0] = 42;
+    c.pc = 5;
+    execute_instruction(&mut c, &VOID, false, false);
+    assert_eq!(c.pc, 8, "Sinflow length is 3");
+    assert_eq!(c.memory[9], 42, "Sinflow must have written inflow[0]");
+}
+
+#[test]
+fn legacy_opcode_set_does_not_skip_paint_at_boundary() {
+    // 0x13 (Paint) sits exactly on the boundary: native uses `>`, so it
+    // *runs*. Mutations that flip `>` to `>=` or `==` would skip it,
+    // breaking this test.
+    let mut c = cell_with(&[0; 10]);
+    c.memory[5] = op(Opcode::Paint);
+    c.memory[6] = 0xCAFE;
+    c.pc = 5;
+    execute_instruction(&mut c, &VOID, false, true);
+    assert_eq!(c.pc, 7, "Paint length is 2; skip would land at 6");
+    assert_eq!(c.appearance, 0xCAFE, "Paint must have set appearance");
+}
+
+#[test]
+fn legacy_opcode_set_does_not_skip_low_opcode() {
+    // Opcodes well below the boundary (0x05 = Inc here) must run even
+    // with the legacy flag on. Catches `>` → `<` (which would invert
+    // the skip and consume Inc as if it were illegal).
+    let mut c = cell_with(&[0; 10]);
+    c.memory[5] = op(Opcode::Inc);
+    c.memory[6] = 9; // arg1 = address to increment
+    c.pc = 5;
+    execute_instruction(&mut c, &VOID, false, true);
+    assert_eq!(c.pc, 7, "Inc length is 2; skip would land at 6");
+    assert_eq!(c.memory[9], 1, "Inc must have incremented mem[9]");
+}
+
+#[test]
+fn legacy_opcode_set_masks_to_low_byte_only() {
+    // The legacy check uses `opcode_slot & 0xFF`, so upper bits never
+    // promote a legal opcode into the skip range. Slot value 0x0000_0105
+    // decodes to Inc (low byte 0x05) and must run normally.
+    //
+    // `& 0xFF` → `^ 0xFF` would yield 0x0000_01FA, well above 0x13 → skip.
+    // `& 0xFF` → `| 0xFF` would yield 0x0000_01FF, also above 0x13 → skip.
+    // Native preserves the low byte and runs Inc.
+    let mut c = cell_with(&[0; 10]);
+    c.memory[5] = 0x0000_0105; // upper bits set, low byte = Inc
+    c.memory[6] = 9;
+    c.pc = 5;
+    execute_instruction(&mut c, &VOID, false, true);
+    assert_eq!(c.pc, 7, "low byte 0x05 (Inc) must run, length 2");
+    assert_eq!(
+        c.memory[9], 1,
+        "Inc semantics preserved when upper bits set"
+    );
+}
