@@ -1,0 +1,375 @@
+import { describe, it, expect, vi } from 'vitest';
+import type {
+  ConfigMsg,
+  InitMsg,
+  InspectMsg,
+  RunningMsg,
+} from '../src/protocol.ts';
+import {
+  createWorkerHandler,
+  type WorkerHandlerDeps,
+  type WorldFactory,
+  type WorldHandle,
+} from '../src/worker-handler.ts';
+
+// ---- Test fixtures ---------------------------------------------------------
+
+function makeMockWorld(): WorldHandle {
+  return {
+    free: vi.fn(),
+    setMoveThreshold: vi.fn(),
+    setLegacyTickOffset: vi.fn(),
+    setLegacyFullPrecision: vi.fn(),
+    setLegacyPortWrap: vi.fn(),
+    setLegacyOpcodeSet: vi.fn(),
+    step: vi.fn(),
+    cellsSnapshot: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
+    boundingBox: vi.fn(() => new Int32Array([0, 0, 0, 1, 1, 1])),
+    tick: vi.fn(() => 42),
+    cellCount: vi.fn(() => 5),
+    totalEnergy: vi.fn(() => 10_000),
+    cellInspect: vi.fn(() => new Uint32Array([0xCAFE, 0xBABE])),
+    snapshotStride: 4,
+    inspectPrefix: 8,
+  };
+}
+
+interface Harness {
+  readonly handler: ReturnType<typeof createWorkerHandler>;
+  readonly deps: {
+    readonly worldFactory: WorldFactory & { newWithProgramAndKind: ReturnType<typeof vi.fn> };
+    readonly postMessage: ReturnType<typeof vi.fn>;
+    readonly scheduleNext: ReturnType<typeof vi.fn>;
+    readonly now: ReturnType<typeof vi.fn>;
+  };
+  /** Mirror of every callback passed to `scheduleNext`. Lives outside
+   *  the spy so that `scheduleNext.mockClear()` doesn't erase the
+   *  reference we need to drive the loop in tests. */
+  readonly scheduled: Array<() => void>;
+  readonly world: WorldHandle;
+}
+
+function makeHarness(overrides?: { now?: () => number }): Harness {
+  const world = makeMockWorld();
+  const factory = vi.fn(() => world);
+  const worldFactory = { newWithProgramAndKind: factory };
+  const postMessage = vi.fn();
+  const scheduled: Array<() => void> = [];
+  const scheduleNext = vi.fn((cb: () => void) => { scheduled.push(cb); });
+  const now = vi.fn(overrides?.now ?? (() => 0));
+  const deps: WorkerHandlerDeps = {
+    worldFactory,
+    postMessage,
+    scheduleNext,
+    now,
+  };
+  const handler = createWorkerHandler(deps);
+  return {
+    handler,
+    deps: { worldFactory, postMessage, scheduleNext, now },
+    scheduled,
+    world,
+  };
+}
+
+const baseInit: InitMsg = {
+  type: 'init',
+  seed: 1234,
+  energy: 10_000_000,
+  coeff: 0.15,
+  k: 1,
+  rngKind: 'pcg',
+};
+
+// ---- init -------------------------------------------------------------------
+
+describe('createWorkerHandler — init', () => {
+  it('builds a World via the factory with default RNG kind 0', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    expect(h.deps.worldFactory.newWithProgramAndKind).toHaveBeenCalledTimes(1);
+    const args = h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]!;
+    expect(args[0]).toBe(1234);
+    expect(args[1]).toBe(10_000_000);
+    expect(args[2]).toBeInstanceOf(Uint32Array);
+    expect(args[2]).toHaveLength(0);
+    expect(args[3]).toBe(0);
+  });
+
+  it('passes RNG kind 1 for xorshift32', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({ ...baseInit, rngKind: 'xorshift32' });
+    const args = h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]!;
+    expect(args[3]).toBe(1);
+  });
+
+  it('normalizes a number-array program into a Uint32Array', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({ ...baseInit, program: [0x09, 0x00, 0x00] });
+    const program = h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]![2];
+    expect(program).toBeInstanceOf(Uint32Array);
+    expect(Array.from(program)).toEqual([9, 0, 0]);
+  });
+
+  it('passes a Uint32Array program through unchanged', () => {
+    const h = makeHarness();
+    const program = new Uint32Array([1, 2, 3]);
+    h.handler.handleMessage({ ...baseInit, program });
+    expect(h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]![2]).toBe(program);
+  });
+
+  it('applies all state setters to the new world', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({
+      ...baseInit,
+      moveThreshold: 2.5,
+      legacyTickOffset: true,
+      legacyFullPrecision: false,
+      legacyPortWrap: true,
+      legacyOpcodeSet: false,
+    });
+    expect(h.world.setMoveThreshold).toHaveBeenCalledWith(2.5);
+    expect(h.world.setLegacyTickOffset).toHaveBeenCalledWith(true);
+    expect(h.world.setLegacyFullPrecision).toHaveBeenCalledWith(false);
+    expect(h.world.setLegacyPortWrap).toHaveBeenCalledWith(true);
+    expect(h.world.setLegacyOpcodeSet).toHaveBeenCalledWith(false);
+  });
+
+  it('emits an initial snapshot with transferable buffers', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    expect(h.deps.postMessage).toHaveBeenCalledTimes(1);
+    const [msg, transfer] = h.deps.postMessage.mock.calls[0]!;
+    expect(msg).toMatchObject({
+      type: 'snapshot',
+      tick: 42,
+      cellCount: 5,
+      totalEnergy: 10_000,
+      stride: 4,
+    });
+    expect(transfer).toHaveLength(2);
+  });
+
+  it('schedules the first tick loop', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    expect(h.deps.scheduleNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('frees the previous world when re-initialized', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    const firstWorld = h.world;
+    // A second init triggers the factory again; the first world is freed.
+    h.deps.worldFactory.newWithProgramAndKind.mockReturnValueOnce(makeMockWorld());
+    h.handler.handleMessage(baseInit);
+    expect(firstWorld.free).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- config -----------------------------------------------------------------
+
+describe('createWorkerHandler — config', () => {
+  it('updates coeff and k on the next tick', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'config', coeff: 0.42, k: 7 });
+    // Drive one loop iteration to observe the new values being passed
+    // to `world.step`.
+    runScheduledLoop(h);
+    expect(h.world.step).toHaveBeenCalledWith(0.42, 7);
+  });
+
+  it('does not call any per-flag setter when no optional field is given', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    vi.mocked(h.world.setMoveThreshold).mockClear();
+    vi.mocked(h.world.setLegacyTickOffset).mockClear();
+    vi.mocked(h.world.setLegacyFullPrecision).mockClear();
+    vi.mocked(h.world.setLegacyPortWrap).mockClear();
+    vi.mocked(h.world.setLegacyOpcodeSet).mockClear();
+
+    h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1 });
+
+    expect(h.world.setMoveThreshold).not.toHaveBeenCalled();
+    expect(h.world.setLegacyTickOffset).not.toHaveBeenCalled();
+    expect(h.world.setLegacyFullPrecision).not.toHaveBeenCalled();
+    expect(h.world.setLegacyPortWrap).not.toHaveBeenCalled();
+    expect(h.world.setLegacyOpcodeSet).not.toHaveBeenCalled();
+  });
+
+  it('forwards moveThreshold to the world only when given', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    vi.mocked(h.world.setMoveThreshold).mockClear();
+    h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, moveThreshold: 3.3 });
+    expect(h.world.setMoveThreshold).toHaveBeenCalledWith(3.3);
+  });
+
+  it('forwards moveThreshold of 0 (truthy guard regression)', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    vi.mocked(h.world.setMoveThreshold).mockClear();
+    h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, moveThreshold: 0 });
+    expect(h.world.setMoveThreshold).toHaveBeenCalledWith(0);
+  });
+
+  it('forwards each legacy flag only when given', () => {
+    const cases: Array<[keyof Pick<ConfigMsg,
+      'legacyTickOffset' | 'legacyFullPrecision' | 'legacyPortWrap' | 'legacyOpcodeSet'
+    >, keyof WorldHandle, boolean]> = [
+      ['legacyTickOffset', 'setLegacyTickOffset', true],
+      ['legacyFullPrecision', 'setLegacyFullPrecision', true],
+      ['legacyPortWrap', 'setLegacyPortWrap', false],
+      ['legacyOpcodeSet', 'setLegacyOpcodeSet', false],
+    ];
+    for (const [field, setter, value] of cases) {
+      const h = makeHarness();
+      h.handler.handleMessage(baseInit);
+      const fn = h.world[setter] as ReturnType<typeof vi.fn>;
+      vi.mocked(fn).mockClear();
+      h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, [field]: value });
+      expect(fn).toHaveBeenCalledWith(value);
+    }
+  });
+
+  it('does nothing on the world side when config arrives before init', () => {
+    const h = makeHarness();
+    const cfg: ConfigMsg = { type: 'config', coeff: 0.42, k: 7, moveThreshold: 1.0 };
+    h.handler.handleMessage(cfg);
+    // No world was created, so no setters can have been called.
+    expect(h.deps.postMessage).not.toHaveBeenCalled();
+    expect(h.deps.scheduleNext).not.toHaveBeenCalled();
+  });
+});
+
+// ---- running ----------------------------------------------------------------
+
+describe('createWorkerHandler — running', () => {
+  it('does not schedule a new tick when the handler is paused (false → false)', () => {
+    const h = makeHarness();
+    const msg: RunningMsg = { type: 'running', running: false };
+    h.handler.handleMessage(msg);
+    expect(h.deps.scheduleNext).not.toHaveBeenCalled();
+  });
+
+  it('schedules a tick on first running:true even before init', () => {
+    // Regression: the initial value of the internal `running` flag
+    // must be `false`, otherwise `running && !wasRunning` short-circuits
+    // and never schedules.
+    const h = makeHarness();
+    h.handler.handleMessage({ type: 'running', running: true });
+    expect(h.deps.scheduleNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not schedule a duplicate tick when already running (true → true)', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit); // running=true after init
+    h.deps.scheduleNext.mockClear();
+    h.handler.handleMessage({ type: 'running', running: true });
+    expect(h.deps.scheduleNext).not.toHaveBeenCalled();
+  });
+
+  it('schedules a tick on resume (false → true)', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'running', running: false });
+    h.deps.scheduleNext.mockClear();
+    h.handler.handleMessage({ type: 'running', running: true });
+    expect(h.deps.scheduleNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the loop on pause (true → false)', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'running', running: false });
+    h.deps.scheduleNext.mockClear();
+    runScheduledLoop(h); // loop was already scheduled by init; runs once
+    // After pause, the loop's running check returns early — neither
+    // step nor a fresh schedule should follow.
+    expect(h.world.step).not.toHaveBeenCalled();
+    expect(h.deps.scheduleNext).not.toHaveBeenCalled();
+  });
+});
+
+// ---- inspect ----------------------------------------------------------------
+
+describe('createWorkerHandler — inspect', () => {
+  it('emits a cellDetail message with transferable data', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    h.deps.postMessage.mockClear();
+
+    const inspect: InspectMsg = { type: 'inspect', x: 1, y: 2, z: 3 };
+    h.handler.handleMessage(inspect);
+
+    expect(h.world.cellInspect).toHaveBeenCalledWith(1, 2, 3);
+    const [msg, transfer] = h.deps.postMessage.mock.calls[0]!;
+    expect(msg).toMatchObject({
+      type: 'cellDetail',
+      x: 1, y: 2, z: 3,
+      tick: 42,
+      prefix: 8,
+    });
+    expect(transfer).toHaveLength(1);
+  });
+
+  it('does nothing when inspect arrives before init', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({ type: 'inspect', x: 0, y: 0, z: 0 });
+    expect(h.deps.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ---- tick loop --------------------------------------------------------------
+
+describe('createWorkerHandler — tick loop', () => {
+  it('on each tick, steps the world and posts a fresh snapshot', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.deps.postMessage.mockClear();
+    runScheduledLoop(h);
+    expect(h.world.step).toHaveBeenCalledTimes(1);
+    expect(h.deps.postMessage).toHaveBeenCalledTimes(1);
+    expect(h.deps.postMessage.mock.calls[0]![0]).toMatchObject({ type: 'snapshot' });
+  });
+
+  it('schedules the next loop after each tick', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.deps.scheduleNext.mockClear();
+    runScheduledLoop(h);
+    expect(h.deps.scheduleNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports msPerTick from the now() clock', () => {
+    let t = 0;
+    const h = makeHarness({ now: () => { t += 5; return t; } });
+    // After init, t=5 (snapshot doesn't sample the clock).
+    h.handler.handleMessage(baseInit);
+    h.deps.postMessage.mockClear();
+    runScheduledLoop(h);
+    // loop: t0=10, step, t=15, msPerTick = 5
+    const snap = h.deps.postMessage.mock.calls[0]![0];
+    expect(snap).toMatchObject({ msPerTick: 5 });
+  });
+});
+
+// ---- helpers ----------------------------------------------------------------
+
+/** Returns a `now`-like function whose return value increases by 1 each
+ *  call, so anything timing-related is deterministic and non-zero. */
+function makeMonotonicNow(): () => number {
+  let t = 0;
+  return () => { t += 1; return t; };
+}
+
+/** Invokes the most recently scheduled callback, simulating one tick
+ *  of the worker loop. Reads from `harness.scheduled` (not the spy
+ *  history) so tests can `mockClear` the spy without losing the
+ *  callback handle. */
+function runScheduledLoop(h: Harness): void {
+  const cb = h.scheduled[h.scheduled.length - 1];
+  if (!cb) throw new Error('scheduleNext was never called');
+  cb();
+}
