@@ -12,3 +12,8 @@ target/
 crates/*/pkg/
 /AGENTS.local.md
 /.claude/settings.local.json
+
+# samply / flamegraph output
+profile.json.gz
+flamegraph.svg
+perf.data*

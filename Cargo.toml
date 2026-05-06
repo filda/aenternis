@@ -39,3 +39,13 @@ panic = "abort"
 # Tests benefit from a little optimization to keep wallclock reasonable
 # once the simulation core grows; this still keeps debug info.
 opt-level = 1
+
+# Release-with-symbols profile for sampling profilers (samply, perf,
+# flamegraph). Inherits release optimization but keeps DWARF + frame
+# pointers so call stacks resolve to function names.
+#
+# Build with `cargo build --profile profiling --example profile_tick`.
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
