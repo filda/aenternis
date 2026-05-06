@@ -239,3 +239,177 @@ fn inspect_returns_empty_for_void_neighbor() {
     // The big-bang cell sits at origin; (5, 5, 5) is void.
     assert!(w.cell_inspect(5, 5, 5).is_empty());
 }
+
+// ----- legacy_tick_offset ----------------------------------------------------
+
+#[test]
+fn legacy_tick_offset_default_is_false() {
+    let w = World::new(0, 0);
+    assert!(!w.legacy_tick_offset());
+}
+
+#[test]
+fn set_legacy_tick_offset_round_trips() {
+    let mut w = World::new(0, 0);
+    w.set_legacy_tick_offset(true);
+    assert!(w.legacy_tick_offset());
+    w.set_legacy_tick_offset(false);
+    assert!(!w.legacy_tick_offset());
+}
+
+// ----- legacy_full_precision -------------------------------------------------
+
+#[test]
+fn legacy_full_precision_default_is_false() {
+    let w = World::new(0, 0);
+    assert!(!w.legacy_full_precision());
+}
+
+#[test]
+fn set_legacy_full_precision_round_trips() {
+    let mut w = World::new(0, 0);
+    w.set_legacy_full_precision(true);
+    assert!(w.legacy_full_precision());
+    w.set_legacy_full_precision(false);
+    assert!(!w.legacy_full_precision());
+}
+
+// ----- legacy_port_wrap ------------------------------------------------------
+
+#[test]
+fn legacy_port_wrap_default_is_false() {
+    let w = World::new(0, 0);
+    assert!(!w.legacy_port_wrap());
+}
+
+#[test]
+fn set_legacy_port_wrap_round_trips() {
+    let mut w = World::new(0, 0);
+    w.set_legacy_port_wrap(true);
+    assert!(w.legacy_port_wrap());
+    w.set_legacy_port_wrap(false);
+    assert!(!w.legacy_port_wrap());
+}
+
+// ----- legacy_opcode_set -----------------------------------------------------
+
+#[test]
+fn legacy_opcode_set_default_is_false() {
+    let w = World::new(0, 0);
+    assert!(!w.legacy_opcode_set());
+}
+
+#[test]
+fn set_legacy_opcode_set_round_trips() {
+    let mut w = World::new(0, 0);
+    w.set_legacy_opcode_set(true);
+    assert!(w.legacy_opcode_set());
+    w.set_legacy_opcode_set(false);
+    assert!(!w.legacy_opcode_set());
+}
+
+// ----- new_with_program_and_kind / rng_kind_from_u8 --------------------------
+//
+// `rng_kind_from_u8` is private; we exercise it through the public
+// constructor by checking that distinct `rng_kind` bytes produce
+// distinguishable initial state.
+
+#[test]
+fn new_with_program_and_kind_zero_matches_default_pcg() {
+    // kind=0 is the PCG default; should match `new_with_program` byte-for-byte.
+    let a = World::new_with_program(42, 16, &[]);
+    let b = World::new_with_program_and_kind(42, 16, &[], 0);
+    assert_eq!(a.cells_snapshot(), b.cells_snapshot());
+}
+
+#[test]
+fn new_with_program_and_kind_one_picks_xorshift32() {
+    // kind=1 is xorshift32; must differ from PCG for the same seed/energy.
+    // (Both are deterministic, so any difference proves the branch was taken.)
+    let pcg = World::new_with_program_and_kind(42, 32, &[], 0);
+    let xs32 = World::new_with_program_and_kind(42, 32, &[], 1);
+    assert_ne!(
+        pcg.cells_snapshot(),
+        xs32.cells_snapshot(),
+        "PCG and xorshift32 must produce distinct initial state",
+    );
+}
+
+#[test]
+fn new_with_program_and_kind_unknown_falls_back_to_pcg() {
+    // Any value other than 1 routes to PCG via the `_ =>` arm.
+    let pcg = World::new_with_program_and_kind(42, 16, &[], 0);
+    let bogus = World::new_with_program_and_kind(42, 16, &[], 99);
+    assert_eq!(pcg.cells_snapshot(), bogus.cells_snapshot());
+}
+
+// ----- bounding_box ----------------------------------------------------------
+
+#[test]
+fn bounding_box_empty_world_returns_empty() {
+    let w = World::new(0, 0);
+    assert!(w.bounding_box().is_empty());
+}
+
+#[test]
+fn bounding_box_single_cell_at_origin_is_all_zero() {
+    let w = World::new(7, 16);
+    // Big bang seeds a single cell at (0,0,0); the box collapses to that point.
+    assert_eq!(w.bounding_box(), vec![0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn bounding_box_after_expansion_has_six_elements() {
+    let mut w = World::new(0, 100);
+    w.step(0.30, 1);
+    let bb = w.bounding_box();
+    assert_eq!(bb.len(), 6);
+}
+
+#[test]
+fn bounding_box_min_le_max_for_each_axis() {
+    let mut w = World::new(0, 100);
+    for _ in 0..5 {
+        w.step(0.30, 1);
+    }
+    let bb = w.bounding_box();
+    assert_eq!(bb.len(), 6);
+    let (x_min, x_max, y_min, y_max, z_min, z_max) = (bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]);
+    assert!(x_min <= x_max, "x_min={x_min} > x_max={x_max}");
+    assert!(y_min <= y_max, "y_min={y_min} > y_max={y_max}");
+    assert!(z_min <= z_max, "z_min={z_min} > z_max={z_max}");
+}
+
+#[test]
+fn bounding_box_envelopes_every_cell_in_snapshot() {
+    let mut w = World::new(2024, 200);
+    for _ in 0..5 {
+        w.step(0.25, 1);
+    }
+    let bb = w.bounding_box();
+    let snap = w.cells_snapshot();
+    assert_eq!(bb.len(), 6);
+    #[allow(clippy::cast_possible_wrap)]
+    let decode = |chunk: &[u32]| (chunk[0] as i32, chunk[1] as i32, chunk[2] as i32);
+    for chunk in snap.chunks_exact(6) {
+        let (x, y, z) = decode(chunk);
+        assert!(
+            x >= bb[0] && x <= bb[1],
+            "x={x} outside [{}, {}]",
+            bb[0],
+            bb[1]
+        );
+        assert!(
+            y >= bb[2] && y <= bb[3],
+            "y={y} outside [{}, {}]",
+            bb[2],
+            bb[3]
+        );
+        assert!(
+            z >= bb[4] && z <= bb[5],
+            "z={z} outside [{}, {}]",
+            bb[4],
+            bb[5]
+        );
+    }
+}

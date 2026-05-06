@@ -284,3 +284,63 @@ fn coeff_zero_kills_all_rates() {
     let cell = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(cell.rates, [0; 6]);
 }
+
+// ----- exact-rate gradient between two live cells ----------------------------
+//
+// Most existing rate tests put void (E = 0) on at least one side of each
+// gradient, which makes `delta = my - neighbor` and `delta = my + neighbor`
+// numerically identical. These tests use two adjacent live cells with
+// distinct, non-zero energies so that the subtraction is observable, and
+// pick `(delta, coeff)` pairs whose product is a representable integer
+// in both `f32` and `f64`. With an integer input, `stochastic_floor`
+// short-circuits without consuming RNG, so the rate is fully deterministic
+// — and any mutation of `-`, `*`, or the f64 path produces an off-by-many
+// rate that the assertion catches.
+
+#[test]
+fn rate_uses_subtraction_against_live_neighbor_default_path() {
+    // A=100, B=36, coeff=0.0625. Both are exact-binary fractions.
+    // Native: delta=64, 64*0.0625 = 4.0 exact → rate=4 every direction.
+    // `-` → `+` mutation: delta=136, 136*0.0625 = 8.5 → rate=8 or 9 (RNG).
+    // `*` → `+` (default-path mutation, line 119): 64+0.0625 = 64.0625 →
+    //   rate=64 or 65, way off.
+    let mut w = SparseWorld::new(0x00C0_FFEE);
+    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1; 100]));
+    for &d in &Direction::ALL {
+        w.insert(Coord::ORIGIN.neighbor(d), Cell::with_memory(vec![1; 36]));
+    }
+    compute_natural_rates(&mut w, 0.0625);
+    let a = w.get(Coord::ORIGIN).unwrap();
+    // Total = 6 * 4 = 24, well under A's energy 100 → no clamp.
+    assert_eq!(a.rates, [4; 6]);
+}
+
+#[test]
+fn rate_uses_subtraction_against_live_neighbor_full_precision_path() {
+    // Same setup as above, but routed through the f64 stochastic_floor
+    // (legacy_full_precision = true). The mutations targeted here live
+    // on tick.rs:108 (delta) and tick.rs:112 (the `* coeff` in the f64
+    // branch).
+    let mut w = SparseWorld::new(0x00C0_FFEE);
+    w.legacy_full_precision = true;
+    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1; 100]));
+    for &d in &Direction::ALL {
+        w.insert(Coord::ORIGIN.neighbor(d), Cell::with_memory(vec![1; 36]));
+    }
+    compute_natural_rates(&mut w, 0.0625);
+    let a = w.get(Coord::ORIGIN).unwrap();
+    assert_eq!(a.rates, [4; 6]);
+}
+
+#[test]
+fn rate_zero_when_neighbor_has_strictly_more_energy() {
+    // Two cells, B has more energy than A. delta would underflow if computed
+    // as `my - neighbor` for the lower-energy cell, but the `if my > neighbor`
+    // guard short-circuits to rate=0. Tests the guard, not the arithmetic.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1; 10]));
+    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1; 100]));
+    compute_natural_rates(&mut w, 0.5);
+    let a = w.get(Coord::new(0, 0, 0)).unwrap();
+    assert_eq!(a.rates[Direction::Xp.index()], 0);
+}
