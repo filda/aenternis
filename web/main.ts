@@ -21,6 +21,9 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
@@ -118,6 +121,14 @@ export function bootstrap(): void {
     sliceEnabled: requireEl('sliceEnabled', HTMLInputElement),
     voxelSize: requireEl('voxelSize', HTMLInputElement),
     voxelSizeVal: requireEl('voxelSizeVal', HTMLSpanElement),
+    shapeOcta: requireEl('shapeOcta', HTMLInputElement),
+    bloomEnabled: requireEl('bloomEnabled', HTMLInputElement),
+    bloomThreshold: requireEl('bloomThreshold', HTMLInputElement),
+    bloomThresholdVal: requireEl('bloomThresholdVal', HTMLSpanElement),
+    bloomStrength: requireEl('bloomStrength', HTMLInputElement),
+    bloomStrengthVal: requireEl('bloomStrengthVal', HTMLSpanElement),
+    bloomRadius: requireEl('bloomRadius', HTMLInputElement),
+    bloomRadiusVal: requireEl('bloomRadiusVal', HTMLSpanElement),
     rngXs32: requireEl('rngXs32', HTMLInputElement),
     legacyTickOffset: requireEl('legacyTickOffset', HTMLInputElement),
     legacyFullPrecision: requireEl('legacyFullPrecision', HTMLInputElement),
@@ -210,10 +221,26 @@ export function bootstrap(): void {
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
 
+  // Postprocessing pipeline: scene render → unreal bloom. Bloom picks
+  // up pixels brighter than `threshold` and bleeds them into a glow,
+  // which combined with the warm-end heat ramp makes hot cells feel
+  // like they're radiating energy. Strength / radius / threshold are
+  // exposed via sliders; the whole pass can be disabled to compare.
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    parseFloat(dom.bloomStrength.value),
+    parseFloat(dom.bloomRadius.value),
+    parseFloat(dom.bloomThreshold.value),
+  );
+  composer.addPass(bloomPass);
+
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
   });
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.4));
@@ -276,16 +303,26 @@ export function bootstrap(): void {
   }
 
   // ----- Voxel mesh (instanced, dynamic capacity) ----------------------------
-  const voxelGeometry = new THREE.SphereGeometry(0.45, 8, 6);
+  // Two shapes available: the default 8×6 sphere (~80 triangles) and a
+  // detail-0 octahedron (8 triangles). The octahedron renders ~10×
+  // faster per cell — useful when the field grows past a few hundred
+  // thousand cells. Visually a small octahedron with jitter applied
+  // reads as a slightly faceted ball.
+  const VOXEL_SPHERE_RADIUS = 0.45;
+  const VOXEL_OCTA_RADIUS = 0.55;
+  function makeVoxelGeometry(octahedron: boolean): THREE.BufferGeometry {
+    return octahedron
+      ? new THREE.OctahedronGeometry(VOXEL_OCTA_RADIUS, 0)
+      : new THREE.SphereGeometry(VOXEL_SPHERE_RADIUS, 8, 6);
+  }
+  let useOctahedron = false;
+  let voxelGeometry: THREE.BufferGeometry = makeVoxelGeometry(useOctahedron);
   const voxelMaterial = new THREE.MeshLambertMaterial();
   let voxelMesh: THREE.InstancedMesh | null = null;
   let voxelCapacity = 0;
   let lastUsedCount = 0;
 
-  function ensureCapacity(n: number): void {
-    if (voxelCapacity >= n) return;
-    let cap = voxelCapacity > 0 ? voxelCapacity : 256;
-    while (cap < n) cap *= 2;
+  function rebuildVoxelMesh(cap: number): void {
     if (voxelMesh) {
       scene.remove(voxelMesh);
       voxelMesh.dispose();
@@ -299,6 +336,22 @@ export function bootstrap(): void {
     scene.add(voxelMesh);
     voxelCapacity = cap;
     lastUsedCount = 0;
+  }
+
+  function ensureCapacity(n: number): void {
+    if (voxelCapacity >= n) return;
+    let cap = voxelCapacity > 0 ? voxelCapacity : 256;
+    while (cap < n) cap *= 2;
+    rebuildVoxelMesh(cap);
+  }
+
+  function setVoxelShape(octahedron: boolean): void {
+    if (useOctahedron === octahedron) return;
+    useOctahedron = octahedron;
+    voxelGeometry.dispose();
+    voxelGeometry = makeVoxelGeometry(useOctahedron);
+    rebuildVoxelMesh(Math.max(voxelCapacity, 256));
+    lastRenderedTick = -1;
   }
   ensureCapacity(1024);
 
@@ -406,6 +459,27 @@ export function bootstrap(): void {
     voxelScale = parseFloat(dom.voxelSize.value);
     dom.voxelSizeVal.textContent = voxelScale.toFixed(2);
     lastRenderedTick = -1; // force a re-render even if no new snapshot.
+  });
+  dom.shapeOcta.addEventListener('change', () => {
+    setVoxelShape(dom.shapeOcta.checked);
+  });
+  dom.bloomEnabled.addEventListener('change', () => {
+    bloomPass.enabled = dom.bloomEnabled.checked;
+  });
+  dom.bloomThreshold.addEventListener('input', () => {
+    const v = parseFloat(dom.bloomThreshold.value);
+    bloomPass.threshold = v;
+    dom.bloomThresholdVal.textContent = v.toFixed(2);
+  });
+  dom.bloomStrength.addEventListener('input', () => {
+    const v = parseFloat(dom.bloomStrength.value);
+    bloomPass.strength = v;
+    dom.bloomStrengthVal.textContent = v.toFixed(2);
+  });
+  dom.bloomRadius.addEventListener('input', () => {
+    const v = parseFloat(dom.bloomRadius.value);
+    bloomPass.radius = v;
+    dom.bloomRadiusVal.textContent = v.toFixed(2);
   });
 
   // ----- Slice (z = 0 only) — proto-9-style 2D view --------------------------
@@ -523,7 +597,7 @@ export function bootstrap(): void {
     }
 
     controls.update();
-    renderer.render(scene, camera);
+    composer.render();
 
     if (latestSnapshot) {
       dom.tick.textContent = String(latestSnapshot.tick);

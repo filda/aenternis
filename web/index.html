@@ -307,6 +307,32 @@
         <span class="value" id="voxelSizeVal">1.00</span>
       </div>
       <div class="row">
+        <label>shape</label>
+        <label style="font-weight: normal;">
+          <input id="shapeOcta" type="checkbox">
+          octahedron (8 trianglů)
+        </label>
+      </div>
+      <div class="row">
+        <label>bloom</label>
+        <input id="bloomEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· threshold</label>
+        <input id="bloomThreshold" type="range" min="0" max="1" step="0.05" value="0.70">
+        <span class="value" id="bloomThresholdVal">0.70</span>
+      </div>
+      <div class="row">
+        <label>· strength</label>
+        <input id="bloomStrength" type="range" min="0" max="2" step="0.05" value="0.80">
+        <span class="value" id="bloomStrengthVal">0.80</span>
+      </div>
+      <div class="row">
+        <label>· radius</label>
+        <input id="bloomRadius" type="range" min="0" max="1" step="0.05" value="0.40">
+        <span class="value" id="bloomRadiusVal">0.40</span>
+      </div>
+      <div class="row">
         <label>z = 0 slice</label>
         <input id="sliceEnabled" type="checkbox">
       </div>
