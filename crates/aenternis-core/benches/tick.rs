@@ -22,9 +22,7 @@
 #![allow(missing_docs)]
 
 use aenternis_core::{tick, SparseWorld};
-use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
 /// Diffusion coefficient — typical mid-range value used in the prototypes.
 const COEFF: f64 = 0.20;
@@ -72,20 +70,16 @@ fn bench_warm(c: &mut Criterion) {
         for _ in 0..WARMUP_TICKS {
             tick::step(&mut warmed, COEFF, K);
         }
-        group.bench_with_input(
-            BenchmarkId::from_parameter(energy),
-            &warmed,
-            |b, warmed| {
-                b.iter_batched(
-                    || warmed.clone(),
-                    |mut w| {
-                        tick::step(&mut w, COEFF, K);
-                        black_box(&w);
-                    },
-                    BatchSize::LargeInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(energy), &warmed, |b, warmed| {
+            b.iter_batched(
+                || warmed.clone(),
+                |mut w| {
+                    tick::step(&mut w, COEFF, K);
+                    black_box(&w);
+                },
+                BatchSize::LargeInput,
+            );
+        });
     }
     group.finish();
 }
