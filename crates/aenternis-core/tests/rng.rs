@@ -384,6 +384,114 @@ fn stochastic_floor_f64_zero_for_non_positive() {
     assert_eq!(r.stochastic_floor_f64(f64::NEG_INFINITY), 0);
 }
 
+// ===== bit-mixing snapshots ================================================
+//
+// The behavioral tests above check determinism, range, and distribution
+// — none of which constrain the exact bits flowing through PCG's XSH-RR
+// permutation, the splitmix64 finalizer, or the JS-port `cell_tick_seed`
+// hash. A mutation that swaps `^` for `|` (or `>>` for `<<`) in those
+// mixers leaves the high-level shape intact (still roughly uniform,
+// still deterministic) so cargo-mutants slips through. The snapshots
+// below pin exact `u32` values so any structural change to a mixer
+// breaks at least one test.
+//
+// These are change-detector tests by design: if the RNG implementation
+// is intentionally upgraded, the reference values must be regenerated.
+
+#[test]
+fn pcg_stream_matches_reference_for_seed_42() {
+    // PCG-XSH-RR-64/32 with seed = 42. Locks in the XSH (`>> 18`, `^`,
+    // `>> 27`) and the rotation index (`>> 59`).
+    let mut r = Rng::new(42);
+    let want: [u32; 4] = [3_270_867_926, 1_795_671_209, 1_924_641_435, 1_143_034_755];
+    for (i, &expected) in want.iter().enumerate() {
+        assert_eq!(r.next_u32(), expected, "pcg seed=42 output[{i}] drifted");
+    }
+}
+
+#[test]
+fn for_world_threads_splitmix_into_pcg_for_nonzero_seed() {
+    // splitmix64(0) is a fixed point (= 0), so `for_world(0)` aliases
+    // `Rng::new(0)` and would not exercise the splitmix mixer at all.
+    // Use seed = 1 to force a non-trivial splitmix pass.
+    let mut r = Rng::for_world(1);
+    let want: [u32; 4] = [430_970_027, 341_447_642, 1_537_515_948, 215_753_644];
+    for (i, &expected) in want.iter().enumerate() {
+        assert_eq!(
+            r.next_u32(),
+            expected,
+            "for_world(1) output[{i}] drifted — splitmix64 mixer changed",
+        );
+    }
+}
+
+#[test]
+fn for_cell_at_tick_xor_chain_mixes_seed_tick_and_coord() {
+    // Every step of the splitmix-XOR chain (h ^ tick, h ^ x, h ^ y, h ^ z)
+    // must contribute. Inputs are all non-zero so a `^` → `|` mutation in
+    // any of L109-L112 changes the chain output.
+    let mut r = Rng::for_cell_at_tick(0xDEAD_BEEF, 5, Coord::new(3, -7, 11));
+    let want: [u32; 4] = [1_662_629_485, 2_779_479_871, 1_493_141_192, 1_461_048_430];
+    for (i, &expected) in want.iter().enumerate() {
+        assert_eq!(
+            r.next_u32(),
+            expected,
+            "for_cell_at_tick output[{i}] drifted",
+        );
+    }
+}
+
+#[test]
+fn for_cell_at_tick_xor_chain_isolated_per_axis() {
+    // The combined test above can silently pass a `^` → `|` mutation when
+    // the splitmix input happens to have all bits of the XOR mask zeroed
+    // (then `h ^ k == h | k`). Each case below sets exactly one axis to a
+    // 16-bit-wide non-zero pattern, which forces `h & mask` to be non-zero
+    // with overwhelming probability and pins down the bit-mixer per slot
+    // in the chain. Together they cover all four `^` calls (lines 109-112).
+    let mut r = Rng::for_cell_at_tick(1, 0xFFFF, Coord::new(0, 0, 0));
+    assert_eq!(r.next_u32(), 555_938_091, "tick-mix (L109) drifted");
+
+    let mut r = Rng::for_cell_at_tick(1, 0, Coord::new(0xFFFF, 0, 0));
+    assert_eq!(r.next_u32(), 4_202_892_921, "x-mix (L110) drifted");
+
+    let mut r = Rng::for_cell_at_tick(1, 0, Coord::new(0, 0xFFFF, 0));
+    assert_eq!(r.next_u32(), 3_704_684_748, "y-mix (L111) drifted");
+
+    let mut r = Rng::for_cell_at_tick(1, 0, Coord::new(0, 0, 0xFFFF));
+    assert_eq!(r.next_u32(), 2_788_670_528, "z-mix (L112) drifted");
+}
+
+#[test]
+fn cell_tick_seed_xs32_matches_reference_for_nonzero_inputs() {
+    // The xorshift-side seed hash mixes via `h ^= h >> 16` (line 270).
+    // Pin exact outputs for two distinct input sets to catch shift-direction
+    // and operator mutations without needing a full xorshift32 stream test.
+    assert_eq!(
+        cell_tick_seed_xs32(0, 0, Coord::new(0, 0, 0)),
+        3_127_886_501,
+    );
+    assert_eq!(
+        cell_tick_seed_xs32(1234, 3, Coord::new(2, 5, 7)),
+        3_577_743_044,
+    );
+}
+
+#[test]
+fn stochastic_floor_f64_uses_subtraction_for_fractional_part() {
+    // `frac = value - whole` must use subtraction, not addition. With
+    // value = 2.5 and whole = 2.0:
+    //   native frac = 0.5  → 50/50 split between 2 and 3
+    //   `-` → `+` mutated frac = 4.5 → r < 4.5 always true → always 3
+    //
+    // Seed 42 is chosen because Rng::new(42).next_f64() ≈ 0.761 > 0.5,
+    // so the native path takes the `r < frac` = false branch and returns
+    // exactly 2. The mutation always returns 3, so this test fires
+    // deterministically.
+    let mut r = Rng::new(42);
+    assert_eq!(r.stochastic_floor_f64(2.5), 2);
+}
+
 #[test]
 fn f32_and_f64_paths_diverge_on_constructed_boundary() {
     // The disagreement window for `frac = 0.15` lives in `u32 bits` space
