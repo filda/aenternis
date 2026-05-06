@@ -153,6 +153,19 @@
       margin-right: 4px;
     }
     button:hover { background: #34344a; }
+    .build-info {
+      position: fixed;
+      bottom: 8px;
+      right: 12px;
+      font-size: 10px;
+      color: #4a4a50;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .build-info code {
+      color: #6a6a70;
+    }
   </style>
 </head>
 <body>
@@ -337,8 +350,19 @@
     }
   }
   </script>
+  <div class="build-info">
+    <code>v__BUILD_VERSION__</code> ·
+    <code>__BUILD_COMMIT__</code> ·
+    __BUILD_DATE__
+  </div>
+
+  <!--
+    Production-deployed `main.js` is the tsc emit of `main.ts`. In Vite
+    dev mode the bundler resolves `./main.js` to `./main.ts` source
+    automatically, so the same script tag works in both contexts.
+  -->
   <script type="module">
-    import { bootstrap } from './main.ts';
+    import { bootstrap } from './main.js';
     bootstrap();
   </script>
 </body>

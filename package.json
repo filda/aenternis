@@ -14,6 +14,7 @@
     "test:cov": "vitest run --coverage",
     "test:mutation": "stryker run",
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
     "check": "npm run typecheck && npm run test:cov && npm run test:mutation"
   },
   "dependencies": {

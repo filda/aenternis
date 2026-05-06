@@ -124,7 +124,9 @@ export function bootstrap(): void {
   };
 
   // ----- Worker setup --------------------------------------------------------
-  const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+  // `./worker.js` resolves to the tsc-emitted file in production and to
+  // `./worker.ts` source in Vite dev (Vite rewrites `.js` → `.ts`).
+  const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   let latestSnapshot: SnapshotMsg | null = null;
   let workerReady = false;
 

@@ -4,11 +4,13 @@ name: CI
 # on every push to main and on every pull request.
 #
 # Jobs that run in parallel for fast feedback:
-#   - `test`     - vitest with coverage thresholds
-#   - `mutation` - Stryker mutation testing
-#   - `rust`     - cargo fmt + clippy + test (workspace)
+#   - `typecheck` - tsc --noEmit (TypeScript type errors)
+#   - `test`      - vitest with coverage thresholds (includes happy-dom
+#                   smoke test in tests/web/)
+#   - `mutation`  - Stryker mutation testing
+#   - `rust`      - cargo fmt + clippy + test (workspace)
 #
-# After `test` and `rust` pass on `main`, the `deploy` job builds the
+# After `typecheck`, `test` and `rust` pass on `main`, the `deploy` job builds the
 # wasm-pack bundle fresh and publishes the static site (root rozcestník,
 # prototypes, web/) to GitHub Pages. Mutation testing is intentionally
 # NOT a deploy gate — it runs ~30 min and isn't load-bearing for the
@@ -37,6 +39,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  typecheck:
+    name: TypeScript (tsc --noEmit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck
+        run: npm run typecheck
+
   test:
     name: Tests + Coverage
     runs-on: ubuntu-latest
@@ -132,7 +154,7 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    needs: [test, rust]
+    needs: [typecheck, test, rust]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -178,10 +200,27 @@ jobs:
       - name: Build WASM bundle
         run: wasm-pack build crates/aenternis-wasm --target web --release
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tsc emits `dist/src/*.js` and `dist/web/*.js` with `.ts`
+      # extensions on relative imports rewritten to `.js`
+      # (`rewriteRelativeImportExtensions`). Bare imports like `three`
+      # are left alone — they get resolved by the importmap inline in
+      # `web/index.html`.
+      - name: Build TypeScript
+        run: npm run build
+
       # The site is a flat copy of the static parts of the repo:
-      #   index.html, prototypes/, web/, src/, docs/, and the freshly
-      #   built crates/aenternis-wasm/pkg/. No bundling — `web/` works
-      #   via the importmap we added inline.
+      #   index.html, prototypes/, docs/, the wasm-pack pkg/, and the
+      #   tsc-emitted dist/web/ + dist/src/ trees mounted as web/ + src/.
+      #   No bundling — bare imports resolve via the importmap.
       #
       # The sed call rewrites `href="/foo"` → `href="foo"` in the root
       # rozcestník so the absolute paths land under Pages' `/<repo>/`
@@ -189,15 +228,35 @@ jobs:
       # browsers resolve the rewritten relatives against the page URL.
       - name: Assemble site
         run: |
-          mkdir -p _site
+          mkdir -p _site/web _site/src
           cp index.html _site/
           cp -r prototypes _site/
-          cp -r web _site/
-          cp -r src _site/
           cp -r docs _site/
+          cp web/index.html _site/web/index.html
+          cp dist/web/*.js _site/web/
+          cp dist/src/*.js _site/src/
           mkdir -p _site/crates/aenternis-wasm
           cp -r crates/aenternis-wasm/pkg _site/crates/aenternis-wasm/pkg
           sed -i 's|href="/|href="|g' _site/index.html
+
+      # Stamp the deployed pages with package version, short commit
+      # SHA, and build date so a viewer can tell which release they're
+      # looking at. Placeholders (`__BUILD_VERSION__`, `__BUILD_COMMIT__`,
+      # `__BUILD_DATE__`) are baked into `index.html` and `web/index.html`
+      # at source; in `npm run dev` they're visible verbatim, which is
+      # the intended signal that you're not on a deployed build.
+      - name: Inject build metadata
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%d)
+          for f in _site/index.html _site/web/index.html; do
+            sed -i \
+              -e "s|__BUILD_VERSION__|${VERSION}|g" \
+              -e "s|__BUILD_COMMIT__|${COMMIT}|g" \
+              -e "s|__BUILD_DATE__|${DATE}|g" \
+              "$f"
+          done
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -210,3 +269,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
