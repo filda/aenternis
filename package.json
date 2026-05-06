@@ -17,7 +17,7 @@
     "check": "npm run typecheck && npm run test:cov && npm run test:mutation"
   },
   "dependencies": {
-    "three": "^0.170.0"
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^9.6.1",
