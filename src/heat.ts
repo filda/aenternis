@@ -116,3 +116,23 @@ export function meanRelativeT(
   if (clamped <= 0) return MEAN_T * (clamped + 1);
   return MEAN_T + (1 - MEAN_T) * clamped;
 }
+
+/** Lower bound of the per-cell voxel size factor — cells at the cold
+ *  end of the heat ramp (`t = 0`) render at this fraction of the base
+ *  size. */
+export const VOXEL_SIZE_MIN = 0.80;
+
+/** Upper bound of the per-cell voxel size factor — hot-core cells
+ *  (`t = 1`) render at this fraction of the base size. */
+export const VOXEL_SIZE_MAX = 1.20;
+
+/** Per-cell voxel size factor as a linear function of the heat-ramp
+ *  `t`. Hot cells are slightly larger, cold cells slightly smaller —
+ *  it's a secondary visual cue layered on top of the color, not a
+ *  primary signal. The amplitude is small enough that the field still
+ *  reads as a regular grid; the size delta only kicks in for noticeable
+ *  outliers. */
+export function voxelSizeFactor(t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  return VOXEL_SIZE_MIN + (VOXEL_SIZE_MAX - VOXEL_SIZE_MIN) * clamped;
+}

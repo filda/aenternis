@@ -24,7 +24,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
-import { heatColor, meanRelativeT } from '../src/heat.ts';
+import { heatColor, meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
 import { parseProgramText } from '../src/program-text.ts';
 import type {
   CellDetailMsg,
@@ -115,6 +115,8 @@ export function bootstrap(): void {
     programText: requireEl('programText', HTMLTextAreaElement),
     programStatus: requireEl('programStatus', HTMLDivElement),
     sliceEnabled: requireEl('sliceEnabled', HTMLInputElement),
+    voxelSize: requireEl('voxelSize', HTMLInputElement),
+    voxelSizeVal: requireEl('voxelSizeVal', HTMLSpanElement),
     rngXs32: requireEl('rngXs32', HTMLInputElement),
     legacyTickOffset: requireEl('legacyTickOffset', HTMLInputElement),
     legacyFullPrecision: requireEl('legacyFullPrecision', HTMLInputElement),
@@ -390,6 +392,14 @@ export function bootstrap(): void {
     dom.trackerPos.textContent = `(${x},${y},${z}) E=${e.toLocaleString()}`;
   }
 
+  // ----- Render settings -----------------------------------------------------
+  let voxelScale = 1.0;
+  dom.voxelSize.addEventListener('input', () => {
+    voxelScale = parseFloat(dom.voxelSize.value);
+    dom.voxelSizeVal.textContent = voxelScale.toFixed(2);
+    lastRenderedTick = -1; // force a re-render even if no new snapshot.
+  });
+
   // ----- Slice (z = 0 only) — proto-9-style 2D view --------------------------
   let sliceEnabled = false;
   dom.sliceEnabled.addEventListener('change', () => {
@@ -553,11 +563,16 @@ export function bootstrap(): void {
         voxelMesh.setMatrixAt(i, tempMatrix);
         continue;
       }
+
+      // Compute the heat-ramp t once per cell — both the color and the
+      // per-cell size factor depend on it.
+      const t = meanRelativeT(e, totalE, liveCellCount);
+      const perScale = voxelScale * voxelSizeFactor(t);
+      tempScale.set(perScale, perScale, perScale);
       tempPos.set(x, y, z);
       tempMatrix.compose(tempPos, tempQuat, tempScale);
       voxelMesh.setMatrixAt(i, tempMatrix);
 
-      const t = meanRelativeT(e, totalE, liveCellCount);
       const [r, g, b] = heatColor(t);
       tempColor.setRGB(r, g, b);
       voxelMesh.setColorAt(i, tempColor);

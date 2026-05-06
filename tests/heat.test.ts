@@ -3,9 +3,12 @@ import {
   HEAT_STOPS,
   MEAN_T,
   T_SPREAD,
+  VOXEL_SIZE_MAX,
+  VOXEL_SIZE_MIN,
   absoluteEnergyT,
   heatColor,
   meanRelativeT,
+  voxelSizeFactor,
 } from '../src/heat.ts';
 
 describe('HEAT_STOPS', () => {
@@ -229,5 +232,45 @@ describe('meanRelativeT', () => {
       expect(t).toBeGreaterThanOrEqual(last);
       last = t;
     }
+  });
+});
+
+describe('voxelSizeFactor', () => {
+  it('returns VOXEL_SIZE_MIN at t=0', () => {
+    expect(voxelSizeFactor(0)).toBeCloseTo(VOXEL_SIZE_MIN, 10);
+  });
+
+  it('returns VOXEL_SIZE_MAX at t=1', () => {
+    expect(voxelSizeFactor(1)).toBeCloseTo(VOXEL_SIZE_MAX, 10);
+  });
+
+  it('returns the midpoint at t=0.5', () => {
+    expect(voxelSizeFactor(0.5)).toBeCloseTo((VOXEL_SIZE_MIN + VOXEL_SIZE_MAX) / 2, 10);
+  });
+
+  it('clamps t<0 to VOXEL_SIZE_MIN', () => {
+    expect(voxelSizeFactor(-1)).toBeCloseTo(VOXEL_SIZE_MIN, 10);
+  });
+
+  it('clamps t>1 to VOXEL_SIZE_MAX', () => {
+    expect(voxelSizeFactor(2)).toBeCloseTo(VOXEL_SIZE_MAX, 10);
+  });
+
+  it('is monotonically non-decreasing in t', () => {
+    let last = -Infinity;
+    for (const t of [0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]) {
+      const f = voxelSizeFactor(t);
+      expect(f).toBeGreaterThanOrEqual(last);
+      last = f;
+    }
+  });
+
+  it('keeps the bounds within a sensible visual range', () => {
+    // The bounds are an editorial choice — too small and cold cells
+    // disappear entirely; too large and the field becomes a blob. Pin
+    // the contract so a careless tweak gets caught.
+    expect(VOXEL_SIZE_MIN).toBeGreaterThan(0.5);
+    expect(VOXEL_SIZE_MAX).toBeLessThan(1.5);
+    expect(VOXEL_SIZE_MIN).toBeLessThan(VOXEL_SIZE_MAX);
   });
 });
