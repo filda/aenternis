@@ -113,6 +113,41 @@ fn bounding_box_spans_inserted_cells() {
 }
 
 #[test]
+fn bounding_box_y_max_extends_when_later_cell_has_larger_y() {
+    // BTreeMap iteration is sorted by (x, y, z), so the first cell wins
+    // initial y_max. We need a cell whose y is strictly greater than the
+    // first cell's y (and whose x is greater so it iterates *after* the
+    // first) to verify the `>` comparison actually fires for y_max.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![1])); // first
+    w.insert(Coord::new(1, 9, 0), Cell::with_memory(vec![1])); // y bumps
+    let bb = w.bounding_box().unwrap();
+    assert_eq!(bb.3, 9, "expected y_max = 9, got {bb:?}");
+}
+
+#[test]
+fn bounding_box_z_max_extends_when_later_cell_has_larger_z() {
+    // Same idea for z_max. Without this, both `>` → `==` and `>` → `>=`
+    // mutations leave z_max untouched (assignment is no-op when neither
+    // strictly greater nor equal), and the test never observes the
+    // comparison.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1])); // first
+    w.insert(Coord::new(1, 0, 9), Cell::with_memory(vec![1])); // z bumps
+    let bb = w.bounding_box().unwrap();
+    assert_eq!(bb.5, 9, "expected z_max = 9, got {bb:?}");
+}
+
+#[test]
+fn is_empty_returns_false_when_world_has_cells() {
+    // A world with at least one cell must not report empty. Pins down the
+    // truthful return value so an `is_empty -> true` mutation is caught.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1]));
+    assert!(!w.is_empty());
+}
+
+#[test]
 fn rng_kind_persisted_on_world() {
     // The choice survives through the world struct so subsequent ticks
     // (fresh_cell on alloc-on-write, compute_natural_rates on layout)
