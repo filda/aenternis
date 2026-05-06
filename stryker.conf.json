@@ -6,7 +6,7 @@
   "reporters": ["html", "clear-text", "progress"],
   "coverageAnalysis": "perTest",
   "mutate": [
-    "src/**/*.js"
+    "src/**/*.ts"
   ],
   "ignorePatterns": [
     "prototypes/**",

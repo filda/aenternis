@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 // Vitest configuration for Aenternis production code.
 //
 // Scope:
-//   - tests/**/*.test.js  -> unit tests for src/**/*.js (production-track code)
+//   - tests/**/*.test.ts  -> unit tests for src/**/*.ts (production-track code)
 //   - prototypes/**       -> excluded; the prototypes are throwaway lab experiments
 //                            and are explicitly not part of the test gate.
 //
@@ -12,11 +12,11 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.js'],
+    include: ['tests/**/*.test.ts'],
     environment: 'node',
     coverage: {
       provider: 'v8',
-      include: ['src/**/*.js'],
+      include: ['src/**/*.ts'],
       exclude: [
         'prototypes/**',
         'tests/**',

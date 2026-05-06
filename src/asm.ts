@@ -26,8 +26,12 @@
 // are derived from `OPCODES` below; adding a new opcode only requires
 // extending that map (and the Rust VM, of course).
 
-/** @type {Record<string, { code: number, args: number }>} */
-export const OPCODES = Object.freeze({
+export interface Opcode {
+  readonly code: number;
+  readonly args: number;
+}
+
+export const OPCODES: Readonly<Record<string, Opcode>> = Object.freeze({
   nop:     { code: 0x00, args: 0 },
   set:     { code: 0x01, args: 2 }, // a, v
   copy:    { code: 0x02, args: 2 }, // a, b
@@ -53,28 +57,30 @@ export const OPCODES = Object.freeze({
   srate:   { code: 0x16, args: 2 }, // d, a
 });
 
-/** @type {Record<string, number>} */
 export const DIRECTIONS = Object.freeze({
   xp: 0, xn: 1, yp: 2, yn: 3, zp: 4, zn: 5,
-});
+} as const);
+
+type Direction = keyof typeof DIRECTIONS;
+
+function isDirection(s: string): s is Direction {
+  return Object.prototype.hasOwnProperty.call(DIRECTIONS, s);
+}
 
 /**
  * Try to parse a single operand into a u32. Returns `null` on failure.
  * The caller distinguishes "needs label resolution" from "garbage" by
  * passing `labels`; if the operand is an identifier and `labels` has
  * an entry, the slot offset is returned.
- *
- * @param {string} s
- * @param {Map<string, number>} labels
- * @returns {number | null}
  */
-export function resolveOperand(s, labels) {
+export function resolveOperand(s: string, labels: Map<string, number>): number | null {
   const t = s.trim();
   if (t.length === 0) return null;
 
   // Direction shorthand
-  if (Object.prototype.hasOwnProperty.call(DIRECTIONS, t.toLowerCase())) {
-    return DIRECTIONS[t.toLowerCase()];
+  const lower = t.toLowerCase();
+  if (isDirection(lower)) {
+    return DIRECTIONS[lower];
   }
 
   // Hex
@@ -91,10 +97,20 @@ export function resolveOperand(s, labels) {
 
   // Label
   if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(t) && labels.has(t)) {
-    return labels.get(t);
+    // labels.has(t) guarantees the entry exists; the `!` is justified.
+    return labels.get(t)!;
   }
 
   return null;
+}
+
+type Token =
+  | { readonly kind: 'raw'; readonly value: number; readonly lineNo: number }
+  | { readonly kind: 'instr'; readonly code: number; readonly args: readonly string[]; readonly lineNo: number };
+
+export interface AssembleResult {
+  readonly slots: Uint32Array;
+  readonly errors: string[];
 }
 
 /**
@@ -106,27 +122,22 @@ export function resolveOperand(s, labels) {
  *
  * Returns `{ slots, errors }`. `slots` is always present (best-effort
  * partial output even on errors); `errors` is empty on a clean parse.
- *
- * @param {string} text
- * @returns {{ slots: Uint32Array, errors: string[] }}
  */
-export function assemble(text) {
-  /** @type {string[]} */
-  const errors = [];
-  /** @type {Map<string, number>} */
-  const labels = new Map();
-  /** @type {Array<{ kind: "raw" | "instr", code?: number, args?: string[], lineNo: number, value?: number }>} */
-  const tokens = [];
+export function assemble(text: string): AssembleResult {
+  const errors: string[] = [];
+  const labels = new Map<string, number>();
+  const tokens: Token[] = [];
   let slotOffset = 0;
 
   // ---- Pass 1: tokenize + label collection ---------------------------------
 
   const lines = text.split(/\r?\n/);
   for (let lineNo = 0; lineNo < lines.length; lineNo++) {
-    let line = lines[lineNo];
+    // The `for` loop bounds guarantee `lines[lineNo]` is defined.
+    let line = lines[lineNo]!;
 
     // Strip comments
-    const commentAt = line.indexOf(";");
+    const commentAt = line.indexOf(';');
     if (commentAt !== -1) line = line.slice(0, commentAt);
     line = line.trim();
     if (line.length === 0) continue;
@@ -134,13 +145,14 @@ export function assemble(text) {
     // Optional label prefix: "name: rest"
     const labelMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
     if (labelMatch) {
-      const name = labelMatch[1];
+      // Both capture groups are mandatory in the regex above.
+      const name = labelMatch[1]!;
       if (labels.has(name)) {
         errors.push(`line ${lineNo + 1}: duplicate label "${name}"`);
       } else {
         labels.set(name, slotOffset);
       }
-      line = labelMatch[2].trim();
+      line = labelMatch[2]!.trim();
       if (line.length === 0) continue;
     }
 
@@ -151,7 +163,7 @@ export function assemble(text) {
         errors.push(`line ${lineNo + 1}: cannot parse number "${line}"`);
         continue;
       }
-      tokens.push({ kind: "raw", value, lineNo });
+      tokens.push({ kind: 'raw', value, lineNo });
       slotOffset += 1;
       continue;
     }
@@ -162,14 +174,15 @@ export function assemble(text) {
       errors.push(`line ${lineNo + 1}: cannot parse "${line}"`);
       continue;
     }
-    const mnemonic = head[1].toLowerCase();
-    const argsRaw = head[2].trim();
+    // Both capture groups are mandatory in the regex above.
+    const mnemonic = head[1]!.toLowerCase();
+    const argsRaw = head[2]!.trim();
     const op = OPCODES[mnemonic];
     if (!op) {
       errors.push(`line ${lineNo + 1}: unknown mnemonic "${mnemonic}"`);
       continue;
     }
-    const args = argsRaw.length > 0 ? argsRaw.split(",").map((s) => s.trim()) : [];
+    const args = argsRaw.length > 0 ? argsRaw.split(',').map((s) => s.trim()) : [];
     if (args.length !== op.args) {
       errors.push(
         `line ${lineNo + 1}: ${mnemonic} expects ${op.args} arg(s), got ${args.length}`,
@@ -177,7 +190,7 @@ export function assemble(text) {
       continue;
     }
 
-    tokens.push({ kind: "instr", code: op.code, args, lineNo });
+    tokens.push({ kind: 'instr', code: op.code, args, lineNo });
     slotOffset += 1 + op.args;
   }
 
@@ -186,7 +199,7 @@ export function assemble(text) {
   const slots = new Uint32Array(slotOffset);
   let cursor = 0;
   for (const t of tokens) {
-    if (t.kind === "raw") {
+    if (t.kind === 'raw') {
       slots[cursor++] = t.value;
       continue;
     }

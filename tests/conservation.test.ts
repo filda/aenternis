@@ -4,7 +4,7 @@ import {
   totalSlots,
   isEnergyConserved,
   energyDelta,
-} from '../src/conservation.js';
+} from '../src/conservation.ts';
 
 describe('totalEnergy', () => {
   it('sums energy across cells', () => {
@@ -51,6 +51,14 @@ describe('totalSlots', () => {
 
   it('skips null cells and cells with non-array memory', () => {
     expect(totalSlots([null, { memory: 42 }, { memory: [1, 2] }])).toBe(2);
+  });
+
+  it('skips cells whose memory is null', () => {
+    expect(totalSlots([{ memory: null }, { memory: [1, 2] }])).toBe(2);
+  });
+
+  it('ignores objects whose length is not a number', () => {
+    expect(totalSlots([{ memory: { length: 'foo' } }, { memory: [1, 2] }])).toBe(2);
   });
 });
 
