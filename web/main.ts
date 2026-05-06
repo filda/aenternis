@@ -25,6 +25,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
 import { heatColor, meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
+import { JITTER_AMPLITUDE, gridJitter } from '../src/jitter.ts';
 import { parseProgramText } from '../src/program-text.ts';
 import type {
   CellDetailMsg,
@@ -361,7 +362,14 @@ export function bootstrap(): void {
 
     if (highlightMesh) {
       highlightMesh.visible = true;
-      highlightMesh.position.set(x, y, z);
+      // Match the same jitter applied to the voxel mesh so the
+      // wireframe stays glued to its cell instead of floating to the
+      // grid center.
+      highlightMesh.position.set(
+        x + gridJitter(x, y, z, 0) * JITTER_AMPLITUDE,
+        y + gridJitter(x, y, z, 1) * JITTER_AMPLITUDE,
+        z + gridJitter(x, y, z, 2) * JITTER_AMPLITUDE,
+      );
       const pulse = 1.0 + 0.08 * Math.sin(performance.now() / 250);
       highlightMesh.scale.setScalar(pulse);
     }
@@ -569,7 +577,13 @@ export function bootstrap(): void {
       const t = meanRelativeT(e, totalE, liveCellCount);
       const perScale = voxelScale * voxelSizeFactor(t);
       tempScale.set(perScale, perScale, perScale);
-      tempPos.set(x, y, z);
+      // Tiny deterministic per-cell offset breaks grid-aligned moire
+      // in dense fields. Stable across frames so cells don't shimmer.
+      tempPos.set(
+        x + gridJitter(x, y, z, 0) * JITTER_AMPLITUDE,
+        y + gridJitter(x, y, z, 1) * JITTER_AMPLITUDE,
+        z + gridJitter(x, y, z, 2) * JITTER_AMPLITUDE,
+      );
       tempMatrix.compose(tempPos, tempQuat, tempScale);
       voxelMesh.setMatrixAt(i, tempMatrix);
 
@@ -598,7 +612,9 @@ export function bootstrap(): void {
     const halfSpan = Math.max(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY, bbox.maxZ - bbox.minZ, 2) / 2 + 1;
     if (!voxelMesh.boundingSphere) voxelMesh.boundingSphere = new THREE.Sphere();
     voxelMesh.boundingSphere.center.set(cx, cy, cz);
-    voxelMesh.boundingSphere.radius = halfSpan;
+    // Add a small slack to cover the jitter-displaced voxels so the
+    // raycaster doesn't lose hits at the field's edge.
+    voxelMesh.boundingSphere.radius = halfSpan + JITTER_AMPLITUDE;
 
     updateTrackerVisuals(analysis.maxCellIdx, snap, stride);
   }
