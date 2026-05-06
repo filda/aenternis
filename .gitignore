@@ -9,8 +9,7 @@ reports/
 coverage/
 target/
 **/*.rs.bk
-crates/*/pkg/*
-!crates/*/pkg/*.d.ts
+crates/*/pkg/
 /AGENTS.local.md
 /.claude/settings.local.json
 
