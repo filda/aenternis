@@ -118,7 +118,7 @@ fn lay_out_pointers_includes_active_outflow() {
 fn apply_outflow_with_empty_outflow_is_noop() {
     let mut w = SparseWorld::big_bang(7, 16);
     let snapshot_before = w.total_energy();
-    apply_outflow(&mut w, &Outflow::new());
+    apply_outflow(&mut w, &Outflow::default());
     assert_eq!(w.total_energy(), snapshot_before);
     assert_eq!(w.len(), 1);
 }
@@ -210,7 +210,7 @@ fn apply_outflow_skips_outflow_for_missing_source() {
     // between snapshot and apply). The function must tolerate that
     // and ignore the entry rather than panic.
     let mut w = SparseWorld::new(0);
-    let mut outflow = Outflow::new();
+    let mut outflow = Outflow::default();
     let mut per_dir: [Vec<u32>; Direction::COUNT] = Default::default();
     per_dir[Direction::Xp.index()] = vec![42];
     outflow.insert(Coord::ORIGIN, per_dir);

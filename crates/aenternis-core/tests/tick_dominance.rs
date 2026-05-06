@@ -261,7 +261,7 @@ fn outflow_with_missing_source_treats_attacker_pre_as_zero() {
     // Inflow lands at the void target with full dominance.
     let mut w = SparseWorld::new(0);
 
-    let mut outflow = Outflow::new();
+    let mut outflow = Outflow::default();
     outflow.insert(
         Coord::ORIGIN,
         one_directional_outflow(vec![42], Direction::Xp),

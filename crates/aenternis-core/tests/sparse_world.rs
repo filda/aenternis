@@ -384,17 +384,40 @@ fn gc_empty_clears_world_with_only_empty_cells() {
 // ----- iter / iter_mut / coords -----
 
 #[test]
-fn iter_walks_cells_in_canonical_order() {
+fn sorted_iter_walks_cells_in_canonical_order() {
     let mut w = SparseWorld::new(0);
-    // Insert in reverse-canonical order to confirm BTreeMap re-sorts.
+    // Insert in reverse-canonical order; sorted_iter must still yield
+    // them in `(x, y, z)` lex order regardless of insertion sequence
+    // and regardless of the underlying FxHashMap's hash order.
     w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![3]));
     w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![2]));
     w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1]));
 
-    let collected: Vec<Coord> = w.coords().copied().collect();
-    // BTreeMap order is lexicographic by (x, y, z).
+    let collected: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
     assert_eq!(
         collected,
+        vec![
+            Coord::new(0, 0, 1),
+            Coord::new(0, 1, 0),
+            Coord::new(2, 0, 0),
+        ]
+    );
+}
+
+#[test]
+fn coords_yields_keys_independent_of_order() {
+    // After the FxHashMap switch, `coords()` no longer guarantees lex
+    // order — only that every inserted key appears exactly once. The
+    // sort happens at the snapshot boundary or via `sorted_iter`.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![3]));
+    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![2]));
+    w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1]));
+
+    let mut keys: Vec<Coord> = w.coords().copied().collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
         vec![
             Coord::new(0, 0, 1),
             Coord::new(0, 1, 0),
@@ -453,18 +476,17 @@ fn into_iter_for_mut_reference_allows_modification() {
 }
 
 #[test]
-fn coords_yields_just_keys_in_order() {
+fn coords_yields_just_inserted_keys() {
+    // `coords()` returns hash order — only check the key set, not the
+    // sequence. A separate test (`sorted_iter_walks_cells_in_canonical_order`)
+    // covers the canonical-order contract.
     let mut w = SparseWorld::new(0);
     w.insert(Coord::new(5, 0, 0), Cell::with_memory(vec![1]));
     w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
     w.insert(Coord::new(3, 0, 0), Cell::with_memory(vec![1]));
-    let keys: Vec<Coord> = w.coords().copied().collect();
-    assert_eq!(
-        keys,
-        vec![
-            Coord::new(2, 0, 0),
-            Coord::new(3, 0, 0),
-            Coord::new(5, 0, 0)
-        ]
-    );
+    let keys: std::collections::HashSet<Coord> = w.coords().copied().collect();
+    assert_eq!(keys.len(), 3);
+    assert!(keys.contains(&Coord::new(2, 0, 0)));
+    assert!(keys.contains(&Coord::new(3, 0, 0)));
+    assert!(keys.contains(&Coord::new(5, 0, 0)));
 }

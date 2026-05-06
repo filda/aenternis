@@ -8,10 +8,13 @@
 resolver = "2"
 members = ["crates/*"]
 
+[workspace.dependencies]
+rustc-hash = "2"
+
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.78"
+rust-version = "1.85"
 license = "MIT"
 authors = ["Filip Subr"]
 repository = "https://github.com/filipsubr/aenternis"

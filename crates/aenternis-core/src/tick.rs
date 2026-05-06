@@ -30,7 +30,7 @@
 //! That's a `O(N)` extra read pass per tick, but it keeps the borrow
 //! checker happy without `RefCell` or unsafe.
 
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 
 use crate::cell::proportional_clamp;
 use crate::{Coord, Direction, Rng, SparseWorld};
@@ -62,7 +62,7 @@ use crate::{Coord, Direction, Rng, SparseWorld};
 /// before this point, but the function is tolerant if they're still around.
 pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // Phase 1: snapshot energies. Immutable borrow of `world.cells`.
-    let snapshot: BTreeMap<Coord, u32> = world
+    let snapshot: FxHashMap<Coord, u32> = world
         .cells
         .iter()
         .map(|(coord, cell)| (*coord, cell.energy()))
@@ -157,7 +157,7 @@ fn delta_to_f32(delta: u32) -> f32 {
 /// cell next, without modifying the source cells. Applying the outflow
 /// (shrinking source memory + appending into neighbors) is the inflow
 /// phase, scheduled for the next iteration.
-pub type Outflow = BTreeMap<Coord, [Vec<u32>; Direction::COUNT]>;
+pub type Outflow = FxHashMap<Coord, [Vec<u32>; Direction::COUNT]>;
 
 /// Collect the outflow snapshot for every cell in `world`.
 ///
@@ -179,9 +179,9 @@ pub type Outflow = BTreeMap<Coord, [Vec<u32>; Direction::COUNT]>;
 /// pointer layout) and never grow the *amount*, which silently breaks
 /// the `port` instruction's whole purpose.
 ///
-/// **Determinism:** iterates the world in `BTreeMap` order; the result is
-/// reproducible for a given `(rates, active_outflow, pointers, memory)`
-/// quadruple per cell.
+/// **Determinism:** iterates the world in `FxHashMap` hash order. Output
+/// is keyed by `Coord` and independent of iteration order — same per-cell
+/// inputs always produce the same per-direction slots.
 ///
 /// **Allocation:** allocates one `Vec<u32>` per direction per cell, even
 /// when the rate is zero. That's six small allocations per cell per tick,
@@ -189,7 +189,7 @@ pub type Outflow = BTreeMap<Coord, [Vec<u32>; Direction::COUNT]>;
 /// later if profiling shows it's worth the complexity.
 #[must_use]
 pub fn collect_outflow(world: &SparseWorld) -> Outflow {
-    let mut outflow = Outflow::new();
+    let mut outflow = Outflow::default();
     for (coord, cell) in world {
         let mem_size = cell.memory.len();
         let mut per_direction: [Vec<u32>; Direction::COUNT] = Default::default();
@@ -364,13 +364,13 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
     // Phase 1: snapshot pre-step energies + per-source total outflow.
     // -------------------------------------------------------------------
-    let pre_energy: BTreeMap<Coord, u32> = world
+    let pre_energy: FxHashMap<Coord, u32> = world
         .cells
         .iter()
         .map(|(c, cell)| (*c, cell.energy()))
         .collect();
 
-    let mut total_outflow: BTreeMap<Coord, u32> = BTreeMap::new();
+    let mut total_outflow: FxHashMap<Coord, u32> = FxHashMap::default();
     for (coord, per_dir) in outflow {
         let total: u32 = per_dir
             .iter()
@@ -398,7 +398,7 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // share the same dominance.
 
     let move_threshold = world.move_threshold.max(f32::EPSILON);
-    let mut inflows_by_target: BTreeMap<Coord, Vec<InflowEntry<'_>>> = BTreeMap::new();
+    let mut inflows_by_target: FxHashMap<Coord, Vec<InflowEntry<'_>>> = FxHashMap::default();
 
     for (source_coord, per_dir) in outflow {
         let attacker_pre = pre_energy.get(source_coord).copied().unwrap_or(0);
@@ -536,7 +536,7 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     // Phase 1: snapshot neighbor energies for every existing cell.
     let coords: Vec<Coord> = world.cells.keys().copied().collect();
-    let mut neighbor_lookup: BTreeMap<Coord, [u32; Direction::COUNT]> = BTreeMap::new();
+    let mut neighbor_lookup: FxHashMap<Coord, [u32; Direction::COUNT]> = FxHashMap::default();
     for coord in &coords {
         let mut energies = [0u32; Direction::COUNT];
         for &d in &Direction::ALL {

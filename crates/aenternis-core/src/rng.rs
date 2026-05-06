@@ -135,7 +135,7 @@ impl Rng {
     }
 
     /// Advance state and return the next 32-bit pseudo-random integer.
-    pub fn next_u32(&mut self) -> u32 {
+    pub const fn next_u32(&mut self) -> u32 {
         match self {
             Self::Pcg { state } => {
                 let old_state = *state;

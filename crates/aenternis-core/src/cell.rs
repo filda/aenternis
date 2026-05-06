@@ -163,7 +163,7 @@ impl Cell {
 
     /// Reset transient per-tick state: pointer overrides and active outflow.
     /// Called after the outflow phase of every tick.
-    pub fn end_of_tick(&mut self) {
+    pub const fn end_of_tick(&mut self) {
         self.pointer_override = [false; Direction::COUNT];
         self.active_outflow = [0; Direction::COUNT];
     }

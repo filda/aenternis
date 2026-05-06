@@ -128,6 +128,7 @@ impl World {
     /// matches the `mechanics.md` spec; prototype 9 used `1.0` for a
     /// less-aggressive, more wispy regime.
     #[wasm_bindgen(js_name = setMoveThreshold)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn set_move_threshold(&mut self, threshold: f32) {
         self.inner.move_threshold = threshold;
     }
@@ -149,6 +150,7 @@ impl World {
     /// per-tick stream bit-for-bit. Toggling mid-run is safe; the
     /// change applies on the next `step` call.
     #[wasm_bindgen(js_name = setLegacyTickOffset)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn set_legacy_tick_offset(&mut self, enabled: bool) {
         self.inner.legacy_tick_offset = enabled;
     }
@@ -168,6 +170,7 @@ impl World {
     /// 9-B exactly. Toggling mid-run is safe; the change applies on
     /// the next `step` call.
     #[wasm_bindgen(js_name = setLegacyFullPrecision)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn set_legacy_full_precision(&mut self, enabled: bool) {
         self.inner.legacy_full_precision = enabled;
     }
@@ -190,6 +193,7 @@ impl World {
     /// saturates and the proportional clamp distributes outflow
     /// evenly. Toggling mid-run is safe.
     #[wasm_bindgen(js_name = setLegacyPortWrap)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn set_legacy_port_wrap(&mut self, enabled: bool) {
         self.inner.legacy_port_wrap = enabled;
     }
@@ -211,6 +215,7 @@ impl World {
     /// nop in JS but a 3-slot opcode in default Rust. Toggling
     /// mid-run is safe.
     #[wasm_bindgen(js_name = setLegacyOpcodeSet)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn set_legacy_opcode_set(&mut self, enabled: bool) {
         self.inner.legacy_opcode_set = enabled;
     }
@@ -287,9 +292,9 @@ impl World {
     /// about the sign bit; for rendering, a plain `Uint32Array` view
     /// gives the right values via two's-complement.
     ///
-    /// Iteration order is deterministic — the underlying `BTreeMap`
-    /// walks coordinates in `(x, y, z)` lexicographic order. That
-    /// matches the iteration order seen by every other read API.
+    /// Iteration order is `(x, y, z)` lexicographic — the snapshot
+    /// boundary sorts the underlying `FxHashMap` (which iterates in
+    /// non-lex hash order) so JS callers see the canonical layout.
     ///
     /// Returns a freshly-allocated `Vec` each call. For multi-million
     /// cell worlds this is wasteful; a persistent buffer + length API
@@ -299,7 +304,10 @@ impl World {
     #[wasm_bindgen(js_name = cellsSnapshot)]
     pub fn cells_snapshot(&self) -> Vec<u32> {
         let mut out = Vec::with_capacity(self.inner.cells.len() * Self::SNAPSHOT_STRIDE);
-        for (coord, cell) in &self.inner {
+        // sorted_iter walks cells in `(x, y, z)` lex order — the snapshot's
+        // documented contract. The world's internal FxHashMap iterates in
+        // hash order, which is deterministic but not lex.
+        for (coord, cell) in self.inner.sorted_iter() {
             out.push(coord.x as u32);
             out.push(coord.y as u32);
             out.push(coord.z as u32);
