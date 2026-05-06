@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "test:mutation": "stryker run",
-    "check": "npm run test:cov && npm run test:mutation"
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test:cov && npm run test:mutation"
   },
   "dependencies": {
     "three": "^0.170.0"
@@ -22,6 +23,7 @@
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/vitest-runner": "^9.6.1",
     "@vitest/coverage-v8": "^4.1.5",
+    "typescript": "^5.7.2",
     "vite": "^7.0.0",
     "vitest": "^4.1.5"
   }
