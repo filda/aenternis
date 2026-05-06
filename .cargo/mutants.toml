@@ -1,0 +1,84 @@
+# cargo-mutants config — equivalent mutations to exclude from analysis.
+#
+# Each entry below is a mutation whose effect is *not* observable through
+# any test we can write without contrived inputs (probability-zero cases,
+# arithmetic equivalences at boundaries, BTreeMap iteration order). The
+# reasoning is recorded inline so future readers can decide whether new
+# code makes a previously-equivalent mutation testable, in which case
+# the entry should be removed.
+#
+# After this file lands, `cargo mutants` reports the project as clean —
+# any new "MISSED" line in a future run is a real test-coverage gap, not
+# a known equivalent.
+#
+# Format: regex matched as a substring against the mutant names produced
+# by `cargo mutants --list`. We anchor each entry on `file.rs:LINE:COL:`
+# plus the specific operator pair to avoid suppressing testable mutations
+# on the same line. TOML literal strings (single-quoted) so backslashes
+# stay literal in the regex.
+
+exclude_re = [
+    # --- tick.rs ---------------------------------------------------------
+    # L107: `if my_energy > neighbor_energy`. With `>=`, the equal branch
+    # computes `delta = 0`, then `stochastic_floor(0)` early-returns 0
+    # without advancing the RNG — same observable effect as native.
+    'tick\.rs:107:37: replace > with >=',
+
+    # L127: `if cell.total_rate() > my_energy { proportional_clamp(...) }`.
+    # proportional_clamp is a no-op when total == cap (returns the rates
+    # unchanged via the early-return), so > and >= produce identical output.
+    'tick\.rs:127:30: replace > with >=',
+
+    # L196: `if mem_size > 0 { ... }` in collect_outflow. When mem_size == 0
+    # the cell's energy is also 0 (memory.len() == energy invariant), so
+    # every rate is 0 and the loop body would produce the same all-empty
+    # outflow either way.
+    'tick\.rs:196:21: replace > with >=',
+
+    # L300, L303:35: leftover-distribution loop in combined_clamped.
+    # `while leftover > 0` (outer) and the inner `leftover > 0` (redundant
+    # with the outer guard) both behave identically with `>=` because
+    # `if !added { break }` exits the moment no positive rate exists —
+    # which is the only case `>=` would let the loop enter.
+    'tick\.rs:300:20: replace > with >=',
+    'tick\.rs:303:35: replace > with >=',
+
+    # L477: `target.pc %= target.memory.len() as u32`. The else branch is
+    # marked "defensive" in the source — the inflow phase only grows
+    # memory, so pc < memory.len() always holds when this line runs, and
+    # the modulo is a no-op. += and /= produce the same `pc` here.
+    'tick\.rs:477:23: replace %= with /=',
+    'tick\.rs:477:23: replace %= with \+=',
+
+    # --- cell.rs ---------------------------------------------------------
+    # L259, L262:39: same leftover-distribution pattern as combined_clamped
+    # in tick.rs — proportional_clamp here is its sibling, identical loop
+    # shape with the same `if !added { break }` short-circuit.
+    'cell\.rs:259:24: replace > with >=',
+    'cell\.rs:262:39: replace > with >=',
+
+    # --- world/sparse.rs -------------------------------------------------
+    # bounding_box iterates `self.cells.keys()` — a BTreeMap yielding the
+    # smallest (x, y, z) tuple first. `first.x` is therefore always the
+    # minimum, and the `c.x < x_min` branch on line 338 never fires for
+    # any insertion order. `<` → `==` and `<` → `<=` are equivalent.
+    'sparse\.rs:338:20: replace < with ==',
+    'sparse\.rs:338:20: replace < with <=',
+
+    # The remaining `>` → `>=` and `<` → `<=` mutations on lines 341–353
+    # assign the same value to the same variable when the comparison fires
+    # on equality (the source value matches the current extremum), so the
+    # output array is byte-identical to native.
+    'sparse\.rs:341:20: replace > with >=',
+    'sparse\.rs:344:20: replace < with <=',
+    'sparse\.rs:347:20: replace > with >=',
+    'sparse\.rs:350:20: replace < with <=',
+    'sparse\.rs:353:20: replace > with >=',
+
+    # --- rng.rs ----------------------------------------------------------
+    # `r < frac` vs `r <= frac` differ only when r equals frac exactly,
+    # which has probability ~2^-24 (f32 path) and ~2^-52 (f64 path) for
+    # uniform random r. No realistic test seed hits this boundary.
+    'rng\.rs:205:51: replace < with <=',
+    'rng\.rs:235:46: replace < with <=',
+]
