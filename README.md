@@ -92,6 +92,8 @@ The Vite dev server is required for the Web Worker mode in prototype 8 (Chrome b
 
 ## Tests
 
+### JavaScript
+
 Production code under `src/` is covered by [Vitest](https://vitest.dev/) and mutation-tested by [Stryker](https://stryker-mutator.io/). Lab prototypes under `prototypes/**` are intentionally exempt.
 
 ```
@@ -103,6 +105,29 @@ npm run check         # test:cov && test:mutation — the verification gate
 ```
 
 `npm run check` is what CI runs on every push and pull request (see `.github/workflows/ci.yml`). Reports land in `reports/coverage/` and `reports/mutation/`.
+
+### Rust
+
+The workspace is tested with `cargo test`, plus [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) for coverage and [cargo-mutants](https://mutants.rs/) for mutation testing.
+
+```sh
+cargo test --workspace --all-targets       # unit + integration tests
+cargo llvm-cov --workspace --html          # coverage → reports/rust-coverage/html/
+cargo mutants --workspace                  # mutation → reports/rust-mutation/
+```
+
+`cargo fmt`, `cargo clippy`, and `cargo test` run in CI on every push.
+
+**Mutation testing runs locally only** — a full workspace run takes ~13 minutes, too slow to gate every PR on. Run it after meaningful logic changes (new opcodes, new physics phases, RNG tweaks). Current baseline is **0 missed mutants**; any `MISSED` line in your run is a real test-coverage gap.
+
+`.cargo/mutants.toml` lists 18 mutations classified as **equivalent** — their effect is mathematically indistinguishable from native code (boundary cases at probability 0, BTreeMap iteration ordering, no-op assignments at equality). Each entry is documented with reasoning; remove an entry only when new code makes that mutation observable.
+
+Install the Rust test tools once per machine:
+
+```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov cargo-mutants
+```
 
 ## Prototypes
 
