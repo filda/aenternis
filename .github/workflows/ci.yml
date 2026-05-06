@@ -42,10 +42,39 @@ jobs:
   typecheck:
     name: TypeScript (tsc --noEmit)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # `web/worker.ts` imports from `crates/aenternis-wasm/pkg/aenternis_wasm.js`,
+      # which is a wasm-pack output (not committed — generated artifact).
+      # `tsc` resolves the import via the colocated `.d.ts`, so we have to
+      # build the bundle before typecheck. Same step as the `deploy` job.
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-typecheck-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-typecheck-
+            cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build WASM bundle
+        run: wasm-pack build crates/aenternis-wasm --target web --release
 
       - name: Set up Node
         uses: actions/setup-node@v6
