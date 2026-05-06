@@ -24,7 +24,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
-import { heatColor } from '../src/heat.ts';
+import { heatColor, meanRelativeT } from '../src/heat.ts';
 import { parseProgramText } from '../src/program-text.ts';
 import type {
   CellDetailMsg,
@@ -528,12 +528,13 @@ export function bootstrap(): void {
     if (!voxelMesh) return;
 
     const analysis = analyzeSnapshot(snap, stride, cellCount, sliceEnabled);
-    const maxE = analysis.maxEnergy < 1 ? 1 : analysis.maxEnergy;
+    const totalE = state.totalEnergy;
     // Fall back to a small box around the origin so the camera-fit math
     // stays well-defined when slice mode hides everything.
     const bbox: SnapshotBbox = analysis.bbox ?? {
       minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1,
     };
+    const liveCellCount = state.cellCount;
 
     if (cameraFitDirty && cellCount > 0) {
       fitCameraToBbox(bbox);
@@ -556,7 +557,7 @@ export function bootstrap(): void {
       tempMatrix.compose(tempPos, tempQuat, tempScale);
       voxelMesh.setMatrixAt(i, tempMatrix);
 
-      const t = Math.sqrt(e / maxE);
+      const t = meanRelativeT(e, totalE, liveCellCount);
       const [r, g, b] = heatColor(t);
       tempColor.setRGB(r, g, b);
       voxelMesh.setColorAt(i, tempColor);
