@@ -11,3 +11,4 @@ target/
 **/*.rs.bk
 crates/*/pkg/
 /AGENTS.local.md
+/.claude/settings.local.json
