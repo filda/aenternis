@@ -26,6 +26,60 @@ Prototype phase. Eight laboratory web prototypes exist in `prototypes/`, each ve
 
 The eventual production target is Rust + WASM. Today's prototypes are intentionally low-friction JavaScript so design questions can be answered cheaply.
 
+## Setup
+
+### Rust
+
+Install Rust via [rustup](https://rustup.rs/):
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+On Windows use the installer from <https://rustup.rs/> instead.
+
+The `rust-toolchain.toml` at the repo root pins the toolchain automatically — `rustup` will download the right stable channel and add `clippy` and `rustfmt` on first use. The minimum supported version is **Rust 1.78**.
+
+#### System C toolchain (linker)
+
+`rustup` does **not** install a C linker, but `cargo build` needs one (otherwise you'll see `error: linker 'cc' not found`). Install it via your OS package manager:
+
+- **Debian / Ubuntu / WSL**: `sudo apt install build-essential pkg-config`
+- **Fedora / RHEL**: `sudo dnf install gcc pkgconf-pkg-config`
+- **Arch**: `sudo pacman -S base-devel`
+- **macOS**: `xcode-select --install`
+- **Windows**: install the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload (the `rustup` installer will prompt you if missing)
+
+Verify the installation:
+
+```sh
+cargo --version   # e.g. cargo 1.87.0 (stable)
+cc --version      # any version is fine — cargo just needs *a* linker
+```
+
+### WASM target + wasm-pack (only needed for the WASM bundle)
+
+The WASM build (used by the `web/` frontend and the GitHub Pages deployment) requires one extra target and the `wasm-pack` tool:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+```
+
+> `wasm-pack` can also be installed without Cargo — see <https://rustwasm.github.io/wasm-pack/installer/> for OS-specific options.
+
+Build the bundle:
+
+```sh
+wasm-pack build crates/aenternis-wasm --target web
+```
+
+The output lands in `crates/aenternis-wasm/pkg/` and is picked up automatically by Vite.
+
+### Node.js
+
+Node.js **20+** is required for the dev server, prototypes, and JavaScript tests. Install it from <https://nodejs.org/> or via a version manager such as [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm).
+
 ## Running
 
 ```
