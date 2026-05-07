@@ -397,6 +397,11 @@
         <span class="value" id="emissiveVal">0.50</span>
       </div>
       <div class="row">
+        <label>roughness</label>
+        <input id="roughness" type="range" min="0" max="1" step="0.05" value="0.60">
+        <span class="value" id="roughnessVal">0.60</span>
+      </div>
+      <div class="row">
         <label>SSAO</label>
         <input id="ssaoEnabled" type="checkbox" checked>
       </div>
@@ -404,6 +409,14 @@
         <label>· radius</label>
         <input id="ssaoRadius" type="range" min="1" max="20" step="0.5" value="8.0">
         <span class="value" id="ssaoRadiusVal">8.0</span>
+      </div>
+      <div class="row">
+        <label>environment</label>
+        <input id="envEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· skybox</label>
+        <input id="envBackground" type="checkbox">
       </div>
       <div class="row">
         <label>z = 0 slice</label>

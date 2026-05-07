@@ -138,9 +138,13 @@ export function bootstrap(): void {
     fogDensityVal: requireEl('fogDensityVal', HTMLSpanElement),
     emissive: requireEl('emissive', HTMLInputElement),
     emissiveVal: requireEl('emissiveVal', HTMLSpanElement),
+    roughness: requireEl('roughness', HTMLInputElement),
+    roughnessVal: requireEl('roughnessVal', HTMLSpanElement),
     ssaoEnabled: requireEl('ssaoEnabled', HTMLInputElement),
     ssaoRadius: requireEl('ssaoRadius', HTMLInputElement),
     ssaoRadiusVal: requireEl('ssaoRadiusVal', HTMLSpanElement),
+    envEnabled: requireEl('envEnabled', HTMLInputElement),
+    envBackground: requireEl('envBackground', HTMLInputElement),
     rngXs32: requireEl('rngXs32', HTMLInputElement),
     legacyTickOffset: requireEl('legacyTickOffset', HTMLInputElement),
     legacyFullPrecision: requireEl('legacyFullPrecision', HTMLInputElement),
@@ -219,7 +223,8 @@ export function bootstrap(): void {
 
   // ----- Three.js setup ------------------------------------------------------
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x05050a);
+  const defaultBackground = new THREE.Color(0x05050a);
+  scene.background = defaultBackground;
   // Exponential depth fog matching the background color — distant
   // cells fade into the dark, which dramatically improves 3D depth
   // perception in dense fields. Density and on/off live behind the
@@ -286,6 +291,96 @@ export function bootstrap(): void {
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
   dirLight.position.set(50, 80, 50);
   scene.add(dirLight);
+
+  // ----- Procedural deep-space environment ----------------------------------
+  // Builds a small skybox scene (gradient sphere + ~800 stars) and
+  // bakes it once via PMREMGenerator into a pre-filtered cubemap.
+  // The cubemap is what Three uses for PBR indirect-light reflections
+  // — without it, MeshStandardMaterial only sees the directional +
+  // ambient lights and looks chalky. With it, voxels pick up subtle
+  // blue ambient from the "sky" and faint star highlights, all
+  // procedural so no asset shipping.
+  function buildSpaceEnvironment(): THREE.Texture {
+    const skyScene = new THREE.Scene();
+
+    // Gradient sphere rendered from the inside.
+    const skyGeom = new THREE.SphereGeometry(500, 32, 16);
+    skyGeom.scale(-1, 1, 1);
+    const skyMat = new THREE.ShaderMaterial({
+      uniforms: {
+        topColor: { value: new THREE.Color(0x101830) },
+        bottomColor: { value: new THREE.Color(0x000005) },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldPos = wp.xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 topColor;
+        uniform vec3 bottomColor;
+        varying vec3 vWorldPos;
+        void main() {
+          float h = normalize(vWorldPos).y * 0.5 + 0.5;
+          gl_FragColor = vec4(mix(bottomColor, topColor, h), 1.0);
+        }
+      `,
+      side: THREE.BackSide,
+      depthWrite: false,
+    });
+    skyScene.add(new THREE.Mesh(skyGeom, skyMat));
+
+    // Star field — uniform random points on a sphere, slight color
+    // variation so it doesn't read as a regular grid.
+    const starCount = 800;
+    const starGeom = new THREE.BufferGeometry();
+    const positions = new Float32Array(starCount * 3);
+    const colors = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i += 1) {
+      const u = Math.random() * 2 - 1;
+      const t = Math.random() * Math.PI * 2;
+      const r = 480;
+      const sinPhi = Math.sqrt(1 - u * u);
+      positions[i * 3] = r * sinPhi * Math.cos(t);
+      positions[i * 3 + 1] = r * u;
+      positions[i * 3 + 2] = r * sinPhi * Math.sin(t);
+      // Blue-white tint, occasional warm star.
+      const warm = Math.random() < 0.15 ? 1.0 : 0.0;
+      const c = 0.6 + Math.random() * 0.4;
+      colors[i * 3] = c * (0.8 + warm * 0.2);
+      colors[i * 3 + 1] = c * (0.8 + warm * 0.05);
+      colors[i * 3 + 2] = c * (1.0 - warm * 0.2);
+    }
+    starGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    starGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const starMat = new THREE.PointsMaterial({
+      size: 2.5,
+      sizeAttenuation: false,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    skyScene.add(new THREE.Points(starGeom, starMat));
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    const envRT = pmremGenerator.fromScene(skyScene);
+    pmremGenerator.dispose();
+    // Dispose source meshes — we only need the baked cubemap now.
+    skyGeom.dispose();
+    skyMat.dispose();
+    starGeom.dispose();
+    starMat.dispose();
+    return envRT.texture;
+  }
+
+  const spaceEnv = buildSpaceEnvironment();
+  scene.environment = dom.envEnabled.checked ? spaceEnv : null;
+  if (dom.envBackground.checked) scene.background = spaceEnv;
 
   // ----- WSAD camera ---------------------------------------------------------
   const keyState: Record<string, boolean> = {
@@ -364,7 +459,7 @@ export function bootstrap(): void {
   // cell radiates strongly while a cold (near-black) cell barely glows.
   const voxelMaterial = new THREE.MeshStandardMaterial({
     metalness: 0.0,
-    roughness: 0.6,
+    roughness: parseFloat(dom.roughness.value),
   });
   // Captured shader handle so the emissive slider can poke at the
   // uniform after the material has been compiled. Three.js compiles
@@ -568,6 +663,11 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     }
     dom.emissiveVal.textContent = v.toFixed(2);
   });
+  dom.roughness.addEventListener('input', () => {
+    const v = parseFloat(dom.roughness.value);
+    voxelMaterial.roughness = v;
+    dom.roughnessVal.textContent = v.toFixed(2);
+  });
   dom.ssaoEnabled.addEventListener('change', () => {
     ssaoPass.enabled = dom.ssaoEnabled.checked;
   });
@@ -575,6 +675,12 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     const v = parseFloat(dom.ssaoRadius.value);
     ssaoPass.kernelRadius = v;
     dom.ssaoRadiusVal.textContent = v.toFixed(1);
+  });
+  dom.envEnabled.addEventListener('change', () => {
+    scene.environment = dom.envEnabled.checked ? spaceEnv : null;
+  });
+  dom.envBackground.addEventListener('change', () => {
+    scene.background = dom.envBackground.checked ? spaceEnv : defaultBackground;
   });
 
   // ----- Slice (z = 0 only) — proto-9-style 2D view --------------------------
