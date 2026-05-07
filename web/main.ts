@@ -39,6 +39,7 @@ import type {
   InspectMsg,
   RunningMsg,
   SnapshotMsg,
+  StepMsg,
   WorkerToMainMsg,
 } from '../src/protocol.ts';
 import { analyzeSnapshot, type SnapshotBbox } from '../src/snapshot.ts';
@@ -95,6 +96,7 @@ export function bootstrap(): void {
     msPerTick: requireEl('msPerTick', HTMLSpanElement),
     ticksPerSec: requireEl('ticksPerSec', HTMLSpanElement),
     pauseBtn: requireEl('pauseBtn', HTMLButtonElement),
+    tickBtn: requireEl('tickBtn', HTMLButtonElement),
     resetBtn: requireEl('resetBtn', HTMLButtonElement),
     seed: requireEl('seed', HTMLInputElement),
     energyIn: requireEl('energy_in', HTMLInputElement),
@@ -149,13 +151,29 @@ export function bootstrap(): void {
     const msg = ev.data;
     if (msg.type === 'ready') {
       workerReady = true;
-      sendInit();
+      // Page load lands in the same paused state as Reset — user sees
+      // tick 0 of the snapshot and decides when to start with Pause/
+      // Resume or Tick.
+      initPaused();
     } else if (msg.type === 'snapshot') {
       latestSnapshot = msg;
     } else if (msg.type === 'cellDetail') {
       renderInspector(msg);
     }
   };
+
+  /** Send an `init` to the worker and immediately follow with
+   *  `running:false` so the new world is held on tick 0. Shared by the
+   *  initial page-load handshake and the Reset button. */
+  function initPaused(): void {
+    running = false;
+    dom.pauseBtn.textContent = 'Resume';
+    sendInit();
+    // Worker init flips its own running=true and schedules a loop
+    // callback; that callback is queued behind this running:false
+    // message, so the running guard short-circuits it before any tick.
+    sendRunning(false);
+  }
 
   function sendInit(): void {
     const { program, status } = parseProgramText(dom.programText.value);
@@ -188,6 +206,12 @@ export function bootstrap(): void {
   function sendRunning(running: boolean): void {
     if (!workerReady) return;
     const msg: RunningMsg = { type: 'running', running };
+    worker.postMessage(msg);
+  }
+
+  function sendStep(): void {
+    if (!workerReady) return;
+    const msg: StepMsg = { type: 'step' };
     worker.postMessage(msg);
   }
 
@@ -666,19 +690,32 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     lastRenderedTick = -1; // force a re-render even if no new snapshot.
   });
 
-  // ----- Pause / Reset / config listeners ------------------------------------
-  let running = true;
+  // ----- Pause / Tick / Reset / config listeners ----------------------------
+  // Initial state mirrors `initPaused()`: world is held on tick 0 until
+  // the user explicitly starts it with Pause/Resume or steps with Tick.
+  let running = false;
+  dom.pauseBtn.textContent = 'Resume';
   dom.pauseBtn.addEventListener('click', () => {
     running = !running;
     dom.pauseBtn.textContent = running ? 'Pause' : 'Resume';
     sendRunning(running);
   });
+  dom.tickBtn.addEventListener('click', () => {
+    // Single-step. If the loop is running, pause first so the manual
+    // tick doesn't race with auto-stepping. Worker queues messages in
+    // order, so `running:false` lands before `step` and the next loop
+    // iteration is skipped.
+    if (running) {
+      running = false;
+      dom.pauseBtn.textContent = 'Resume';
+      sendRunning(false);
+    }
+    sendStep();
+  });
   dom.resetBtn.addEventListener('click', () => {
     config.seed = parseInt(dom.seed.value, 10) || 0;
     config.energy = parseInt(dom.energyIn.value, 10) || 0;
-    running = true;
-    dom.pauseBtn.textContent = 'Pause';
-    sendInit();
+    initPaused();
   });
   dom.coeff.addEventListener('input', () => {
     config.coeff = parseFloat(dom.coeff.value);

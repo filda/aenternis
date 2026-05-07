@@ -40,7 +40,14 @@ export interface InspectMsg {
   readonly z: number;
 }
 
-export type MainToWorkerMsg = InitMsg | ConfigMsg | RunningMsg | InspectMsg;
+/** Single-step request: advance the world by exactly one tick and emit
+ *  one snapshot, regardless of the worker's `running` flag. Used by the
+ *  Tick button while the loop is paused. */
+export interface StepMsg {
+  readonly type: 'step';
+}
+
+export type MainToWorkerMsg = InitMsg | ConfigMsg | RunningMsg | InspectMsg | StepMsg;
 
 // ---- Worker → Main ----------------------------------------------------------
 
@@ -88,5 +95,5 @@ export function normalizeProgram(
 export function isMainToWorkerMsg(value: unknown): value is MainToWorkerMsg {
   if (typeof value !== 'object' || value === null) return false;
   const t = (value as { readonly type?: unknown }).type;
-  return t === 'init' || t === 'config' || t === 'running' || t === 'inspect';
+  return t === 'init' || t === 'config' || t === 'running' || t === 'inspect' || t === 'step';
 }

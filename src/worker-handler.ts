@@ -105,13 +105,20 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     deps.postMessage(msg, [data.buffer]);
   }
 
-  function loop(): void {
-    const w = world;
-    if (!w || !running) return;
+  /** Advance the world by one tick, capture timing, and emit one
+   *  snapshot. Shared between the auto-running `loop` and the on-demand
+   *  `step` message so single-step and run-mode behave identically. */
+  function stepOnce(w: WorldHandle): void {
     const t0 = deps.now();
     w.step(state.coeff, state.k);
     lastMsPerTick = deps.now() - t0;
     sendSnapshot(w);
+  }
+
+  function loop(): void {
+    const w = world;
+    if (!w || !running) return;
+    stepOnce(w);
     deps.scheduleNext(loop);
   }
 
@@ -144,6 +151,13 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
       const wasRunning = running;
       running = msg.running;
       if (running && !wasRunning) deps.scheduleNext(loop);
+      return;
+    }
+    if (msg.type === 'step') {
+      // Single-step ignores `running` by design — the Tick button is
+      // useful exactly when the auto-loop is paused. No `scheduleNext`:
+      // the caller controls when the next tick happens.
+      if (world) stepOnce(world);
       return;
     }
     // msg.type === 'inspect'

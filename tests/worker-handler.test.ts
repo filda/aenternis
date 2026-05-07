@@ -241,6 +241,81 @@ describe('createWorkerHandler — running', () => {
   });
 });
 
+// ---- step -------------------------------------------------------------------
+
+describe('createWorkerHandler — step', () => {
+  it('advances the world by one tick and posts a snapshot when paused', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'running', running: false });
+    vi.mocked(h.world.step).mockClear();
+    h.deps.postMessage.mockClear();
+    h.deps.scheduleNext.mockClear();
+
+    h.handler.handleMessage({ type: 'step' });
+
+    expect(h.world.step).toHaveBeenCalledTimes(1);
+    expect(h.deps.postMessage).toHaveBeenCalledTimes(1);
+    expect(h.deps.postMessage.mock.calls[0]![0]).toMatchObject({ type: 'snapshot' });
+  });
+
+  it('uses the current state.coeff and state.k for the step', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'config', coeff: 0.42, k: 7 });
+    h.handler.handleMessage({ type: 'running', running: false });
+    vi.mocked(h.world.step).mockClear();
+
+    h.handler.handleMessage({ type: 'step' });
+
+    expect(h.world.step).toHaveBeenCalledWith(0.42, 7);
+  });
+
+  it('does not schedule a follow-up loop iteration', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'running', running: false });
+    h.deps.scheduleNext.mockClear();
+
+    h.handler.handleMessage({ type: 'step' });
+
+    expect(h.deps.scheduleNext).not.toHaveBeenCalled();
+  });
+
+  it('updates msPerTick from the now() clock on the manual step', () => {
+    let t = 0;
+    const h = makeHarness({ now: () => { t += 3; return t; } });
+    h.handler.handleMessage(baseInit);
+    h.handler.handleMessage({ type: 'running', running: false });
+    h.deps.postMessage.mockClear();
+
+    h.handler.handleMessage({ type: 'step' });
+
+    const snap = h.deps.postMessage.mock.calls[0]![0];
+    expect(snap).toMatchObject({ msPerTick: 3 });
+  });
+
+  it('steps even when running is true (caller is responsible for ordering)', () => {
+    // The Tick button auto-pauses before sending step, but the worker
+    // itself does not depend on the running flag — single-step is a
+    // pure function of the world.
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    vi.mocked(h.world.step).mockClear();
+
+    h.handler.handleMessage({ type: 'step' });
+
+    expect(h.world.step).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when step arrives before init', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({ type: 'step' });
+    expect(h.deps.postMessage).not.toHaveBeenCalled();
+    expect(h.deps.scheduleNext).not.toHaveBeenCalled();
+  });
+});
+
 // ---- inspect ----------------------------------------------------------------
 
 describe('createWorkerHandler — inspect', () => {
