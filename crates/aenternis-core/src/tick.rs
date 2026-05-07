@@ -507,8 +507,6 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     }
 
     let k_safe = k.max(1);
-    let legacy_port_wrap = world.legacy_port_wrap;
-    let legacy_opcode_set = world.legacy_opcode_set;
 
     // Phase 2: run each cell's instruction budget against the snapshot.
     for (coord, cell) in &mut world.cells {
@@ -518,7 +516,7 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
             .unwrap_or([0; Direction::COUNT]);
         let budget = cell.energy() / k_safe;
         for _ in 0..budget {
-            crate::vm::execute_instruction(cell, &neighbors, legacy_port_wrap, legacy_opcode_set);
+            crate::vm::execute_instruction(cell, &neighbors);
         }
     }
 }

@@ -22,8 +22,6 @@ describe('DEFAULT_STATE', () => {
       coeff: 0.20,
       k: 1,
       moveThreshold: 2.0,
-      legacyPortWrap: false,
-      legacyOpcodeSet: false,
     });
   });
 
@@ -48,32 +46,6 @@ describe('stateFromInit', () => {
     const s = stateFromInit({ ...baseInit, moveThreshold: 3.5 });
     expect(s.moveThreshold).toBe(3.5);
   });
-
-  it('coerces missing legacy flags to false', () => {
-    const s = stateFromInit(baseInit);
-    expect(s.legacyPortWrap).toBe(false);
-    expect(s.legacyOpcodeSet).toBe(false);
-  });
-
-  it('preserves true legacy flags', () => {
-    const s = stateFromInit({
-      ...baseInit,
-      legacyPortWrap: true,
-      legacyOpcodeSet: true,
-    });
-    expect(s.legacyPortWrap).toBe(true);
-    expect(s.legacyOpcodeSet).toBe(true);
-  });
-
-  it('preserves false legacy flags explicitly given', () => {
-    const s = stateFromInit({
-      ...baseInit,
-      legacyPortWrap: false,
-      legacyOpcodeSet: false,
-    });
-    expect(s.legacyPortWrap).toBe(false);
-    expect(s.legacyOpcodeSet).toBe(false);
-  });
 });
 
 describe('applyConfig', () => {
@@ -81,8 +53,6 @@ describe('applyConfig', () => {
     coeff: 0.10,
     k: 2,
     moveThreshold: 1.5,
-    legacyPortWrap: true,
-    legacyOpcodeSet: false,
   };
 
   const baseCfg: ConfigMsg = {
@@ -105,22 +75,6 @@ describe('applyConfig', () => {
   it('updates moveThreshold when provided', () => {
     const s = applyConfig(before, { ...baseCfg, moveThreshold: 2.7 });
     expect(s.moveThreshold).toBe(2.7);
-  });
-
-  it('keeps each legacy flag when not provided', () => {
-    const s = applyConfig(before, baseCfg);
-    expect(s.legacyPortWrap).toBe(true);
-    expect(s.legacyOpcodeSet).toBe(false);
-  });
-
-  it('updates legacy flags when provided', () => {
-    const s = applyConfig(before, {
-      ...baseCfg,
-      legacyPortWrap: false,
-      legacyOpcodeSet: true,
-    });
-    expect(s.legacyPortWrap).toBe(false);
-    expect(s.legacyOpcodeSet).toBe(true);
   });
 
   it('does not mutate the input state', () => {

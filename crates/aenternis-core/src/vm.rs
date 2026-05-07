@@ -74,20 +74,14 @@ pub enum Opcode {
     Sid = 0x12,
     /// `paint v` — `appearance = v`. 2 slots.
     Paint = 0x13,
-    /// `sinflow d a` — `mem[a] = own inflow[d]` from the last tick. 3 slots.
-    Sinflow = 0x14,
-    /// `sself a` — `mem[a] = own energy / memSize`. 2 slots.
-    Sself = 0x15,
-    /// `srate d a` — `mem[a] = own combined rate (rates[d] + active_outflow[d])`. 3 slots.
-    Srate = 0x16,
 }
 
 impl Opcode {
-    /// Number of opcode variants (currently `23`).
-    pub const COUNT: u8 = 23;
+    /// Number of opcode variants (currently `20`).
+    pub const COUNT: u8 = 20;
 
-    /// Highest valid opcode value (currently `0x16`).
-    pub const MAX: u8 = 0x16;
+    /// Highest valid opcode value (currently `0x13`).
+    pub const MAX: u8 = 0x13;
 
     /// Decode the lowest byte of a slot into an opcode.
     ///
@@ -118,9 +112,6 @@ impl Opcode {
             0x11 => Some(Self::Setpv),
             0x12 => Some(Self::Sid),
             0x13 => Some(Self::Paint),
-            0x14 => Some(Self::Sinflow),
-            0x15 => Some(Self::Sself),
-            0x16 => Some(Self::Srate),
             _ => None,
         }
     }
@@ -131,7 +122,7 @@ impl Opcode {
     pub const fn length(self) -> u32 {
         match self {
             Self::Nop => 1,
-            Self::Inc | Self::Dec | Self::Jmp | Self::Sid | Self::Paint | Self::Sself => 2,
+            Self::Inc | Self::Dec | Self::Jmp | Self::Sid | Self::Paint => 2,
             Self::Set
             | Self::Copy
             | Self::Add
@@ -144,9 +135,7 @@ impl Opcode {
             | Self::Jne
             | Self::Ldi
             | Self::Sti
-            | Self::Setpv
-            | Self::Sinflow
-            | Self::Srate => 3,
+            | Self::Setpv => 3,
             Self::Je => 4,
         }
     }
@@ -173,9 +162,6 @@ impl Opcode {
         Self::Setpv,
         Self::Sid,
         Self::Paint,
-        Self::Sinflow,
-        Self::Sself,
-        Self::Srate,
     ];
 }
 
@@ -190,19 +176,6 @@ impl Opcode {
 /// snapshot is the right shape: a cell cannot observe live changes in
 /// a neighbor mid-instruction.
 ///
-/// `legacy_port_wrap` toggles `port`'s accumulation semantics:
-///
-/// - `false` (default) — `saturating_add`, the safer Rust-native path.
-///   When noise memory triggers many `port` ops in one tick, every
-///   targeted direction saturates at `u32::MAX` and the proportional
-///   clamp later splits outflow evenly across them.
-/// - `true` — `wrapping_add`, matching JS prototype 9-B's
-///   `(activeOutflow + arg1) >>> 0`. Individual directions hold
-///   residual `mod 2^32` values that vary direction-by-direction, so
-///   the dominant direction takes most of the outflow after clamp.
-///   This is the source of 9-B's visible asymmetric expansion that the
-///   saturating path doesn't reproduce.
-///
 /// **Empty cells** (`memory.len() == 0`) are a no-op — there is no
 /// program to run. Callers don't need to special-case them.
 ///
@@ -211,14 +184,11 @@ impl Opcode {
 /// in memory must never crash the VM.
 ///
 /// All addresses are taken modulo `memory.len()` (modular addressing,
-/// never out of bounds). All arithmetic is wrapping.
+/// never out of bounds). All arithmetic is wrapping. The `port` opcode
+/// uses `wrapping_add` to accumulate into `active_outflow`, matching
+/// JS prototype 9-B's `(activeOutflow + arg1) >>> 0`.
 #[allow(clippy::too_many_lines)] // 20 opcodes per match; splitting hurts more than it helps
-pub fn execute_instruction(
-    cell: &mut Cell,
-    neighbor_energies: &[u32; Direction::COUNT],
-    legacy_port_wrap: bool,
-    legacy_opcode_set: bool,
-) {
+pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction::COUNT]) {
     let mem_size = cell.memory.len();
     if mem_size == 0 {
         return;
@@ -231,14 +201,6 @@ pub fn execute_instruction(
         cell.pc = ((pc_u + 1) % mem_size) as u32;
         return;
     };
-
-    // Legacy opcode set: JS prototype 9-B stops at 0x13 (`paint`).
-    // Treating 0x14..=0x16 as unknown here keeps PC-walk identical to
-    // JS when noise memory encodes one of those bytes.
-    if legacy_opcode_set && (opcode_slot & 0xFF) > 0x13 {
-        cell.pc = ((pc_u + 1) % mem_size) as u32;
-        return;
-    }
 
     let length = op.length() as usize;
 
@@ -337,11 +299,7 @@ pub fn execute_instruction(
 
         Opcode::Port => {
             let dir = (arg1 as usize) % Direction::COUNT;
-            cell.active_outflow[dir] = if legacy_port_wrap {
-                cell.active_outflow[dir].wrapping_add(arg2)
-            } else {
-                cell.active_outflow[dir].saturating_add(arg2)
-            };
+            cell.active_outflow[dir] = cell.active_outflow[dir].wrapping_add(arg2);
         }
         Opcode::Senergy => {
             let dir = (arg1 as usize) % Direction::COUNT;
@@ -370,26 +328,6 @@ pub fn execute_instruction(
         }
         Opcode::Paint => {
             cell.appearance = arg1;
-        }
-
-        Opcode::Sinflow => {
-            let dir = (arg1 as usize) % Direction::COUNT;
-            let dst = (arg2 as usize) % mem_size;
-            cell.memory[dst] = cell.inflow[dir];
-        }
-        Opcode::Sself => {
-            // Own energy = memory length (the cardinal cell invariant).
-            // u32 cap because `wasm32` memory.len() never reaches 2^32.
-            let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = u32::try_from(mem_size).unwrap_or(u32::MAX);
-        }
-        Opcode::Srate => {
-            // Combined rate = natural rate + active outflow accumulated
-            // earlier in this CPU phase via `port`.
-            let dir = (arg1 as usize) % Direction::COUNT;
-            let dst = (arg2 as usize) % mem_size;
-            let combined = cell.rates[dir].saturating_add(cell.active_outflow[dir]);
-            cell.memory[dst] = combined;
         }
     }
 

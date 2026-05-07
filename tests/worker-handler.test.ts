@@ -18,8 +18,6 @@ function makeMockWorld(): WorldHandle {
   return {
     free: vi.fn(),
     setMoveThreshold: vi.fn(),
-    setLegacyPortWrap: vi.fn(),
-    setLegacyOpcodeSet: vi.fn(),
     step: vi.fn(),
     cellsSnapshot: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
     boundingBox: vi.fn(() => new Int32Array([0, 0, 0, 1, 1, 1])),
@@ -110,15 +108,8 @@ describe('createWorkerHandler — init', () => {
 
   it('applies all state setters to the new world', () => {
     const h = makeHarness();
-    h.handler.handleMessage({
-      ...baseInit,
-      moveThreshold: 2.5,
-      legacyPortWrap: true,
-      legacyOpcodeSet: false,
-    });
+    h.handler.handleMessage({ ...baseInit, moveThreshold: 2.5 });
     expect(h.world.setMoveThreshold).toHaveBeenCalledWith(2.5);
-    expect(h.world.setLegacyPortWrap).toHaveBeenCalledWith(true);
-    expect(h.world.setLegacyOpcodeSet).toHaveBeenCalledWith(false);
   });
 
   it('emits an initial snapshot with transferable buffers', () => {
@@ -166,18 +157,14 @@ describe('createWorkerHandler — config', () => {
     expect(h.world.step).toHaveBeenCalledWith(0.42, 7);
   });
 
-  it('does not call any per-flag setter when no optional field is given', () => {
+  it('does not call setMoveThreshold when no moveThreshold is given', () => {
     const h = makeHarness();
     h.handler.handleMessage(baseInit);
     vi.mocked(h.world.setMoveThreshold).mockClear();
-    vi.mocked(h.world.setLegacyPortWrap).mockClear();
-    vi.mocked(h.world.setLegacyOpcodeSet).mockClear();
 
     h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1 });
 
     expect(h.world.setMoveThreshold).not.toHaveBeenCalled();
-    expect(h.world.setLegacyPortWrap).not.toHaveBeenCalled();
-    expect(h.world.setLegacyOpcodeSet).not.toHaveBeenCalled();
   });
 
   it('forwards moveThreshold to the world only when given', () => {
@@ -194,23 +181,6 @@ describe('createWorkerHandler — config', () => {
     vi.mocked(h.world.setMoveThreshold).mockClear();
     h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, moveThreshold: 0 });
     expect(h.world.setMoveThreshold).toHaveBeenCalledWith(0);
-  });
-
-  it('forwards each legacy flag only when given', () => {
-    const cases: Array<[keyof Pick<ConfigMsg,
-      'legacyPortWrap' | 'legacyOpcodeSet'
-    >, keyof WorldHandle, boolean]> = [
-      ['legacyPortWrap', 'setLegacyPortWrap', false],
-      ['legacyOpcodeSet', 'setLegacyOpcodeSet', false],
-    ];
-    for (const [field, setter, value] of cases) {
-      const h = makeHarness();
-      h.handler.handleMessage(baseInit);
-      const fn = h.world[setter] as ReturnType<typeof vi.fn>;
-      vi.mocked(fn).mockClear();
-      h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, [field]: value });
-      expect(fn).toHaveBeenCalledWith(value);
-    }
   });
 
   it('does nothing on the world side when config arrives before init', () => {

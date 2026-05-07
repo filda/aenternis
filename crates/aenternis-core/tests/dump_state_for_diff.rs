@@ -11,9 +11,8 @@
 //!
 //! Expected: identical output line-for-line, given that the Rust core
 //! always runs in 9-B parity (xorshift32, tick-1 RNG keying, f64
-//! stochastic-floor) and the JS hash is on `Math.imul`. The two
-//! `legacy_port_wrap` and `legacy_opcode_set` flags must still be
-//! enabled here — they're the remaining 9-B-specific divergences.
+//! stochastic-floor, wrapping port, opcode set capped at 0x13) and
+//! the JS hash is on `Math.imul`.
 //!
 //! When they diverge: the first differing line tells us which
 //! `(coord, tick)` first sees a different `stochastic_floor` outcome,
@@ -51,8 +50,6 @@ fn dump_state_at_tick_n() {
 
     let mut w = SparseWorld::big_bang_with_program(1234, 65_536, &program);
     w.move_threshold = 1.0;
-    w.legacy_port_wrap = true;
-    w.legacy_opcode_set = true;
 
     for _ in 0..ticks {
         tick::step(&mut w, 0.15, 1);

@@ -240,40 +240,6 @@ fn inspect_returns_empty_for_void_neighbor() {
     assert!(w.cell_inspect(5, 5, 5).is_empty());
 }
 
-// ----- legacy_port_wrap ------------------------------------------------------
-
-#[test]
-fn legacy_port_wrap_default_is_false() {
-    let w = World::new(0, 0);
-    assert!(!w.legacy_port_wrap());
-}
-
-#[test]
-fn set_legacy_port_wrap_round_trips() {
-    let mut w = World::new(0, 0);
-    w.set_legacy_port_wrap(true);
-    assert!(w.legacy_port_wrap());
-    w.set_legacy_port_wrap(false);
-    assert!(!w.legacy_port_wrap());
-}
-
-// ----- legacy_opcode_set -----------------------------------------------------
-
-#[test]
-fn legacy_opcode_set_default_is_false() {
-    let w = World::new(0, 0);
-    assert!(!w.legacy_opcode_set());
-}
-
-#[test]
-fn set_legacy_opcode_set_round_trips() {
-    let mut w = World::new(0, 0);
-    w.set_legacy_opcode_set(true);
-    assert!(w.legacy_opcode_set());
-    w.set_legacy_opcode_set(false);
-    assert!(!w.legacy_opcode_set());
-}
-
 // ----- bounding_box ----------------------------------------------------------
 
 #[test]

@@ -42,13 +42,11 @@ use crate::{Cell, Coord, Direction, Rng};
 
 /// Sparse world container.
 ///
-/// The two surviving `legacy_*` bool fields are diagnostic toggles for
-/// the JS prototype 9-B parity gates we still keep optional (`port`
-/// wrapping, opcode set). The RNG-related toggles (`rng_kind`,
-/// `legacy_tick_offset`, `legacy_full_precision`) were folded into the
-/// always-on default once the comparison work confirmed the JS path
-/// matches bit-for-bit.
-#[allow(clippy::struct_excessive_bools)]
+/// All JS prototype 9-B parity behaviours are now hardcoded — the
+/// world used to expose `rng_kind`, `legacy_tick_offset`,
+/// `legacy_full_precision`, `legacy_port_wrap`, and `legacy_opcode_set`
+/// as diagnostic toggles, but the comparison work is done and the
+/// always-on path is the only one that runs.
 #[derive(Debug, Clone)]
 pub struct SparseWorld {
     /// Cells indexed by coordinate. Iteration order is the `FxHashMap`
@@ -69,32 +67,6 @@ pub struct SparseWorld {
     /// `dominance = clamp(1 - target_E / (attacker_E_post_burn *
     /// move_threshold), 0, 1)`. Default `2.0`.
     pub move_threshold: f32,
-
-    /// When `true`, the `port` opcode accumulates into `active_outflow`
-    /// with **wrapping** addition (modulo `2^32`), matching JS prototype
-    /// 9-B's `(activeOutflow + arg1) >>> 0`. When `false` (default),
-    /// the addition saturates at `u32::MAX` — safer for production code
-    /// but produces a *much* more symmetric outflow pattern when noise
-    /// memory triggers many `port` opcodes in one tick: every triggered
-    /// direction saturates, so the proportional clamp splits emission
-    /// evenly. With wrap, individual directions hold residual values
-    /// from `mod 2^32` arithmetic and the dominant direction wins,
-    /// which is what 9-B's visible asymmetric expansion comes from.
-    /// Toggling mid-run is safe.
-    pub legacy_port_wrap: bool,
-
-    /// When `true`, the VM treats opcodes `0x14` (`sinflow`), `0x15`
-    /// (`sself`), and `0x16` (`srate`) as **unknown** — same as any
-    /// `> 0x16` byte: PC advances by 1 slot and nothing else happens.
-    /// JS prototype 9-B only defines 20 opcodes (`0x00..=0x13`), so
-    /// the three Rust additions don't exist there; without this flag,
-    /// noise memory that happens to encode one of those bytes triggers
-    /// a sinflow / sself / srate execution in Rust but a single-slot
-    /// nop in JS. Over a tick of 9830 random instructions that's
-    /// ~115 PC-walk divergences per cell, more than enough to drift
-    /// the post-clamp outflow distribution.
-    /// Toggling mid-run is safe.
-    pub legacy_opcode_set: bool,
 }
 
 impl SparseWorld {
@@ -111,8 +83,6 @@ impl SparseWorld {
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
-            legacy_port_wrap: false,
-            legacy_opcode_set: false,
         }
     }
 

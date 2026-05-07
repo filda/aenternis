@@ -108,51 +108,6 @@ impl World {
         self.inner.move_threshold
     }
 
-    /// Toggle JS-prototype-9-B's wrapping `port` accumulation. When
-    /// enabled, the `port` opcode's contribution to `active_outflow`
-    /// uses `wrapping_add` (matches `(activeOutflow + arg1) >>> 0`)
-    /// instead of `saturating_add`. This is what makes 9-B's
-    /// asymmetric expansion appear when noise memory triggers many
-    /// `port` ops in a tick — without it, every targeted direction
-    /// saturates and the proportional clamp distributes outflow
-    /// evenly. Toggling mid-run is safe.
-    #[wasm_bindgen(js_name = setLegacyPortWrap)]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn set_legacy_port_wrap(&mut self, enabled: bool) {
-        self.inner.legacy_port_wrap = enabled;
-    }
-
-    /// Current `legacy_port_wrap` value. See
-    /// [`World::set_legacy_port_wrap`] for what it controls.
-    #[wasm_bindgen(getter, js_name = legacyPortWrap)]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn legacy_port_wrap(&self) -> bool {
-        self.inner.legacy_port_wrap
-    }
-
-    /// Toggle the JS-prototype-9-B opcode-set restriction. When
-    /// enabled, the VM treats opcodes `0x14..=0x16` (`sinflow`,
-    /// `sself`, `srate`) as unknown — same as any byte `> 0x16`. JS
-    /// prototype 9-B stops at `0x13` (`paint`), so noise memory that
-    /// happens to encode `0x14`/`0x15`/`0x16` produces a single-slot
-    /// nop in JS but a 3-slot opcode in default Rust. Toggling
-    /// mid-run is safe.
-    #[wasm_bindgen(js_name = setLegacyOpcodeSet)]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn set_legacy_opcode_set(&mut self, enabled: bool) {
-        self.inner.legacy_opcode_set = enabled;
-    }
-
-    /// Current `legacy_opcode_set` value. See
-    /// [`World::set_legacy_opcode_set`] for what it controls.
-    #[wasm_bindgen(getter, js_name = legacyOpcodeSet)]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn legacy_opcode_set(&self) -> bool {
-        self.inner.legacy_opcode_set
-    }
-
     /// Total energy summed across every cell. Conserved across ticks
     /// (cardinal physical invariant).
     ///

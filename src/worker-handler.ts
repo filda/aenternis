@@ -27,8 +27,6 @@ import {
 export interface WorldHandle {
   free(): void;
   setMoveThreshold(t: number): void;
-  setLegacyPortWrap(b: boolean): void;
-  setLegacyOpcodeSet(b: boolean): void;
   step(coeff: number, k: number): void;
   cellsSnapshot(): Uint32Array;
   boundingBox(): Int32Array;
@@ -69,8 +67,6 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
 
   function applyStateToWorld(w: WorldHandle, s: WorkerSimState): void {
     w.setMoveThreshold(s.moveThreshold);
-    w.setLegacyPortWrap(s.legacyPortWrap);
-    w.setLegacyOpcodeSet(s.legacyOpcodeSet);
   }
 
   // Both `send*` helpers take the live `World` as an argument rather
@@ -140,12 +136,6 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
         // actually present on the message).
         if (typeof msg.moveThreshold === 'number') {
           world.setMoveThreshold(state.moveThreshold);
-        }
-        if (typeof msg.legacyPortWrap === 'boolean') {
-          world.setLegacyPortWrap(state.legacyPortWrap);
-        }
-        if (typeof msg.legacyOpcodeSet === 'boolean') {
-          world.setLegacyOpcodeSet(state.legacyOpcodeSet);
         }
       }
       return;
