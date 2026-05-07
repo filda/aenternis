@@ -9,8 +9,6 @@ export interface WorkerSimState {
   readonly coeff: number;
   readonly k: number;
   readonly moveThreshold: number;
-  readonly legacyTickOffset: boolean;
-  readonly legacyFullPrecision: boolean;
   readonly legacyPortWrap: boolean;
   readonly legacyOpcodeSet: boolean;
 }
@@ -21,8 +19,6 @@ export const DEFAULT_STATE: WorkerSimState = Object.freeze({
   coeff: 0.20,
   k: 1,
   moveThreshold: 2.0,
-  legacyTickOffset: false,
-  legacyFullPrecision: false,
   legacyPortWrap: false,
   legacyOpcodeSet: false,
 });
@@ -36,8 +32,6 @@ export function stateFromInit(msg: InitMsg): WorkerSimState {
     coeff: msg.coeff,
     k: msg.k,
     moveThreshold: msg.moveThreshold ?? DEFAULT_STATE.moveThreshold,
-    legacyTickOffset: msg.legacyTickOffset === true,
-    legacyFullPrecision: msg.legacyFullPrecision === true,
     legacyPortWrap: msg.legacyPortWrap === true,
     legacyOpcodeSet: msg.legacyOpcodeSet === true,
   };
@@ -53,12 +47,6 @@ export function applyConfig(state: WorkerSimState, msg: ConfigMsg): WorkerSimSta
     moveThreshold: typeof msg.moveThreshold === 'number'
       ? msg.moveThreshold
       : state.moveThreshold,
-    legacyTickOffset: typeof msg.legacyTickOffset === 'boolean'
-      ? msg.legacyTickOffset
-      : state.legacyTickOffset,
-    legacyFullPrecision: typeof msg.legacyFullPrecision === 'boolean'
-      ? msg.legacyFullPrecision
-      : state.legacyFullPrecision,
     legacyPortWrap: typeof msg.legacyPortWrap === 'boolean'
       ? msg.legacyPortWrap
       : state.legacyPortWrap,

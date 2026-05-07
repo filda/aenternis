@@ -28,6 +28,6 @@ pub mod world;
 
 pub use crate::cell::Cell;
 pub use crate::coord::{Coord, Direction};
-pub use crate::rng::{Rng, RngKind};
+pub use crate::rng::Rng;
 pub use crate::vm::Opcode;
 pub use crate::world::SparseWorld;

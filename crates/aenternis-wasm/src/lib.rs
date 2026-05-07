@@ -27,18 +27,8 @@
 //! single-`u32` seed gives `2^32` distinct simulations — plenty for a
 //! prototype, and easy to upgrade to `u64`/`BigInt` later if needed.
 
-use aenternis_core::{tick, RngKind, SparseWorld};
+use aenternis_core::{tick, SparseWorld};
 use wasm_bindgen::prelude::*;
-
-/// Map a `u8` flag from the JS bridge to a Rust [`RngKind`]. The two
-/// JS-visible values (`0` = PCG, `1` = xorshift32) match the order in
-/// which the toggles appear in the Aenternis web UI.
-const fn rng_kind_from_u8(value: u8) -> RngKind {
-    match value {
-        1 => RngKind::Xorshift32,
-        _ => RngKind::Pcg,
-    }
-}
 
 /// Aenternis simulation world handle.
 ///
@@ -56,9 +46,9 @@ impl World {
     /// Construct a new world initialized as a big bang at the origin.
     ///
     /// `seed` and `energy` are deterministic — same pair yields the
-    /// same initial state on every run, on every host platform.
-    /// Uses the default PCG backend; pass [`World::new_with_kind`] to
-    /// pick a backend explicitly.
+    /// same initial state on every run, on every host platform. The
+    /// RNG path is `xorshift32` keyed via JS `cellSeed`, matching JS
+    /// prototype 9-B bit-for-bit.
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(seed: u32, energy: u32) -> Self {
@@ -84,39 +74,13 @@ impl World {
         }
     }
 
-    /// Construct a new world with both a program and an explicit RNG
-    /// backend choice. `rng_kind` is `0` for PCG (Aenternis default) or
-    /// `1` for xorshift32 (matches JS prototype 9-B bit-for-bit).
-    ///
-    /// Use this when you need to compare against the JS prototype — the
-    /// xorshift32 path reproduces the exact same per-cell-tick stream and
-    /// origin-tag derivation that 9-B's `world.js` produces.
-    #[wasm_bindgen(js_name = newWithProgramAndKind)]
-    #[must_use]
-    pub fn new_with_program_and_kind(
-        seed: u32,
-        energy: u32,
-        program: &[u32],
-        rng_kind: u8,
-    ) -> Self {
-        Self {
-            inner: SparseWorld::big_bang_with_program_and_kind(
-                u64::from(seed),
-                energy,
-                program,
-                rng_kind_from_u8(rng_kind),
-            ),
-        }
-    }
-
     /// Run one simulation tick.
     ///
     /// `coeff` is the diffusion coefficient (typical range 0.15-0.30);
     /// `k` is the CPU compute constant (typical value 1, where
     /// `instructions_per_cell = floor(energy / k)`). `coeff` is passed
     /// as `f64` so that JS `Number(0.15)` reaches the rate computation
-    /// without a lossy `f32` round-trip — important for bit-identity
-    /// against JS prototype 9-B in `legacy_full_precision` mode.
+    /// without a lossy `f32` round-trip.
     pub fn step(&mut self, coeff: f64, k: u32) {
         tick::step(&mut self.inner, coeff, k);
     }
@@ -142,46 +106,6 @@ impl World {
     #[allow(clippy::missing_const_for_fn)]
     pub fn move_threshold(&self) -> f32 {
         self.inner.move_threshold
-    }
-
-    /// Toggle the JS-prototype-9-B layout-tick-offset quirk. When
-    /// enabled, `compute_natural_rates` keys its per-cell-tick RNG
-    /// with `tick - 1` so xorshift32 + legacy reproduces 9-B's
-    /// per-tick stream bit-for-bit. Toggling mid-run is safe; the
-    /// change applies on the next `step` call.
-    #[wasm_bindgen(js_name = setLegacyTickOffset)]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn set_legacy_tick_offset(&mut self, enabled: bool) {
-        self.inner.legacy_tick_offset = enabled;
-    }
-
-    /// Current `legacy_tick_offset` value. See
-    /// [`World::set_legacy_tick_offset`] for what it controls.
-    #[wasm_bindgen(getter, js_name = legacyTickOffset)]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn legacy_tick_offset(&self) -> bool {
-        self.inner.legacy_tick_offset
-    }
-
-    /// Toggle the JS-prototype-9-B `f64`-arithmetic precision mode.
-    /// When enabled, `compute_natural_rates` runs the stochastic-floor
-    /// comparison in `f64` with all 32 bits of RNG entropy, matching
-    /// 9-B exactly. Toggling mid-run is safe; the change applies on
-    /// the next `step` call.
-    #[wasm_bindgen(js_name = setLegacyFullPrecision)]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn set_legacy_full_precision(&mut self, enabled: bool) {
-        self.inner.legacy_full_precision = enabled;
-    }
-
-    /// Current `legacy_full_precision` value. See
-    /// [`World::set_legacy_full_precision`] for what it controls.
-    #[wasm_bindgen(getter, js_name = legacyFullPrecision)]
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn legacy_full_precision(&self) -> bool {
-        self.inner.legacy_full_precision
     }
 
     /// Toggle JS-prototype-9-B's wrapping `port` accumulation. When

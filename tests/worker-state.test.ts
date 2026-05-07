@@ -22,8 +22,6 @@ describe('DEFAULT_STATE', () => {
       coeff: 0.20,
       k: 1,
       moveThreshold: 2.0,
-      legacyTickOffset: false,
-      legacyFullPrecision: false,
       legacyPortWrap: false,
       legacyOpcodeSet: false,
     });
@@ -53,8 +51,6 @@ describe('stateFromInit', () => {
 
   it('coerces missing legacy flags to false', () => {
     const s = stateFromInit(baseInit);
-    expect(s.legacyTickOffset).toBe(false);
-    expect(s.legacyFullPrecision).toBe(false);
     expect(s.legacyPortWrap).toBe(false);
     expect(s.legacyOpcodeSet).toBe(false);
   });
@@ -62,13 +58,9 @@ describe('stateFromInit', () => {
   it('preserves true legacy flags', () => {
     const s = stateFromInit({
       ...baseInit,
-      legacyTickOffset: true,
-      legacyFullPrecision: true,
       legacyPortWrap: true,
       legacyOpcodeSet: true,
     });
-    expect(s.legacyTickOffset).toBe(true);
-    expect(s.legacyFullPrecision).toBe(true);
     expect(s.legacyPortWrap).toBe(true);
     expect(s.legacyOpcodeSet).toBe(true);
   });
@@ -76,11 +68,11 @@ describe('stateFromInit', () => {
   it('preserves false legacy flags explicitly given', () => {
     const s = stateFromInit({
       ...baseInit,
-      legacyTickOffset: false,
-      legacyFullPrecision: false,
+      legacyPortWrap: false,
+      legacyOpcodeSet: false,
     });
-    expect(s.legacyTickOffset).toBe(false);
-    expect(s.legacyFullPrecision).toBe(false);
+    expect(s.legacyPortWrap).toBe(false);
+    expect(s.legacyOpcodeSet).toBe(false);
   });
 });
 
@@ -89,8 +81,6 @@ describe('applyConfig', () => {
     coeff: 0.10,
     k: 2,
     moveThreshold: 1.5,
-    legacyTickOffset: true,
-    legacyFullPrecision: false,
     legacyPortWrap: true,
     legacyOpcodeSet: false,
   };
@@ -119,8 +109,6 @@ describe('applyConfig', () => {
 
   it('keeps each legacy flag when not provided', () => {
     const s = applyConfig(before, baseCfg);
-    expect(s.legacyTickOffset).toBe(true);
-    expect(s.legacyFullPrecision).toBe(false);
     expect(s.legacyPortWrap).toBe(true);
     expect(s.legacyOpcodeSet).toBe(false);
   });
@@ -128,13 +116,9 @@ describe('applyConfig', () => {
   it('updates legacy flags when provided', () => {
     const s = applyConfig(before, {
       ...baseCfg,
-      legacyTickOffset: false,
-      legacyFullPrecision: true,
       legacyPortWrap: false,
       legacyOpcodeSet: true,
     });
-    expect(s.legacyTickOffset).toBe(false);
-    expect(s.legacyFullPrecision).toBe(true);
     expect(s.legacyPortWrap).toBe(false);
     expect(s.legacyOpcodeSet).toBe(true);
   });

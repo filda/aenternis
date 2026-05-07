@@ -19,36 +19,36 @@
 
 exclude_re = [
     # --- tick.rs ---------------------------------------------------------
-    # L107: `if my_energy > neighbor_energy`. With `>=`, the equal branch
+    # `if my_energy > neighbor_energy`. With `>=`, the equal branch
     # computes `delta = 0`, then `stochastic_floor(0)` early-returns 0
     # without advancing the RNG — same observable effect as native.
-    'tick\.rs:107:37: replace > with >=',
+    'tick\.rs:93:37: replace > with >=',
 
-    # L127: `if cell.total_rate() > my_energy { proportional_clamp(...) }`.
+    # `if cell.total_rate() > my_energy { proportional_clamp(...) }`.
     # proportional_clamp is a no-op when total == cap (returns the rates
     # unchanged via the early-return), so > and >= produce identical output.
-    'tick\.rs:127:30: replace > with >=',
+    'tick\.rs:104:30: replace > with >=',
 
-    # L196: `if mem_size > 0 { ... }` in collect_outflow. When mem_size == 0
+    # `if mem_size > 0 { ... }` in collect_outflow. When mem_size == 0
     # the cell's energy is also 0 (memory.len() == energy invariant), so
     # every rate is 0 and the loop body would produce the same all-empty
     # outflow either way.
-    'tick\.rs:196:21: replace > with >=',
+    'tick\.rs:157:21: replace > with >=',
 
-    # L300, L303:35: leftover-distribution loop in combined_clamped.
-    # `while leftover > 0` (outer) and the inner `leftover > 0` (redundant
-    # with the outer guard) both behave identically with `>=` because
-    # `if !added { break }` exits the moment no positive rate exists —
-    # which is the only case `>=` would let the loop enter.
-    'tick\.rs:300:20: replace > with >=',
-    'tick\.rs:303:35: replace > with >=',
+    # Leftover-distribution loop in combined_clamped: `while leftover > 0`
+    # (outer) and the inner `leftover > 0` (redundant with the outer
+    # guard) both behave identically with `>=` because `if !added { break }`
+    # exits the moment no positive rate exists — which is the only case
+    # `>=` would let the loop enter.
+    'tick\.rs:261:20: replace > with >=',
+    'tick\.rs:264:35: replace > with >=',
 
-    # L477: `target.pc %= target.memory.len() as u32`. The else branch is
-    # marked "defensive" in the source — the inflow phase only grows
-    # memory, so pc < memory.len() always holds when this line runs, and
-    # the modulo is a no-op. += and /= produce the same `pc` here.
-    'tick\.rs:477:23: replace %= with /=',
-    'tick\.rs:477:23: replace %= with \+=',
+    # `target.pc %= target.memory.len() as u32`. The else branch is marked
+    # "defensive" in the source — the inflow phase only grows memory, so
+    # pc < memory.len() always holds when this line runs, and the modulo
+    # is a no-op. += and /= produce the same `pc` here.
+    'tick\.rs:438:23: replace %= with /=',
+    'tick\.rs:438:23: replace %= with \+=',
 
     # --- cell.rs ---------------------------------------------------------
     # L259, L262:39: same leftover-distribution pattern as combined_clamped

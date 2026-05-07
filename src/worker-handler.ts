@@ -10,7 +10,6 @@ import {
   type CellDetailMsg,
   type MainToWorkerMsg,
   normalizeProgram,
-  rngKindToU8,
   type SnapshotMsg,
   type WorkerToMainMsg,
 } from './protocol.ts';
@@ -28,8 +27,6 @@ import {
 export interface WorldHandle {
   free(): void;
   setMoveThreshold(t: number): void;
-  setLegacyTickOffset(b: boolean): void;
-  setLegacyFullPrecision(b: boolean): void;
   setLegacyPortWrap(b: boolean): void;
   setLegacyOpcodeSet(b: boolean): void;
   step(coeff: number, k: number): void;
@@ -44,15 +41,10 @@ export interface WorldHandle {
 }
 
 /** Factory shape that the handler uses to instantiate a World. The
- *  WASM-generated `World` class exposes `newWithProgramAndKind` as a
- *  static method, so a class object satisfies this interface. */
+ *  WASM-generated `World` class exposes `newWithProgram` as a static
+ *  method, so a class object satisfies this interface. */
 export interface WorldFactory {
-  newWithProgramAndKind(
-    seed: number,
-    energy: number,
-    program: Uint32Array,
-    rngKindU8: 0 | 1,
-  ): WorldHandle;
+  newWithProgram(seed: number, energy: number, program: Uint32Array): WorldHandle;
 }
 
 export interface WorkerHandlerDeps {
@@ -77,8 +69,6 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
 
   function applyStateToWorld(w: WorldHandle, s: WorkerSimState): void {
     w.setMoveThreshold(s.moveThreshold);
-    w.setLegacyTickOffset(s.legacyTickOffset);
-    w.setLegacyFullPrecision(s.legacyFullPrecision);
     w.setLegacyPortWrap(s.legacyPortWrap);
     w.setLegacyOpcodeSet(s.legacyOpcodeSet);
   }
@@ -133,12 +123,7 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     if (msg.type === 'init') {
       if (world) world.free();
       const program = normalizeProgram(msg.program);
-      const w = deps.worldFactory.newWithProgramAndKind(
-        msg.seed,
-        msg.energy,
-        program,
-        rngKindToU8(msg.rngKind),
-      );
+      const w = deps.worldFactory.newWithProgram(msg.seed, msg.energy, program);
       world = w;
       state = stateFromInit(msg);
       applyStateToWorld(w, state);
@@ -155,12 +140,6 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
         // actually present on the message).
         if (typeof msg.moveThreshold === 'number') {
           world.setMoveThreshold(state.moveThreshold);
-        }
-        if (typeof msg.legacyTickOffset === 'boolean') {
-          world.setLegacyTickOffset(state.legacyTickOffset);
-        }
-        if (typeof msg.legacyFullPrecision === 'boolean') {
-          world.setLegacyFullPrecision(state.legacyFullPrecision);
         }
         if (typeof msg.legacyPortWrap === 'boolean') {
           world.setLegacyPortWrap(state.legacyPortWrap);

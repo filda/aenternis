@@ -37,18 +37,17 @@ use std::collections::hash_map::{Iter, IterMut, Keys};
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::rng::cell_seed_xs32;
-use crate::{Cell, Coord, Direction, Rng, RngKind};
+use crate::rng::cell_seed;
+use crate::{Cell, Coord, Direction, Rng};
 
 /// Sparse world container.
 ///
-/// The four `legacy_*` bool fields are independent diagnostic toggles
-/// that select between Rust-native semantics and JS prototype 9-B
-/// compat for each phase that has a known divergence (RNG-tick offset,
-/// `f64` precision in stochastic-floor, `port` wrapping, opcode set).
-/// Refactoring them into a single state enum would conflate orthogonal
-/// concerns; `clippy::struct_excessive_bools` is silenced here on
-/// purpose.
+/// The two surviving `legacy_*` bool fields are diagnostic toggles for
+/// the JS prototype 9-B parity gates we still keep optional (`port`
+/// wrapping, opcode set). The RNG-related toggles (`rng_kind`,
+/// `legacy_tick_offset`, `legacy_full_precision`) were folded into the
+/// always-on default once the comparison work confirmed the JS path
+/// matches bit-for-bit.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct SparseWorld {
@@ -70,35 +69,6 @@ pub struct SparseWorld {
     /// `dominance = clamp(1 - target_E / (attacker_E_post_burn *
     /// move_threshold), 0, 1)`. Default `2.0`.
     pub move_threshold: f32,
-
-    /// Which RNG backend powers per-cell-tick streams and origin-tag
-    /// derivation. Default [`RngKind::Pcg`] for production; switch to
-    /// [`RngKind::Xorshift32`] for bit-identity comparison against JS
-    /// prototype 9-B. Mutating after [`Self::big_bang`] runs leaves the
-    /// initial cell state inconsistent — set this on the world *before*
-    /// the first cell is allocated, or via [`Self::big_bang_with_kind`].
-    pub rng_kind: RngKind,
-
-    /// When `true`, [`crate::tick::compute_natural_rates`] keys the
-    /// per-cell-tick RNG with `tick - 1` instead of `tick` (saturating
-    /// at zero for the very first step). This matches JS prototype
-    /// 9-B's quirk of running `recomputeAllLayouts()` at the end of
-    /// `step()` *before* incrementing `this.tick`, so layouts that
-    /// drive step #N's CPU phase were computed with `rng_tick = N - 2`.
-    /// Default `false` (Rust native: layout for tick N uses `rng_tick`
-    /// = N). Toggling mid-run is safe — the change applies on the next
-    /// tick.
-    pub legacy_tick_offset: bool,
-
-    /// When `true`, [`crate::tick::compute_natural_rates`] computes the
-    /// stochastic-floor comparison in `f64` using all 32 bits of the
-    /// RNG output (matches JS prototype 9-B, where `Number` is `f64`
-    /// natively). When `false` (default), Rust truncates the RNG output
-    /// to 24 bits and runs the comparison in `f32` — clean for
-    /// production but leaves a sub-ULP gap around `frac` boundary
-    /// values where the two paths can disagree per draw. Toggling
-    /// mid-run is safe; the change applies on the next tick.
-    pub legacy_full_precision: bool,
 
     /// When `true`, the `port` opcode accumulates into `active_outflow`
     /// with **wrapping** addition (modulo `2^32`), matching JS prototype
@@ -133,8 +103,7 @@ impl SparseWorld {
 
     /// Build an empty world. No cells exist yet; the caller is responsible
     /// for inserting any initial state (typically via [`big_bang`](Self::big_bang)).
-    /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`] and
-    /// `rng_kind` defaults to [`RngKind::Pcg`].
+    /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
     #[must_use]
     pub const fn new(world_seed: u64) -> Self {
         Self {
@@ -142,25 +111,6 @@ impl SparseWorld {
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
-            rng_kind: RngKind::Pcg,
-            legacy_tick_offset: false,
-            legacy_full_precision: false,
-            legacy_port_wrap: false,
-            legacy_opcode_set: false,
-        }
-    }
-
-    /// Same as [`Self::new`] but with an explicit RNG backend choice.
-    #[must_use]
-    pub const fn new_with_kind(world_seed: u64, rng_kind: RngKind) -> Self {
-        Self {
-            cells: FxHashMap::with_hasher(FxBuildHasher),
-            world_seed,
-            tick: 0,
-            move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
-            rng_kind,
-            legacy_tick_offset: false,
-            legacy_full_precision: false,
             legacy_port_wrap: false,
             legacy_opcode_set: false,
         }
@@ -169,12 +119,11 @@ impl SparseWorld {
     /// Build a world initialized as a big bang — one cell at [`Coord::ORIGIN`]
     /// holding the entire energy budget.
     ///
-    /// The origin cell's `origin_tag` and its memory slots are drawn from
-    /// **the same per-cell-at-tick stream** keyed by `(world_seed, 0, ORIGIN)`,
-    /// matching prototype 9's `makeCell` / `bigBang` pair: first `next_u32()`
-    /// for the tag, then `energy` more for the memory slots. Same seed and
-    /// same energy produce the same initial state on every run, bit-identical
-    /// across host platforms.
+    /// Matches JS prototype 9-B's `bigBang` semantics bit-for-bit:
+    /// `origin_tag = cellSeed(world_seed, ORIGIN)` (the seed value
+    /// itself), and the memory slots are the `xorshift32(cellSeed)` stream.
+    /// Same seed and same energy produce the same initial state on every
+    /// run, bit-identical across host platforms.
     ///
     /// `energy == 0` produces an empty world (no cell at the origin), since
     /// a cell with zero energy does not exist by the world invariant.
@@ -188,7 +137,7 @@ impl SparseWorld {
     /// taken verbatim from `program`; the remaining slots (if `energy >
     /// program.len()`) are filled from the per-cell-at-tick RNG stream.
     ///
-    /// Matches prototype 9's `bigBang(eTotal, programSlots)` semantics:
+    /// Matches prototype 9-B's `bigBang(eTotal, programSlots)` semantics:
     /// the RNG is **not** advanced for slots covered by the program, so
     /// for a fixed seed, `big_bang_with_program(seed, n, &[a, b, c])` and
     /// `big_bang_with_program(seed, n, &[d, e, f])` produce identical
@@ -198,42 +147,17 @@ impl SparseWorld {
     /// An empty `program` is exactly equivalent to [`SparseWorld::big_bang`].
     #[must_use]
     pub fn big_bang_with_program(world_seed: u64, energy: u32, program: &[u32]) -> Self {
-        Self::big_bang_with_program_and_kind(world_seed, energy, program, RngKind::Pcg)
-    }
-
-    /// Big bang with both a program and an explicit RNG backend. The
-    /// `Xorshift32` path matches JS prototype 9-B's `bigBang` semantics
-    /// bit-for-bit: origin cell's `origin_tag` is `cellSeed(seed, ORIGIN)`
-    /// directly (not the first RNG draw, as PCG does), and the noise
-    /// suffix in memory is the `xorshift32(cellSeed)` stream.
-    #[must_use]
-    pub fn big_bang_with_program_and_kind(
-        world_seed: u64,
-        energy: u32,
-        program: &[u32],
-        rng_kind: RngKind,
-    ) -> Self {
-        let mut world = Self::new_with_kind(world_seed, rng_kind);
+        let mut world = Self::new(world_seed);
         if energy == 0 {
             return world;
         }
 
-        let (origin_tag, mut noise_rng) = match rng_kind {
-            RngKind::Pcg => {
-                let mut rng = Rng::for_cell_at_tick(world_seed, 0, Coord::ORIGIN);
-                let tag = rng.next_u32();
-                (tag, rng)
-            }
-            RngKind::Xorshift32 => {
-                // JS prototype 9-B: `originTag = cellSeed(seed, x, y, z)`
-                // (the seed value itself), and `cell.rng = makeRng(seed)`
-                // is a separate xorshift32 stream from that same seed —
-                // the tag is *not* the first draw, it's the seed value.
-                let tag = cell_seed_xs32(world_seed, Coord::ORIGIN);
-                let rng = Rng::new_xs32(tag);
-                (tag, rng)
-            }
-        };
+        // JS prototype 9-B: `originTag = cellSeed(seed, x, y, z)` (the
+        // seed value itself), and `cell.rng = makeRng(seed)` is a
+        // separate xorshift32 stream from that same seed — the tag is
+        // *not* the first draw, it's the seed value.
+        let origin_tag = cell_seed(world_seed, Coord::ORIGIN);
+        let mut noise_rng = Rng::new(origin_tag);
 
         let energy_usize = energy as usize;
         let n_program = program.len().min(energy_usize);
@@ -259,10 +183,9 @@ impl SparseWorld {
     /// alloc-on-write during the inflow phase.
     pub fn get_or_alloc(&mut self, coord: Coord) -> &mut Cell {
         let world_seed = self.world_seed;
-        let rng_kind = self.rng_kind;
         self.cells
             .entry(coord)
-            .or_insert_with(|| fresh_cell(world_seed, coord, rng_kind))
+            .or_insert_with(|| fresh_cell(world_seed, coord))
     }
 
     /// Number of cells currently in the world.
@@ -403,18 +326,11 @@ impl SparseWorld {
 /// `(world_seed, coord)`. Used by [`SparseWorld::get_or_alloc`] for the
 /// alloc-on-write path during inflow.
 ///
-/// The two backends derive the tag differently — see
-/// [`SparseWorld::big_bang_with_program_and_kind`] for the rationale:
-/// PCG draws the tag from a fresh per-cell-tick stream, `Xorshift32`
-/// uses the JS `cellSeed` value verbatim as the tag.
-const fn fresh_cell(world_seed: u64, coord: Coord, rng_kind: RngKind) -> Cell {
-    let origin_tag = match rng_kind {
-        RngKind::Pcg => {
-            let mut rng = Rng::for_cell_at_tick(world_seed, 0, coord);
-            rng.next_u32()
-        }
-        RngKind::Xorshift32 => cell_seed_xs32(world_seed, coord),
-    };
+/// `origin_tag` is `cell_seed(world_seed, coord)` — the JS prototype
+/// 9-B convention, where the tag is the seed value itself rather than
+/// the first RNG draw.
+const fn fresh_cell(world_seed: u64, coord: Coord) -> Cell {
+    let origin_tag = cell_seed(world_seed, coord);
     let mut cell = Cell::new();
     cell.origin_tag = origin_tag;
     cell

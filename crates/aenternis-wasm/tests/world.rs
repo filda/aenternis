@@ -240,40 +240,6 @@ fn inspect_returns_empty_for_void_neighbor() {
     assert!(w.cell_inspect(5, 5, 5).is_empty());
 }
 
-// ----- legacy_tick_offset ----------------------------------------------------
-
-#[test]
-fn legacy_tick_offset_default_is_false() {
-    let w = World::new(0, 0);
-    assert!(!w.legacy_tick_offset());
-}
-
-#[test]
-fn set_legacy_tick_offset_round_trips() {
-    let mut w = World::new(0, 0);
-    w.set_legacy_tick_offset(true);
-    assert!(w.legacy_tick_offset());
-    w.set_legacy_tick_offset(false);
-    assert!(!w.legacy_tick_offset());
-}
-
-// ----- legacy_full_precision -------------------------------------------------
-
-#[test]
-fn legacy_full_precision_default_is_false() {
-    let w = World::new(0, 0);
-    assert!(!w.legacy_full_precision());
-}
-
-#[test]
-fn set_legacy_full_precision_round_trips() {
-    let mut w = World::new(0, 0);
-    w.set_legacy_full_precision(true);
-    assert!(w.legacy_full_precision());
-    w.set_legacy_full_precision(false);
-    assert!(!w.legacy_full_precision());
-}
-
 // ----- legacy_port_wrap ------------------------------------------------------
 
 #[test]
@@ -306,41 +272,6 @@ fn set_legacy_opcode_set_round_trips() {
     assert!(w.legacy_opcode_set());
     w.set_legacy_opcode_set(false);
     assert!(!w.legacy_opcode_set());
-}
-
-// ----- new_with_program_and_kind / rng_kind_from_u8 --------------------------
-//
-// `rng_kind_from_u8` is private; we exercise it through the public
-// constructor by checking that distinct `rng_kind` bytes produce
-// distinguishable initial state.
-
-#[test]
-fn new_with_program_and_kind_zero_matches_default_pcg() {
-    // kind=0 is the PCG default; should match `new_with_program` byte-for-byte.
-    let a = World::new_with_program(42, 16, &[]);
-    let b = World::new_with_program_and_kind(42, 16, &[], 0);
-    assert_eq!(a.cells_snapshot(), b.cells_snapshot());
-}
-
-#[test]
-fn new_with_program_and_kind_one_picks_xorshift32() {
-    // kind=1 is xorshift32; must differ from PCG for the same seed/energy.
-    // (Both are deterministic, so any difference proves the branch was taken.)
-    let pcg = World::new_with_program_and_kind(42, 32, &[], 0);
-    let xs32 = World::new_with_program_and_kind(42, 32, &[], 1);
-    assert_ne!(
-        pcg.cells_snapshot(),
-        xs32.cells_snapshot(),
-        "PCG and xorshift32 must produce distinct initial state",
-    );
-}
-
-#[test]
-fn new_with_program_and_kind_unknown_falls_back_to_pcg() {
-    // Any value other than 1 routes to PCG via the `_ =>` arm.
-    let pcg = World::new_with_program_and_kind(42, 16, &[], 0);
-    let bogus = World::new_with_program_and_kind(42, 16, &[], 99);
-    assert_eq!(pcg.cells_snapshot(), bogus.cells_snapshot());
 }
 
 // ----- bounding_box ----------------------------------------------------------

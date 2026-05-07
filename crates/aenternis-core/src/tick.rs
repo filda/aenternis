@@ -71,25 +71,11 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // Pull Copy fields off the world so the mutable iteration below
     // doesn't conflict with shared borrows.
     let world_seed = world.world_seed;
-    let tick = world.tick;
-    let rng_kind = world.rng_kind;
     // JS prototype 9-B computes the layout for step #N at the end of
     // step #(N-1), *before* incrementing `this.tick` — so the rng_tick
-    // used is N-2 (saturated at 0). The `legacy_tick_offset` flag opts
-    // into that quirk so xs32 + legacy reproduces 9-B bit-for-bit; with
-    // the flag off, Rust uses its native "rates for tick N use rng_tick
-    // N" semantics.
-    let rng_tick = if world.legacy_tick_offset {
-        tick.saturating_sub(1)
-    } else {
-        tick
-    };
-    // When `legacy_full_precision` is set, run the stochastic-floor
-    // comparison in `f64` with all 32 bits of RNG entropy, matching JS
-    // prototype 9-B's `f64`-throughout arithmetic. Otherwise stay in
-    // `f32` (24-bit RNG truncation, `f32` `frac`) for the cleaner Rust
-    // production path.
-    let full_precision = world.legacy_full_precision;
+    // used is N-2 (saturated at 0). We always run in 9-B parity, so
+    // this offset is hardcoded.
+    let rng_tick = world.tick.saturating_sub(1);
 
     // Phase 2: compute rates per cell. Mutable borrow of `world.cells`.
     for (coord, cell) in &mut world.cells {
@@ -99,25 +85,16 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             continue;
         }
 
-        let mut rng = Rng::for_cell_at_tick_with_kind(rng_kind, world_seed, rng_tick, *coord);
+        let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, *coord);
 
         for &d in &Direction::ALL {
             let neighbor_coord = coord.neighbor(d);
             let neighbor_energy = snapshot.get(&neighbor_coord).copied().unwrap_or(0);
             let rate = if my_energy > neighbor_energy {
                 let delta = my_energy - neighbor_energy;
-                if full_precision {
-                    // `coeff` is `f64`, so JS `Number(0.15)` flows
-                    // through unchanged — no `f32(0.15)→f64` artifact.
-                    rng.stochastic_floor_f64(f64::from(delta) * coeff)
-                } else {
-                    // Production path: stay in `f32` end-to-end. The
-                    // `coeff as f32` cast accepts an `f64` parameter
-                    // but rounds it once on entry; this matches the
-                    // historical f32-only API.
-                    #[allow(clippy::cast_possible_truncation)]
-                    rng.stochastic_floor(delta_to_f32(delta) * coeff as f32)
-                }
+                // `coeff` is `f64`, so JS `Number(0.15)` flows through
+                // unchanged — no `f32(0.15)→f64` rounding artifact.
+                rng.stochastic_floor(f64::from(delta) * coeff)
             } else {
                 0
             };
@@ -128,22 +105,6 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             proportional_clamp(&mut cell.rates, my_energy);
         }
     }
-}
-
-/// `u32 → f32` cast used to compute the rate scaling factor.
-///
-/// In practice cell energies stay well below `2^24`, where `f32` is exact;
-/// the cast is therefore lossless for any realistic world. The
-/// `clippy::cast_precision_loss` lint can't see that constraint, so we
-/// localize the suppression to one tiny helper rather than scattering it.
-///
-/// Float `as` casts in `const fn` are only stable from Rust 1.79; the
-/// workspace MSRV is 1.78, so we suppress `missing_const_for_fn` here
-/// rather than bumping the toolchain just for one helper.
-#[allow(clippy::cast_precision_loss, clippy::missing_const_for_fn)]
-#[inline]
-fn delta_to_f32(delta: u32) -> f32 {
-    delta as f32
 }
 
 /// Per-cell, per-direction slot copies collected from the outflow phase.

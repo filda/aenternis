@@ -21,83 +21,58 @@ fn empty_world_is_a_noop() {
     assert!(w.is_empty());
 }
 
-// ----- legacy tick offset -----
+// ----- rng tick keying -------------------------------------------------------
+//
+// `compute_natural_rates` keys the per-cell RNG with `tick - 1` (saturating
+// at zero) — the JS prototype 9-B convention where layouts for step #N are
+// computed at the end of step #(N-1), before the tick counter advances.
 
 #[test]
-fn legacy_tick_offset_is_off_by_default() {
-    let w = SparseWorld::new(42);
-    assert!(!w.legacy_tick_offset);
+fn rng_tick_keying_uses_tick_minus_one_at_tick_n() {
+    // Pin down what "off-by-one" means: at tick N, rates are computed with
+    // `rng_tick = N - 1`. So a world frozen at tick 5 produces the same
+    // rates as a world frozen at tick 4 with one extra `rng_tick = 4` pass.
+    let mut a = SparseWorld::big_bang(7, 256);
+    a.tick = 4;
+    compute_natural_rates(&mut a, 0.15);
+
+    let mut b = SparseWorld::big_bang(7, 256);
+    b.tick = 5;
+    compute_natural_rates(&mut b, 0.15);
+
+    // Both keyed with rng_tick = max(0, 4-1) = 3 vs max(0, 5-1) = 4 → must
+    // differ (different RNG seed → different stream).
+    let ca = a.get(Coord::ORIGIN).unwrap();
+    let cb = b.get(Coord::ORIGIN).unwrap();
+    assert_ne!(ca.rates, cb.rates);
 }
 
 #[test]
-fn legacy_tick_offset_at_tick_zero_matches_native() {
-    // saturating_sub(1) of 0 gives 0, so the very first step's rates
-    // are identical with or without the legacy flag.
-    let mut native = SparseWorld::big_bang(7, 256);
-    let mut legacy = SparseWorld::big_bang(7, 256);
-    legacy.legacy_tick_offset = true;
-    compute_natural_rates(&mut native, 0.15);
-    compute_natural_rates(&mut legacy, 0.15);
-    let cn = native.get(Coord::ORIGIN).unwrap();
-    let cl = legacy.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cn.rates, cl.rates);
+fn rng_tick_keying_at_tick_zero_saturates() {
+    // tick.saturating_sub(1) of 0 gives 0. So both tick=0 and tick=1
+    // produce the same rates because both key with rng_tick=0.
+    let mut a = SparseWorld::big_bang(7, 256);
+    a.tick = 0;
+    let mut b = SparseWorld::big_bang(7, 256);
+    b.tick = 1;
+    compute_natural_rates(&mut a, 0.15);
+    compute_natural_rates(&mut b, 0.15);
+    let ca = a.get(Coord::ORIGIN).unwrap();
+    let cb = b.get(Coord::ORIGIN).unwrap();
+    assert_eq!(ca.rates, cb.rates);
 }
 
 #[test]
-fn legacy_tick_offset_at_tick_one_diverges_from_native() {
-    // At tick=1, native uses rng_tick=1, legacy uses rng_tick=0. Rates
-    // should differ at least in one direction (with overwhelming
-    // probability — both backends produce different streams for adjacent
-    // tick seeds).
-    let mut native = SparseWorld::big_bang(7, 256);
-    native.tick = 1;
-    let mut legacy = SparseWorld::big_bang(7, 256);
-    legacy.tick = 1;
-    legacy.legacy_tick_offset = true;
-    compute_natural_rates(&mut native, 0.15);
-    compute_natural_rates(&mut legacy, 0.15);
-    let cn = native.get(Coord::ORIGIN).unwrap();
-    let cl = legacy.get(Coord::ORIGIN).unwrap();
-    assert_ne!(cn.rates, cl.rates);
-}
-
-#[test]
-fn legacy_tick_offset_n_minus_one_matches_native_n_minus_two_at_tick_n() {
-    // Definition of the quirk: at tick N with legacy ON, rng_tick = N-1.
-    // At tick N-1 with native, rng_tick = N-1 too. Same world state, same
-    // rng_tick → same rates. This pins down what "off-by-one" means.
-    let mut native_at_4 = SparseWorld::big_bang(7, 256);
-    native_at_4.tick = 4;
-    let mut legacy_at_5 = SparseWorld::big_bang(7, 256);
-    legacy_at_5.tick = 5;
-    legacy_at_5.legacy_tick_offset = true;
-    compute_natural_rates(&mut native_at_4, 0.15);
-    compute_natural_rates(&mut legacy_at_5, 0.15);
-    let cn = native_at_4.get(Coord::ORIGIN).unwrap();
-    let cl = legacy_at_5.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cn.rates, cl.rates);
-}
-
-// ----- legacy full precision -----
-
-#[test]
-fn legacy_full_precision_is_off_by_default() {
-    let w = SparseWorld::new(42);
-    assert!(!w.legacy_full_precision);
-}
-
-#[test]
-fn legacy_full_precision_preserves_conservation() {
-    // The f64 path must still respect the per-cell rate budget — a single
-    // cell with E=256 can never emit more than 256 slots total per tick.
+fn rates_respect_energy_budget() {
+    // A single cell with E=256 can never emit more than 256 slots total
+    // per tick after the proportional clamp.
     let mut w = SparseWorld::big_bang(7, 256);
-    w.legacy_full_precision = true;
     compute_natural_rates(&mut w, 0.15);
     let cell = w.get(Coord::ORIGIN).unwrap();
     let total: u32 = cell.rates.iter().copied().sum();
     assert!(
         total <= cell.energy(),
-        "f64 path emitted {total} slots from a cell with energy {}",
+        "rates emitted {total} slots from a cell with energy {}",
         cell.energy()
     );
 }
@@ -298,12 +273,11 @@ fn coeff_zero_kills_all_rates() {
 // rate that the assertion catches.
 
 #[test]
-fn rate_uses_subtraction_against_live_neighbor_default_path() {
+fn rate_uses_subtraction_against_live_neighbor() {
     // A=100, B=36, coeff=0.0625. Both are exact-binary fractions.
     // Native: delta=64, 64*0.0625 = 4.0 exact → rate=4 every direction.
     // `-` → `+` mutation: delta=136, 136*0.0625 = 8.5 → rate=8 or 9 (RNG).
-    // `*` → `+` (default-path mutation, line 119): 64+0.0625 = 64.0625 →
-    //   rate=64 or 65, way off.
+    // `*` → `+` mutation: 64+0.0625 = 64.0625 → rate=64 or 65, way off.
     let mut w = SparseWorld::new(0x00C0_FFEE);
     w.insert(Coord::ORIGIN, Cell::with_memory(vec![1; 100]));
     for &d in &Direction::ALL {
@@ -312,23 +286,6 @@ fn rate_uses_subtraction_against_live_neighbor_default_path() {
     compute_natural_rates(&mut w, 0.0625);
     let a = w.get(Coord::ORIGIN).unwrap();
     // Total = 6 * 4 = 24, well under A's energy 100 → no clamp.
-    assert_eq!(a.rates, [4; 6]);
-}
-
-#[test]
-fn rate_uses_subtraction_against_live_neighbor_full_precision_path() {
-    // Same setup as above, but routed through the f64 stochastic_floor
-    // (legacy_full_precision = true). The mutations targeted here live
-    // on tick.rs:108 (delta) and tick.rs:112 (the `* coeff` in the f64
-    // branch).
-    let mut w = SparseWorld::new(0x00C0_FFEE);
-    w.legacy_full_precision = true;
-    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1; 100]));
-    for &d in &Direction::ALL {
-        w.insert(Coord::ORIGIN.neighbor(d), Cell::with_memory(vec![1; 36]));
-    }
-    compute_natural_rates(&mut w, 0.0625);
-    let a = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(a.rates, [4; 6]);
 }
 

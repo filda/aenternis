@@ -18,8 +18,6 @@ function makeMockWorld(): WorldHandle {
   return {
     free: vi.fn(),
     setMoveThreshold: vi.fn(),
-    setLegacyTickOffset: vi.fn(),
-    setLegacyFullPrecision: vi.fn(),
     setLegacyPortWrap: vi.fn(),
     setLegacyOpcodeSet: vi.fn(),
     step: vi.fn(),
@@ -37,7 +35,7 @@ function makeMockWorld(): WorldHandle {
 interface Harness {
   readonly handler: ReturnType<typeof createWorkerHandler>;
   readonly deps: {
-    readonly worldFactory: WorldFactory & { newWithProgramAndKind: ReturnType<typeof vi.fn> };
+    readonly worldFactory: WorldFactory & { newWithProgram: ReturnType<typeof vi.fn> };
     readonly postMessage: ReturnType<typeof vi.fn>;
     readonly scheduleNext: ReturnType<typeof vi.fn>;
     readonly now: ReturnType<typeof vi.fn>;
@@ -52,7 +50,7 @@ interface Harness {
 function makeHarness(overrides?: { now?: () => number }): Harness {
   const world = makeMockWorld();
   const factory = vi.fn(() => world);
-  const worldFactory = { newWithProgramAndKind: factory };
+  const worldFactory = { newWithProgram: factory };
   const postMessage = vi.fn();
   const scheduled: Array<() => void> = [];
   const scheduleNext = vi.fn((cb: () => void) => { scheduled.push(cb); });
@@ -84,29 +82,21 @@ const baseInit: InitMsg = {
 // ---- init -------------------------------------------------------------------
 
 describe('createWorkerHandler — init', () => {
-  it('builds a World via the factory with default RNG kind 0', () => {
+  it('builds a World via the factory with seed, energy and an empty program', () => {
     const h = makeHarness();
     h.handler.handleMessage(baseInit);
-    expect(h.deps.worldFactory.newWithProgramAndKind).toHaveBeenCalledTimes(1);
-    const args = h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]!;
+    expect(h.deps.worldFactory.newWithProgram).toHaveBeenCalledTimes(1);
+    const args = h.deps.worldFactory.newWithProgram.mock.calls[0]!;
     expect(args[0]).toBe(1234);
     expect(args[1]).toBe(10_000_000);
     expect(args[2]).toBeInstanceOf(Uint32Array);
     expect(args[2]).toHaveLength(0);
-    expect(args[3]).toBe(0);
-  });
-
-  it('passes RNG kind 1 for xorshift32', () => {
-    const h = makeHarness();
-    h.handler.handleMessage({ ...baseInit, rngKind: 'xorshift32' });
-    const args = h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]!;
-    expect(args[3]).toBe(1);
   });
 
   it('normalizes a number-array program into a Uint32Array', () => {
     const h = makeHarness();
     h.handler.handleMessage({ ...baseInit, program: [0x09, 0x00, 0x00] });
-    const program = h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]![2];
+    const program = h.deps.worldFactory.newWithProgram.mock.calls[0]![2];
     expect(program).toBeInstanceOf(Uint32Array);
     expect(Array.from(program)).toEqual([9, 0, 0]);
   });
@@ -115,7 +105,7 @@ describe('createWorkerHandler — init', () => {
     const h = makeHarness();
     const program = new Uint32Array([1, 2, 3]);
     h.handler.handleMessage({ ...baseInit, program });
-    expect(h.deps.worldFactory.newWithProgramAndKind.mock.calls[0]![2]).toBe(program);
+    expect(h.deps.worldFactory.newWithProgram.mock.calls[0]![2]).toBe(program);
   });
 
   it('applies all state setters to the new world', () => {
@@ -123,14 +113,10 @@ describe('createWorkerHandler — init', () => {
     h.handler.handleMessage({
       ...baseInit,
       moveThreshold: 2.5,
-      legacyTickOffset: true,
-      legacyFullPrecision: false,
       legacyPortWrap: true,
       legacyOpcodeSet: false,
     });
     expect(h.world.setMoveThreshold).toHaveBeenCalledWith(2.5);
-    expect(h.world.setLegacyTickOffset).toHaveBeenCalledWith(true);
-    expect(h.world.setLegacyFullPrecision).toHaveBeenCalledWith(false);
     expect(h.world.setLegacyPortWrap).toHaveBeenCalledWith(true);
     expect(h.world.setLegacyOpcodeSet).toHaveBeenCalledWith(false);
   });
@@ -161,7 +147,7 @@ describe('createWorkerHandler — init', () => {
     h.handler.handleMessage(baseInit);
     const firstWorld = h.world;
     // A second init triggers the factory again; the first world is freed.
-    h.deps.worldFactory.newWithProgramAndKind.mockReturnValueOnce(makeMockWorld());
+    h.deps.worldFactory.newWithProgram.mockReturnValueOnce(makeMockWorld());
     h.handler.handleMessage(baseInit);
     expect(firstWorld.free).toHaveBeenCalledTimes(1);
   });
@@ -184,16 +170,12 @@ describe('createWorkerHandler — config', () => {
     const h = makeHarness();
     h.handler.handleMessage(baseInit);
     vi.mocked(h.world.setMoveThreshold).mockClear();
-    vi.mocked(h.world.setLegacyTickOffset).mockClear();
-    vi.mocked(h.world.setLegacyFullPrecision).mockClear();
     vi.mocked(h.world.setLegacyPortWrap).mockClear();
     vi.mocked(h.world.setLegacyOpcodeSet).mockClear();
 
     h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1 });
 
     expect(h.world.setMoveThreshold).not.toHaveBeenCalled();
-    expect(h.world.setLegacyTickOffset).not.toHaveBeenCalled();
-    expect(h.world.setLegacyFullPrecision).not.toHaveBeenCalled();
     expect(h.world.setLegacyPortWrap).not.toHaveBeenCalled();
     expect(h.world.setLegacyOpcodeSet).not.toHaveBeenCalled();
   });
@@ -216,10 +198,8 @@ describe('createWorkerHandler — config', () => {
 
   it('forwards each legacy flag only when given', () => {
     const cases: Array<[keyof Pick<ConfigMsg,
-      'legacyTickOffset' | 'legacyFullPrecision' | 'legacyPortWrap' | 'legacyOpcodeSet'
+      'legacyPortWrap' | 'legacyOpcodeSet'
     >, keyof WorldHandle, boolean]> = [
-      ['legacyTickOffset', 'setLegacyTickOffset', true],
-      ['legacyFullPrecision', 'setLegacyFullPrecision', true],
       ['legacyPortWrap', 'setLegacyPortWrap', false],
       ['legacyOpcodeSet', 'setLegacyOpcodeSet', false],
     ];

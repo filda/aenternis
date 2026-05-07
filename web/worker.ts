@@ -35,12 +35,12 @@ const workerGlobal = self as unknown as DedicatedWorkerGlobalScope;
 const ready: ReadyMsg = { type: 'ready' };
 workerGlobal.postMessage(ready);
 
-// `wasm-bindgen` generates `World` as a class with a `newWithProgramAndKind`
+// `wasm-bindgen` generates `World` as a class with a `newWithProgram`
 // static; structurally compatible with `WorldFactory`. Wrap it in a
 // thin adapter so the cast is colocated with the wasm import.
 const worldFactory: WorldFactory = {
-  newWithProgramAndKind(seed, energy, program, rngKindU8) {
-    return World.newWithProgramAndKind(seed, energy, program, rngKindU8) as unknown as WorldHandle;
+  newWithProgram(seed, energy, program) {
+    return World.newWithProgram(seed, energy, program) as unknown as WorldHandle;
   },
 };
 

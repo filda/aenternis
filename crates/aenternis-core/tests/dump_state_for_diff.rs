@@ -9,9 +9,11 @@
 //! 5. Pair with the JS dump and `diff reports/9b-tick<N>.txt
 //! reports/rust-tick<N>.txt`.
 //!
-//! Expected: identical output line-for-line, given that all of
-//! `xs32` + `legacy_tick_offset` + `legacy_full_precision` are on and
-//! the JS hash is on `Math.imul`.
+//! Expected: identical output line-for-line, given that the Rust core
+//! always runs in 9-B parity (xorshift32, tick-1 RNG keying, f64
+//! stochastic-floor) and the JS hash is on `Math.imul`. The two
+//! `legacy_port_wrap` and `legacy_opcode_set` flags must still be
+//! enabled here — they're the remaining 9-B-specific divergences.
 //!
 //! When they diverge: the first differing line tells us which
 //! `(coord, tick)` first sees a different `stochastic_floor` outcome,
@@ -24,7 +26,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::PathBuf;
 
-use aenternis_core::{tick, RngKind, SparseWorld};
+use aenternis_core::{tick, SparseWorld};
 
 #[test]
 #[ignore = "diagnostic — runs only with --ignored, writes to reports/rust-tick<N>.txt"]
@@ -47,11 +49,8 @@ fn dump_state_at_tick_n() {
     //   slot 4: 0x00 (start address)
     let program: [u32; 5] = [0x09, 0, 0, 0x07, 0];
 
-    let mut w =
-        SparseWorld::big_bang_with_program_and_kind(1234, 65_536, &program, RngKind::Xorshift32);
+    let mut w = SparseWorld::big_bang_with_program(1234, 65_536, &program);
     w.move_threshold = 1.0;
-    w.legacy_tick_offset = true;
-    w.legacy_full_precision = true;
     w.legacy_port_wrap = true;
     w.legacy_opcode_set = true;
 
