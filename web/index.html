@@ -25,13 +25,20 @@
       position: fixed;
       top: 16px; left: 16px;
       width: 320px;
+      max-height: calc(100vh - 32px);
       display: flex;
       flex-direction: column;
       gap: 8px;
       pointer-events: none;
       font-size: 12px;
       z-index: 10;
+      overflow-y: auto;
+      /* Slim scrollbar so it doesn't dominate the panel. */
+      scrollbar-width: thin;
+      scrollbar-color: #2a2a35 transparent;
     }
+    .hud::-webkit-scrollbar { width: 6px; }
+    .hud::-webkit-scrollbar-thumb { background: #2a2a35; border-radius: 3px; }
     .hud .panel {
       background: rgba(20, 20, 25, 0.85);
       border: 1px solid #333;
@@ -39,6 +46,37 @@
       padding: 10px 12px;
       pointer-events: auto;
       backdrop-filter: blur(6px);
+    }
+    /* Collapsible variants of `.panel` use <details>/<summary>. The
+       summary mimics the existing h2/h3 styling and adds a chevron
+       that rotates when opened. */
+    details.panel { padding: 0; }
+    details.panel > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      padding: 10px 12px;
+      color: #d4a76a;
+      font-size: 12px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    details.panel > summary::-webkit-details-marker { display: none; }
+    details.panel > summary::before {
+      content: '▸';
+      display: inline-block;
+      transition: transform 0.15s ease-out;
+      color: #8a8a90;
+      font-size: 10px;
+    }
+    details.panel[open] > summary::before { transform: rotate(90deg); }
+    details.panel > .body {
+      padding: 0 12px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
     }
     .inspector {
       position: fixed;
@@ -191,8 +229,9 @@
       </div>
     </div>
 
-    <div class="panel">
-      <h3>Config</h3>
+    <details class="panel">
+      <summary>Config</summary>
+      <div class="body">
       <div class="row">
         <label>seed</label>
         <input id="seed" type="number" value="1234" min="0" max="4294967295">
@@ -255,10 +294,12 @@
         Ke 9-B paritě potřebuješ všech pět. RNG se aplikuje po Reset,
         ostatní flipují za běhu.
       </div>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel">
-      <h3>Program v centrální buňce</h3>
+    <details class="panel">
+      <summary>Program v centrální buňce</summary>
+      <div class="body">
       <div class="hint" style="margin-bottom: 4px;">
         Asembler: <code>label:</code>, <code>setp xp, start</code>,
         <code>jmp start</code>, <code>port d, i</code>, atd. Sólo číslo =
@@ -279,10 +320,12 @@
   setp xp, start
   jmp start</textarea>
       <div id="programStatus" class="hint" style="margin-top: 4px;">empty</div>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel">
-      <h3>Tracker</h3>
+    <details class="panel">
+      <summary>Tracker</summary>
+      <div class="body">
       <div class="row">
         <label>sledovat</label>
         <input id="trackerEnabled" type="checkbox">
@@ -297,10 +340,12 @@
         <label>pozice</label>
         <span class="value" id="trackerPos">-</span>
       </div>
-    </div>
+      </div>
+    </details>
 
-    <div class="panel">
-      <h3>Render</h3>
+    <details class="panel" open>
+      <summary>Render</summary>
+      <div class="body">
       <div class="row">
         <label>voxel size</label>
         <input id="voxelSize" type="range" min="0.2" max="1.5" step="0.05" value="1.0">
@@ -333,13 +378,42 @@
         <span class="value" id="bloomRadiusVal">0.40</span>
       </div>
       <div class="row">
+        <label>tonemap exposure</label>
+        <input id="exposure" type="range" min="0.3" max="2.5" step="0.05" value="1.00">
+        <span class="value" id="exposureVal">1.00</span>
+      </div>
+      <div class="row">
+        <label>fog</label>
+        <input id="fogEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· density</label>
+        <input id="fogDensity" type="range" min="0" max="0.03" step="0.001" value="0.005">
+        <span class="value" id="fogDensityVal">0.005</span>
+      </div>
+      <div class="row">
+        <label>emissive</label>
+        <input id="emissive" type="range" min="0" max="2" step="0.05" value="0.50">
+        <span class="value" id="emissiveVal">0.50</span>
+      </div>
+      <div class="row">
+        <label>SSAO</label>
+        <input id="ssaoEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· radius</label>
+        <input id="ssaoRadius" type="range" min="1" max="20" step="0.5" value="8.0">
+        <span class="value" id="ssaoRadiusVal">8.0</span>
+      </div>
+      <div class="row">
         <label>z = 0 slice</label>
         <input id="sliceEnabled" type="checkbox">
       </div>
       <div class="row hint">
         Slice skryje cely s z ≠ 0 — 2D pohled jako prototyp 9 pro porovnání.
       </div>
-    </div>
+      </div>
+    </details>
 
     <div class="panel hint">
       <strong>Kamera:</strong> drag = rotace, scroll = zoom, pravé tl. = pan.<br>

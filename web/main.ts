@@ -22,7 +22,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 import { fitCamera } from '../src/camera-fit.ts';
@@ -129,6 +131,16 @@ export function bootstrap(): void {
     bloomStrengthVal: requireEl('bloomStrengthVal', HTMLSpanElement),
     bloomRadius: requireEl('bloomRadius', HTMLInputElement),
     bloomRadiusVal: requireEl('bloomRadiusVal', HTMLSpanElement),
+    exposure: requireEl('exposure', HTMLInputElement),
+    exposureVal: requireEl('exposureVal', HTMLSpanElement),
+    fogEnabled: requireEl('fogEnabled', HTMLInputElement),
+    fogDensity: requireEl('fogDensity', HTMLInputElement),
+    fogDensityVal: requireEl('fogDensityVal', HTMLSpanElement),
+    emissive: requireEl('emissive', HTMLInputElement),
+    emissiveVal: requireEl('emissiveVal', HTMLSpanElement),
+    ssaoEnabled: requireEl('ssaoEnabled', HTMLInputElement),
+    ssaoRadius: requireEl('ssaoRadius', HTMLInputElement),
+    ssaoRadiusVal: requireEl('ssaoRadiusVal', HTMLSpanElement),
     rngXs32: requireEl('rngXs32', HTMLInputElement),
     legacyTickOffset: requireEl('legacyTickOffset', HTMLInputElement),
     legacyFullPrecision: requireEl('legacyFullPrecision', HTMLInputElement),
@@ -208,6 +220,13 @@ export function bootstrap(): void {
   // ----- Three.js setup ------------------------------------------------------
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05050a);
+  // Exponential depth fog matching the background color — distant
+  // cells fade into the dark, which dramatically improves 3D depth
+  // perception in dense fields. Density and on/off live behind the
+  // sliders below; we hold the same FogExp2 instance and just toggle
+  // `scene.fog` between it and null.
+  const fog = new THREE.FogExp2(0x05050a, parseFloat(dom.fogDensity.value));
+  scene.fog = dom.fogEnabled.checked ? fog : null;
 
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
   camera.position.set(20, 20, 30);
@@ -215,6 +234,13 @@ export function bootstrap(): void {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // ACES filmic tone mapping for the postprocessing pipeline. Applied
+  // by `OutputPass` at the very end of the composer chain so bloom
+  // operates in linear HDR space and only the final composite gets
+  // tone-mapped to sRGB. `toneMappingExposure` is a multiplier on
+  // pre-tonemap luminance and is exposed as a slider.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = parseFloat(dom.exposure.value);
   dom.container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -228,6 +254,14 @@ export function bootstrap(): void {
   // exposed via sliders; the whole pass can be disabled to compare.
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
+  // Screen-space ambient occlusion. Adds contact shadows between
+  // densely packed cells so the field stops looking like a flat
+  // particle cloud and gains real 3D structure. Costs an extra
+  // depth/normal pass — toggled off the cheap way.
+  const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
+  ssaoPass.kernelRadius = parseFloat(dom.ssaoRadius.value);
+  ssaoPass.enabled = dom.ssaoEnabled.checked;
+  composer.addPass(ssaoPass);
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
     parseFloat(dom.bloomStrength.value),
@@ -235,12 +269,17 @@ export function bootstrap(): void {
     parseFloat(dom.bloomThreshold.value),
   );
   composer.addPass(bloomPass);
+  // Final pass: tone-map the linear HDR composite to sRGB. Without
+  // this, bloom highlights would be hard-clipped and the ACES setting
+  // on the renderer wouldn't be applied to the post-processed output.
+  composer.addPass(new OutputPass());
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    ssaoPass.setSize(window.innerWidth, window.innerHeight);
   });
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.4));
@@ -317,7 +356,35 @@ export function bootstrap(): void {
   }
   let useOctahedron = false;
   let voxelGeometry: THREE.BufferGeometry = makeVoxelGeometry(useOctahedron);
-  const voxelMaterial = new THREE.MeshLambertMaterial();
+  // PBR material — metalness 0 (no specular highlights from a metallic
+  // surface) and a soft roughness keep the diffuse shading subtle so
+  // the heat-ramp color stays the dominant visual signal. Per-cell
+  // emissive contribution is injected via onBeforeCompile below: the
+  // surface color is added to the emissive radiance, so a hot (white)
+  // cell radiates strongly while a cold (near-black) cell barely glows.
+  const voxelMaterial = new THREE.MeshStandardMaterial({
+    metalness: 0.0,
+    roughness: 0.6,
+  });
+  // Captured shader handle so the emissive slider can poke at the
+  // uniform after the material has been compiled. Three.js compiles
+  // lazily on first render, so we read it inside `onBeforeCompile`.
+  let voxelMaterialShader: THREE.WebGLProgramParametersWithUniforms | null = null;
+  voxelMaterial.onBeforeCompile = (shader) => {
+    shader.uniforms['uEmissiveBoost'] = { value: parseFloat(dom.emissive.value) };
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        'uniform vec3 emissive;',
+        `uniform vec3 emissive;
+uniform float uEmissiveBoost;`,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
+      );
+    voxelMaterialShader = shader;
+  };
   let voxelMesh: THREE.InstancedMesh | null = null;
   let voxelCapacity = 0;
   let lastUsedCount = 0;
@@ -480,6 +547,34 @@ export function bootstrap(): void {
     const v = parseFloat(dom.bloomRadius.value);
     bloomPass.radius = v;
     dom.bloomRadiusVal.textContent = v.toFixed(2);
+  });
+  dom.exposure.addEventListener('input', () => {
+    const v = parseFloat(dom.exposure.value);
+    renderer.toneMappingExposure = v;
+    dom.exposureVal.textContent = v.toFixed(2);
+  });
+  dom.fogEnabled.addEventListener('change', () => {
+    scene.fog = dom.fogEnabled.checked ? fog : null;
+  });
+  dom.fogDensity.addEventListener('input', () => {
+    const v = parseFloat(dom.fogDensity.value);
+    fog.density = v;
+    dom.fogDensityVal.textContent = v.toFixed(3);
+  });
+  dom.emissive.addEventListener('input', () => {
+    const v = parseFloat(dom.emissive.value);
+    if (voxelMaterialShader) {
+      voxelMaterialShader.uniforms['uEmissiveBoost']!.value = v;
+    }
+    dom.emissiveVal.textContent = v.toFixed(2);
+  });
+  dom.ssaoEnabled.addEventListener('change', () => {
+    ssaoPass.enabled = dom.ssaoEnabled.checked;
+  });
+  dom.ssaoRadius.addEventListener('input', () => {
+    const v = parseFloat(dom.ssaoRadius.value);
+    ssaoPass.kernelRadius = v;
+    dom.ssaoRadiusVal.textContent = v.toFixed(1);
   });
 
   // ----- Slice (z = 0 only) — proto-9-style 2D view --------------------------
