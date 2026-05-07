@@ -2,18 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isMainToWorkerMsg,
   normalizeProgram,
-  rngKindToU8,
 } from '../src/protocol.ts';
-
-describe('rngKindToU8', () => {
-  it('maps "pcg" to 0', () => {
-    expect(rngKindToU8('pcg')).toBe(0);
-  });
-
-  it('maps "xorshift32" to 1', () => {
-    expect(rngKindToU8('xorshift32')).toBe(1);
-  });
-});
 
 describe('normalizeProgram', () => {
   it('returns an empty Uint32Array when program is undefined', () => {

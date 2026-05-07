@@ -55,11 +55,6 @@ interface RuntimeConfig {
   coeff: number;
   k: number;
   moveThreshold: number;
-  rngKind: 'pcg' | 'xorshift32';
-  legacyTickOffset: boolean;
-  legacyFullPrecision: boolean;
-  legacyPortWrap: boolean;
-  legacyOpcodeSet: boolean;
 }
 
 /** Look up an element by id and assert its concrete type, throwing a
@@ -85,11 +80,6 @@ export function bootstrap(): void {
     coeff: 0.15,
     k: 1,
     moveThreshold: 1.0,
-    rngKind: 'pcg',
-    legacyTickOffset: false,
-    legacyFullPrecision: false,
-    legacyPortWrap: false,
-    legacyOpcodeSet: false,
   };
 
   // ----- DOM lookup ----------------------------------------------------------
@@ -145,11 +135,6 @@ export function bootstrap(): void {
     ssaoRadiusVal: requireEl('ssaoRadiusVal', HTMLSpanElement),
     envEnabled: requireEl('envEnabled', HTMLInputElement),
     envBackground: requireEl('envBackground', HTMLInputElement),
-    rngXs32: requireEl('rngXs32', HTMLInputElement),
-    legacyTickOffset: requireEl('legacyTickOffset', HTMLInputElement),
-    legacyFullPrecision: requireEl('legacyFullPrecision', HTMLInputElement),
-    legacyPortWrap: requireEl('legacyPortWrap', HTMLInputElement),
-    legacyOpcodeSet: requireEl('legacyOpcodeSet', HTMLInputElement),
     inspector: requireEl('inspector', HTMLElement),
   };
 
@@ -182,11 +167,6 @@ export function bootstrap(): void {
       coeff: config.coeff,
       k: config.k,
       moveThreshold: config.moveThreshold,
-      rngKind: config.rngKind,
-      legacyTickOffset: config.legacyTickOffset,
-      legacyFullPrecision: config.legacyFullPrecision,
-      legacyPortWrap: config.legacyPortWrap,
-      legacyOpcodeSet: config.legacyOpcodeSet,
       program,
     };
     worker.postMessage(init);
@@ -201,10 +181,6 @@ export function bootstrap(): void {
       coeff: config.coeff,
       k: config.k,
       moveThreshold: config.moveThreshold,
-      legacyTickOffset: config.legacyTickOffset,
-      legacyFullPrecision: config.legacyFullPrecision,
-      legacyPortWrap: config.legacyPortWrap,
-      legacyOpcodeSet: config.legacyOpcodeSet,
     };
     worker.postMessage(cfg);
   }
@@ -700,32 +676,9 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   dom.resetBtn.addEventListener('click', () => {
     config.seed = parseInt(dom.seed.value, 10) || 0;
     config.energy = parseInt(dom.energyIn.value, 10) || 0;
-    config.rngKind = dom.rngXs32.checked ? 'xorshift32' : 'pcg';
-    config.legacyTickOffset = dom.legacyTickOffset.checked;
-    config.legacyFullPrecision = dom.legacyFullPrecision.checked;
-    config.legacyPortWrap = dom.legacyPortWrap.checked;
-    config.legacyOpcodeSet = dom.legacyOpcodeSet.checked;
     running = true;
     dom.pauseBtn.textContent = 'Pause';
     sendInit();
-  });
-  // RNG checkbox change is captured into config.rngKind only on Reset —
-  // switching backends mid-run would leave existing cells inconsistent.
-  dom.legacyTickOffset.addEventListener('change', () => {
-    config.legacyTickOffset = dom.legacyTickOffset.checked;
-    sendConfig();
-  });
-  dom.legacyFullPrecision.addEventListener('change', () => {
-    config.legacyFullPrecision = dom.legacyFullPrecision.checked;
-    sendConfig();
-  });
-  dom.legacyPortWrap.addEventListener('change', () => {
-    config.legacyPortWrap = dom.legacyPortWrap.checked;
-    sendConfig();
-  });
-  dom.legacyOpcodeSet.addEventListener('change', () => {
-    config.legacyOpcodeSet = dom.legacyOpcodeSet.checked;
-    sendConfig();
   });
   dom.coeff.addEventListener('input', () => {
     config.coeff = parseFloat(dom.coeff.value);

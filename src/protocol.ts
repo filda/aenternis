@@ -4,15 +4,10 @@
 // the renderer on the main thread (`web/main.ts`). They communicate via
 // `postMessage` with a fixed wire format. This module is the
 // single source of truth for that format: discriminated unions for
-// each direction plus a couple of small helpers (RNG kind translation,
-// program normalization).
+// each direction plus a small program-normalization helper.
 //
 // Pure data. No DOM, no Worker globals, no THREE — fully unit-testable
 // in Node.
-
-/** RNG backend selector. PCG is the Aenternis default; xorshift32
- *  matches JS prototype 9-B's bit-identical reference. */
-export type RngKind = 'pcg' | 'xorshift32';
 
 // ---- Main → Worker ----------------------------------------------------------
 
@@ -23,11 +18,6 @@ export interface InitMsg {
   readonly coeff: number;
   readonly k: number;
   readonly moveThreshold?: number;
-  readonly rngKind: RngKind;
-  readonly legacyTickOffset?: boolean;
-  readonly legacyFullPrecision?: boolean;
-  readonly legacyPortWrap?: boolean;
-  readonly legacyOpcodeSet?: boolean;
   readonly program?: Uint32Array | readonly number[];
 }
 
@@ -36,10 +26,6 @@ export interface ConfigMsg {
   readonly coeff: number;
   readonly k: number;
   readonly moveThreshold?: number;
-  readonly legacyTickOffset?: boolean;
-  readonly legacyFullPrecision?: boolean;
-  readonly legacyPortWrap?: boolean;
-  readonly legacyOpcodeSet?: boolean;
 }
 
 export interface RunningMsg {
@@ -86,11 +72,6 @@ export interface CellDetailMsg {
 export type WorkerToMainMsg = ReadyMsg | SnapshotMsg | CellDetailMsg;
 
 // ---- Helpers ---------------------------------------------------------------
-
-/** Translate the string-form RNG kind to the u8 the WASM bridge expects. */
-export function rngKindToU8(kind: RngKind): 0 | 1 {
-  return kind === 'xorshift32' ? 1 : 0;
-}
 
 /** Normalize an `InitMsg.program` field to a `Uint32Array`. Accepts a
  *  pre-built typed array (returned as-is), a plain number array (copied),

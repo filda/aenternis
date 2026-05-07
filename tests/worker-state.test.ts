@@ -13,7 +13,6 @@ const baseInit: InitMsg = {
   energy: 10_000_000,
   coeff: 0.15,
   k: 1,
-  rngKind: 'pcg',
 };
 
 describe('DEFAULT_STATE', () => {

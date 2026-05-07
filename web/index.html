@@ -255,45 +255,6 @@
         <input id="moveThreshold" type="range" min="0.5" max="4.0" step="0.1" value="1.0">
         <span class="value" id="moveThresholdVal">1.0</span>
       </div>
-      <div class="row">
-        <label>RNG</label>
-        <label style="font-weight: normal;">
-          <input id="rngXs32" type="checkbox">
-          xorshift32 (jako 9-B)
-        </label>
-      </div>
-      <div class="row">
-        <label>tick seed</label>
-        <label style="font-weight: normal;">
-          <input id="legacyTickOffset" type="checkbox">
-          off-by-one (jako 9-B)
-        </label>
-      </div>
-      <div class="row">
-        <label>precision</label>
-        <label style="font-weight: normal;">
-          <input id="legacyFullPrecision" type="checkbox">
-          f64 (jako 9-B)
-        </label>
-      </div>
-      <div class="row">
-        <label>port</label>
-        <label style="font-weight: normal;">
-          <input id="legacyPortWrap" type="checkbox">
-          wrap (jako 9-B)
-        </label>
-      </div>
-      <div class="row">
-        <label>opcodes</label>
-        <label style="font-weight: normal;">
-          <input id="legacyOpcodeSet" type="checkbox">
-          0x00-0x13 (jako 9-B)
-        </label>
-      </div>
-      <div class="hint" style="font-size: 11px; margin-top: 4px;">
-        Ke 9-B paritě potřebuješ všech pět. RNG se aplikuje po Reset,
-        ostatní flipují za běhu.
-      </div>
       </div>
     </details>
 
