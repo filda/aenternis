@@ -65,9 +65,8 @@ exclude_re = [
     # here at the moment.
 
     # --- rng.rs ----------------------------------------------------------
-    # `r < frac` vs `r <= frac` differ only when r equals frac exactly,
-    # which has probability ~2^-24 (f32 path) and ~2^-52 (f64 path) for
-    # uniform random r. No realistic test seed hits this boundary.
-    'rng\.rs:205:51: replace < with <=',
-    'rng\.rs:235:46: replace < with <=',
+    # `r < frac` vs `r <= frac` in `stochastic_floor` differ only when r
+    # equals frac exactly, which has probability ~2^-52 for uniform
+    # random r in `f64`. No realistic test seed hits this boundary.
+    'rng\.rs:106:.*replace < with <=',
 ]

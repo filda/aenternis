@@ -67,6 +67,22 @@ pub struct SparseWorld {
     /// `dominance = clamp(1 - target_E / (attacker_E_post_burn *
     /// move_threshold), 0, 1)`. Default `2.0`.
     pub move_threshold: f32,
+
+    /// Per-tick scratch: neighbor-energy snapshot indexed by cell coord.
+    /// Built once at the start of [`crate::tick::step`] and shared
+    /// between `compute_natural_rates` and `cpu_phase`, both of which
+    /// would otherwise build their own. Cleared (not freed) between
+    /// ticks so the backing storage is reused across the whole run.
+    pub(crate) scratch_neighbor_energies: FxHashMap<Coord, [u32; Direction::COUNT]>,
+
+    /// Per-tick scratch: pre-step energy snapshot used by
+    /// [`crate::tick::apply_outflow`]. Same alloc-reuse pattern as
+    /// [`Self::scratch_neighbor_energies`].
+    pub(crate) scratch_pre_energy: FxHashMap<Coord, u32>,
+
+    /// Per-tick scratch: total outflow per source coord, used inside
+    /// [`crate::tick::apply_outflow`] to compute attacker `post_burn`.
+    pub(crate) scratch_total_outflow: FxHashMap<Coord, u32>,
 }
 
 impl SparseWorld {
@@ -83,6 +99,9 @@ impl SparseWorld {
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
+            scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_pre_energy: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_total_outflow: FxHashMap::with_hasher(FxBuildHasher),
         }
     }
 

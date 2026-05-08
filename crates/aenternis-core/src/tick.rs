@@ -61,12 +61,7 @@ use crate::{Coord, Direction, Rng, SparseWorld};
 /// alone. They normally would have been removed by [`SparseWorld::gc_empty`]
 /// before this point, but the function is tolerant if they're still around.
 pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
-    // Phase 1: snapshot energies. Immutable borrow of `world.cells`.
-    let snapshot: FxHashMap<Coord, u32> = world
-        .cells
-        .iter()
-        .map(|(coord, cell)| (*coord, cell.energy()))
-        .collect();
+    refresh_neighbor_energies(world);
 
     // Pull Copy fields off the world so the mutable iteration below
     // doesn't conflict with shared borrows.
@@ -77,7 +72,9 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // this offset is hardcoded.
     let rng_tick = world.tick.saturating_sub(1);
 
-    // Phase 2: compute rates per cell. Mutable borrow of `world.cells`.
+    // Phase 2: compute rates per cell. Split-borrow lets us read the
+    // shared snapshot while mutating each cell.
+    let snapshot = &world.scratch_neighbor_energies;
     for (coord, cell) in &mut world.cells {
         let my_energy = cell.energy();
         if my_energy == 0 {
@@ -85,11 +82,15 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             continue;
         }
 
+        // One HashMap lookup per cell instead of six (one per direction).
+        let neighbor_energies = snapshot
+            .get(coord)
+            .copied()
+            .unwrap_or([0; Direction::COUNT]);
         let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, *coord);
 
         for &d in &Direction::ALL {
-            let neighbor_coord = coord.neighbor(d);
-            let neighbor_energy = snapshot.get(&neighbor_coord).copied().unwrap_or(0);
+            let neighbor_energy = neighbor_energies[d.index()];
             let rate = if my_energy > neighbor_energy {
                 let delta = my_energy - neighbor_energy;
                 // `coeff` is `f64`, so JS `Number(0.15)` flows through
@@ -104,6 +105,33 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
         if cell.total_rate() > my_energy {
             proportional_clamp(&mut cell.rates, my_energy);
         }
+    }
+}
+
+/// Rebuild [`SparseWorld::scratch_neighbor_energies`] from the current
+/// world state. The snapshot is a `Coord → [u32; 6]` map keyed by the
+/// cell's own coordinate, where each slot holds the energy of that
+/// neighbor (0 for void).
+///
+/// Reused across the `compute_natural_rates` and `cpu_phase` phases of
+/// a single [`step`] call — both phases observe the same energies (cell
+/// `memory.len()` doesn't change inside the CPU phase), so building
+/// once saves one full snapshot pass per tick.
+///
+/// `clear()` keeps the backing `HashMap` storage allocated, so this
+/// runs as `O(n)` work without any per-tick allocator churn.
+fn refresh_neighbor_energies(world: &mut SparseWorld) {
+    let cells = &world.cells;
+    let snapshot = &mut world.scratch_neighbor_energies;
+    snapshot.clear();
+    snapshot.reserve(cells.len());
+    for coord in cells.keys() {
+        let mut energies = [0u32; Direction::COUNT];
+        for &d in &Direction::ALL {
+            let neighbor_coord = coord.neighbor(d);
+            energies[d.index()] = cells.get(&neighbor_coord).map_or(0, crate::Cell::energy);
+        }
+        snapshot.insert(*coord, energies);
     }
 }
 
@@ -325,25 +353,29 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
     // Phase 1: snapshot pre-step energies + per-source total outflow.
     // -------------------------------------------------------------------
-    let pre_energy: FxHashMap<Coord, u32> = world
-        .cells
-        .iter()
-        .map(|(c, cell)| (*c, cell.energy()))
-        .collect();
+    // Reuse the world-level scratch maps so the backing storage carries
+    // over from previous ticks (clear() keeps capacity, avoiding the
+    // per-tick allocator churn the old `FxHashMap::default()` caused).
+    world.scratch_pre_energy.clear();
+    world.scratch_pre_energy.reserve(world.cells.len());
+    for (c, cell) in &world.cells {
+        world.scratch_pre_energy.insert(*c, cell.energy());
+    }
 
-    let mut total_outflow: FxHashMap<Coord, u32> = FxHashMap::default();
+    world.scratch_total_outflow.clear();
+    world.scratch_total_outflow.reserve(outflow.len());
     for (coord, per_dir) in outflow {
         let total: u32 = per_dir
             .iter()
             .map(|v| u32::try_from(v.len()).unwrap_or(u32::MAX))
             .fold(0u32, u32::saturating_add);
-        total_outflow.insert(*coord, total);
+        world.scratch_total_outflow.insert(*coord, total);
     }
 
     // -------------------------------------------------------------------
     // Phase 2: shrink each source by its total outgoing slot count.
     // -------------------------------------------------------------------
-    for (coord, total) in &total_outflow {
+    for (coord, total) in &world.scratch_total_outflow {
         if let Some(cell) = world.cells.get_mut(coord) {
             cell.shrink_from_end(*total);
         }
@@ -362,8 +394,16 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     let mut inflows_by_target: FxHashMap<Coord, Vec<InflowEntry<'_>>> = FxHashMap::default();
 
     for (source_coord, per_dir) in outflow {
-        let attacker_pre = pre_energy.get(source_coord).copied().unwrap_or(0);
-        let attacker_total = total_outflow.get(source_coord).copied().unwrap_or(0);
+        let attacker_pre = world
+            .scratch_pre_energy
+            .get(source_coord)
+            .copied()
+            .unwrap_or(0);
+        let attacker_total = world
+            .scratch_total_outflow
+            .get(source_coord)
+            .copied()
+            .unwrap_or(0);
         let attacker_post_burn = u32::max(1, attacker_pre.saturating_sub(attacker_total));
         let src_origin_tag = world.cells.get(source_coord).map_or(0, |c| c.origin_tag);
 
@@ -374,8 +414,16 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
             }
             let target_coord = source_coord.neighbor(d);
 
-            let target_pre = pre_energy.get(&target_coord).copied().unwrap_or(0);
-            let target_total = total_outflow.get(&target_coord).copied().unwrap_or(0);
+            let target_pre = world
+                .scratch_pre_energy
+                .get(&target_coord)
+                .copied()
+                .unwrap_or(0);
+            let target_total = world
+                .scratch_total_outflow
+                .get(&target_coord)
+                .copied()
+                .unwrap_or(0);
             let target_e_post = target_pre.saturating_sub(target_total);
 
             let r = u32_to_f32(target_e_post) / u32_to_f32(attacker_post_burn);
@@ -495,22 +543,20 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 /// Cells are visited in `BTreeMap` (canonical) order. Each cell's
 /// budget runs to completion before the next cell starts.
 pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
-    // Phase 1: snapshot neighbor energies for every existing cell.
-    let coords: Vec<Coord> = world.cells.keys().copied().collect();
-    let mut neighbor_lookup: FxHashMap<Coord, [u32; Direction::COUNT]> = FxHashMap::default();
-    for coord in &coords {
-        let mut energies = [0u32; Direction::COUNT];
-        for &d in &Direction::ALL {
-            energies[d.index()] = world.neighbor_energy(*coord, d);
-        }
-        neighbor_lookup.insert(*coord, energies);
+    // The neighbor-energy snapshot is shared with `compute_natural_rates`
+    // when `cpu_phase` runs inside [`step`]. If a caller invokes
+    // `cpu_phase` standalone (e.g. tests), refresh it here so the read
+    // below sees fresh data.
+    if world.scratch_neighbor_energies.len() != world.cells.len() {
+        refresh_neighbor_energies(world);
     }
 
     let k_safe = k.max(1);
+    let snapshot = &world.scratch_neighbor_energies;
 
     // Phase 2: run each cell's instruction budget against the snapshot.
     for (coord, cell) in &mut world.cells {
-        let neighbors = neighbor_lookup
+        let neighbors = snapshot
             .get(coord)
             .copied()
             .unwrap_or([0; Direction::COUNT]);
