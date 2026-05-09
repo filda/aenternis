@@ -22,33 +22,33 @@ exclude_re = [
     # `if my_energy > neighbor_energy`. With `>=`, the equal branch
     # computes `delta = 0`, then `stochastic_floor(0)` early-returns 0
     # without advancing the RNG — same observable effect as native.
-    'tick\.rs:93:37: replace > with >=',
+    'tick\.rs:94:.*replace > with >=',
 
     # `if cell.total_rate() > my_energy { proportional_clamp(...) }`.
     # proportional_clamp is a no-op when total == cap (returns the rates
     # unchanged via the early-return), so > and >= produce identical output.
-    'tick\.rs:104:30: replace > with >=',
+    'tick\.rs:105:.*replace > with >=',
 
     # `if mem_size > 0 { ... }` in collect_outflow. When mem_size == 0
     # the cell's energy is also 0 (memory.len() == energy invariant), so
     # every rate is 0 and the loop body would produce the same all-empty
     # outflow either way.
-    'tick\.rs:157:21: replace > with >=',
+    'tick\.rs:185:.*replace > with >=',
 
     # Leftover-distribution loop in combined_clamped: `while leftover > 0`
     # (outer) and the inner `leftover > 0` (redundant with the outer
     # guard) both behave identically with `>=` because `if !added { break }`
     # exits the moment no positive rate exists — which is the only case
     # `>=` would let the loop enter.
-    'tick\.rs:261:20: replace > with >=',
-    'tick\.rs:264:35: replace > with >=',
+    'tick\.rs:289:20: replace > with >=',
+    'tick\.rs:292:35: replace > with >=',
 
     # `target.pc %= target.memory.len() as u32`. The else branch is marked
     # "defensive" in the source — the inflow phase only grows memory, so
     # pc < memory.len() always holds when this line runs, and the modulo
     # is a no-op. += and /= produce the same `pc` here.
-    'tick\.rs:438:23: replace %= with /=',
-    'tick\.rs:438:23: replace %= with \+=',
+    'tick\.rs:486:23: replace %= with /=',
+    'tick\.rs:486:23: replace %= with \+=',
 
     # --- cell.rs ---------------------------------------------------------
     # L259, L262:39: same leftover-distribution pattern as combined_clamped
