@@ -75,15 +75,6 @@ pub struct SparseWorld {
     /// ticks so the backing storage is reused across the whole run.
     pub(crate) scratch_neighbor_energies: FxHashMap<Coord, [u32; Direction::COUNT]>,
 
-    /// Per-tick scratch: pre-step energy snapshot used by
-    /// [`crate::tick::apply_outflow`]. Same alloc-reuse pattern as
-    /// [`Self::scratch_neighbor_energies`].
-    pub(crate) scratch_pre_energy: FxHashMap<Coord, u32>,
-
-    /// Per-tick scratch: total outflow per source coord, used inside
-    /// [`crate::tick::apply_outflow`] to compute attacker `post_burn`.
-    pub(crate) scratch_total_outflow: FxHashMap<Coord, u32>,
-
     /// Per-tick scratch: outflow buffer used by
     /// [`crate::tick::collect_outflow`]. Reused across ticks so the
     /// per-direction `Vec<u32>` capacities stay allocated even when
@@ -114,8 +105,6 @@ impl SparseWorld {
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
-            scratch_pre_energy: FxHashMap::with_hasher(FxBuildHasher),
-            scratch_total_outflow: FxHashMap::with_hasher(FxBuildHasher),
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
         }
     }

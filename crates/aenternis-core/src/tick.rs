@@ -382,20 +382,22 @@ pub fn combined_clamped(
 /// Apply an [`Outflow`] snapshot to the world with collision-as-soft-mixing
 /// (dominance / intrusion) semantics, per `docs/mechanics.md`.
 ///
-/// Three phases, sequential to keep the result independent of iteration
-/// order:
+/// Three phases:
 ///
-/// 1. **Snapshot pre-step energies.** Build a `Coord → energy` map plus
-///    `Coord → total_outflow` so the dominance math has consistent
-///    "before this tick's outflow" inputs for both attacker and target.
-/// 2. **Shrink sources.** Every cell loses `total_outflow` slots from
-///    the end of memory. Energy = `memory.len()` invariant restored.
-/// 3. **Per-target intrusion insert.** Inflows targeting the same cell
-///    are sorted by dominance descending (tie-break by source-direction
-///    canonical order) and applied one by one: each inflow is inserted
-///    at `write_start = memSize - intrusion_depth`, displacing the
-///    target's existing memory upward. Strong attackers drive deep into
-///    the core; weak ones stack on the membrane.
+/// 1. **Shrink sources.** Every cell loses `total_outflow` slots from
+///    the end of memory. After this step, `cell.energy()` equals the
+///    post-burn energy used by the dominance math — so we don't need
+///    to snapshot pre-step energies into a side table; the cell itself
+///    *is* the snapshot.
+/// 2. **Build per-target inflow lists** with dominance computed from
+///    the post-shrink energies (attacker post-burn for source,
+///    post-outflow for target).
+/// 3. **Per-target intrusion insert.** Inflows are sorted by dominance
+///    descending (tie-break by source-direction canonical order) and
+///    applied one by one: each inflow is `splice`d in at `write_start
+///    = memSize - intrusion_depth`, displacing the target's existing
+///    memory upward. Strong attackers drive deep into the core; weak
+///    ones stack on the membrane.
 ///
 /// **Dominance:** `dominance = clamp(1 - r / move_threshold, 0, 1)`
 /// where `r = target_E_post_outflow / max(attacker_E_post_burn, 1)`,
@@ -415,72 +417,56 @@ pub fn combined_clamped(
 /// memory shrank (impossible here — inflow only grows or holds).
 ///
 /// **Conservation:** total slots before == total slots after.
+///
+/// **Allocation:** the per-target intrusion insert uses
+/// [`Vec::splice`] over a pre-reserved `target.memory` buffer, so each
+/// applied inflow shifts memory in place rather than allocating a
+/// fresh `Vec` per inflow (the old code path's hot allocation source —
+/// at ~200 k cells with ~6 inflows each, that was ~1.3 M `Vec`
+/// allocations per tick).
+///
+/// **Parallelism:** the per-target apply phase iterates `world.cells`
+/// in parallel via rayon (native targets); each cell's work depends
+/// only on its own state plus the read-only `inflows_by_target` map,
+/// so the parallel walk is bit-identical to a sequential one.
 pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
-    // Phase 0: clear last tick's inflow tracking on every cell. The
-    // `sinflow` opcode reads what arrived "in the last tick"; that
-    // value is the one we'll accumulate during phase 3, so anything
-    // left over from the previous tick has to go.
+    // Phase 1: shrink each source by its total outgoing slot count.
     // -------------------------------------------------------------------
-    for cell in world.cells.values_mut() {
-        cell.inflow = [0; Direction::COUNT];
-    }
-
-    // -------------------------------------------------------------------
-    // Phase 1: snapshot pre-step energies + per-source total outflow.
-    // -------------------------------------------------------------------
-    // Reuse the world-level scratch maps so the backing storage carries
-    // over from previous ticks (clear() keeps capacity, avoiding the
-    // per-tick allocator churn the old `FxHashMap::default()` caused).
-    world.scratch_pre_energy.clear();
-    world.scratch_pre_energy.reserve(world.cells.len());
-    for (c, cell) in &world.cells {
-        world.scratch_pre_energy.insert(*c, cell.energy());
-    }
-
-    world.scratch_total_outflow.clear();
-    world.scratch_total_outflow.reserve(outflow.len());
+    // After this loop, `cell.energy()` for every source equals
+    // `pre - total_outflow` — exactly the post-burn / post-outflow
+    // value the dominance math needs. No separate snapshot map needed.
     for (coord, per_dir) in outflow {
         let total: u32 = per_dir
             .iter()
             .map(|v| u32::try_from(v.len()).unwrap_or(u32::MAX))
             .fold(0u32, u32::saturating_add);
-        world.scratch_total_outflow.insert(*coord, total);
-    }
-
-    // -------------------------------------------------------------------
-    // Phase 2: shrink each source by its total outgoing slot count.
-    // -------------------------------------------------------------------
-    for (coord, total) in &world.scratch_total_outflow {
+        if total == 0 {
+            continue;
+        }
         if let Some(cell) = world.cells.get_mut(coord) {
-            cell.shrink_from_end(*total);
+            cell.shrink_from_end(total);
         }
     }
 
     // -------------------------------------------------------------------
-    // Phase 3: build per-target inflow lists with dominance, then apply.
+    // Phase 2: build per-target inflow lists with dominance.
     // -------------------------------------------------------------------
     //
     // Per target: vec of (slots, dominance, src_origin_tag, dir_from_target_index).
-    // dir_from_target_index is the OPPOSITE of the source's emission dir,
-    // and is used as a deterministic tie-breaker when multiple inflows
+    // `dir_from_target_index` is the OPPOSITE of the source's emission
+    // dir, used as a deterministic tie-breaker when multiple inflows
     // share the same dominance.
-
     let move_threshold = world.move_threshold.max(f32::EPSILON);
     let mut inflows_by_target: FxHashMap<Coord, Vec<InflowEntry<'_>>> = FxHashMap::default();
+    inflows_by_target.reserve(outflow.len());
 
     for (source_coord, per_dir) in outflow {
-        let attacker_pre = world
-            .scratch_pre_energy
-            .get(source_coord)
-            .copied()
-            .unwrap_or(0);
-        let attacker_total = world
-            .scratch_total_outflow
-            .get(source_coord)
-            .copied()
-            .unwrap_or(0);
-        let attacker_post_burn = u32::max(1, attacker_pre.saturating_sub(attacker_total));
+        // After phase 1, cell.energy() is already the post-burn value
+        // (`max(1, …)` keeps the divisor strictly positive for the
+        // dominance ratio).
+        let attacker_post = world.cells.get(source_coord).map_or(0, Cell::energy);
+        let attacker_post_burn = u32::max(1, attacker_post);
         let src_origin_tag = world.cells.get(source_coord).map_or(0, |c| c.origin_tag);
 
         for &d in &Direction::ALL {
@@ -489,18 +475,10 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
                 continue;
             }
             let target_coord = source_coord.neighbor(d);
-
-            let target_pre = world
-                .scratch_pre_energy
-                .get(&target_coord)
-                .copied()
-                .unwrap_or(0);
-            let target_total = world
-                .scratch_total_outflow
-                .get(&target_coord)
-                .copied()
-                .unwrap_or(0);
-            let target_e_post = target_pre.saturating_sub(target_total);
+            // Same trick: the target's current energy *is* its
+            // post-outflow energy, since phase 1 has already shrunk
+            // anyone with outflow.
+            let target_e_post = world.cells.get(&target_coord).map_or(0, Cell::energy);
 
             let r = u32_to_f32(target_e_post) / u32_to_f32(attacker_post_burn);
             let dom = (1.0 - r / move_threshold).clamp(0.0, 1.0);
@@ -515,52 +493,89 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         }
     }
 
-    for (target_coord, mut entries) in inflows_by_target {
-        // Sort by dominance descending; tie-break by direction-from-target
-        // ascending (canonical order = deterministic).
+    // -------------------------------------------------------------------
+    // Phase 3: sort each target's inflows, alloc-on-write any void
+    // targets, then apply intrusion inserts in parallel.
+    // -------------------------------------------------------------------
+    // Sort sequentially so the per-target apply can run from a
+    // read-only `inflows_by_target` reference under `par_iter_mut`.
+    for entries in inflows_by_target.values_mut() {
         entries.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.3.cmp(&b.3))
         });
+    }
+    // Alloc-on-write for any target that didn't exist yet, so the
+    // parallel walk over `world.cells` finds every receiver as a
+    // single mutable bucket.
+    for target_coord in inflows_by_target.keys() {
+        world.get_or_alloc(*target_coord);
+    }
 
-        let target = world.get_or_alloc(target_coord);
+    let inflows = &inflows_by_target;
+    let body = |coord: &Coord, target: &mut Cell| {
+        // Phase 0 (clear last tick's inflow tracking) fuses into the
+        // same parallel iter so we don't need a separate full-cells
+        // pass. `sinflow` reads what arrived in the previous tick;
+        // anything left over from before has to go before we
+        // accumulate this tick's arrivals.
+        target.inflow = [0; Direction::COUNT];
 
-        // Origin-tag inheritance: highest-dominance source wins, but only
-        // if its dominance crosses the metempsychosis threshold.
+        let Some(entries) = inflows.get(coord) else {
+            return;
+        };
+        if entries.is_empty() {
+            return;
+        }
+
+        // Origin-tag inheritance: highest-dominance source wins, but
+        // only if its dominance crosses the metempsychosis threshold.
         if let Some(top) = entries.first() {
             if top.1 >= 0.5 {
                 target.origin_tag = top.2;
             }
         }
 
-        // Apply each inflow with intrusion-depth insert.
-        for (slots, dominance, _, dir_from_target) in &entries {
+        // One reserve covers every following splice — keeps the
+        // allocator out of the inner loop.
+        let total_added: usize = entries.iter().map(|(s, _, _, _)| s.len()).sum();
+        target.memory.reserve(total_added);
+
+        for (slots, dominance, _, dir_from_target) in entries {
             let current = target.memory.len();
             let intrusion_depth = ((*dominance) * usize_to_f32(current)) as usize;
             let write_start = current.saturating_sub(intrusion_depth);
 
-            // new_mem = mem[..write_start] ++ slots ++ mem[write_start..]
-            let mut new_mem = Vec::with_capacity(current + slots.len());
-            new_mem.extend_from_slice(&target.memory[..write_start]);
-            new_mem.extend_from_slice(slots);
-            new_mem.extend_from_slice(&target.memory[write_start..]);
-            target.memory = new_mem;
+            // In-place insert: empty splice range = pure insertion.
+            // Capacity already covers the final size, so no realloc.
+            target
+                .memory
+                .splice(write_start..write_start, slots.iter().copied());
 
-            // Track the slot count for `sinflow` in the next tick.
             let dir_idx = *dir_from_target as usize;
             let slots_len = u32::try_from(slots.len()).unwrap_or(u32::MAX);
             target.inflow[dir_idx] = target.inflow[dir_idx].saturating_add(slots_len);
         }
 
         // PC stays numerically the same; bring it back into range if
-        // memory ever shrank. (Inflow phase only grows, so this is a
-        // no-op here, but defensive.)
+        // memory ever shrank. (Inflow phase only grows, so this is
+        // defensive — relevant only if a future change adds shrink.)
         if target.memory.is_empty() {
             target.pc = 0;
         } else {
             target.pc %= target.memory.len() as u32;
         }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    world
+        .cells
+        .par_iter_mut()
+        .for_each(|(c, cell)| body(c, cell));
+    #[cfg(target_arch = "wasm32")]
+    for (c, cell) in &mut world.cells {
+        body(c, cell);
     }
 }
 
