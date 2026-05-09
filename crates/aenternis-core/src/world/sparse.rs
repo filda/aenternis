@@ -88,6 +88,18 @@ pub struct SparseWorld {
     /// can coexist for [`crate::tick::apply_outflow`]) and puts it back
     /// before the tick ends.
     pub(crate) scratch_outflow: FxHashMap<Coord, [Vec<u32>; Direction::COUNT]>,
+
+    /// Per-tick scratch: per-target inflow lists used by
+    /// [`crate::tick::apply_outflow`] phase 2/3. The value `Vec`
+    /// capacity is reused across ticks — at ~200 k targets per tick
+    /// this avoids ~200 k `Vec::with_capacity(0).reserve(N)` cycles
+    /// on the per-target inflow buffer.
+    ///
+    /// Same `mem::take` pattern as [`Self::scratch_outflow`]: the
+    /// outflow phase pulls it out so the per-target apply can hold
+    /// `&mut world.cells` while still reading the populated inflow
+    /// lists, then puts it back.
+    pub(crate) scratch_inflows_by_target: FxHashMap<Coord, Vec<crate::tick::InflowEntry>>,
 }
 
 impl SparseWorld {
@@ -106,6 +118,7 @@ impl SparseWorld {
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
         }
     }
 

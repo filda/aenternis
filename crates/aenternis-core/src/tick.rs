@@ -134,20 +134,37 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
 /// `memory.len()` doesn't change inside the CPU phase), so building
 /// once saves one full snapshot pass per tick.
 ///
-/// `clear()` keeps the backing `HashMap` storage allocated, so this
-/// runs as `O(n)` work without any per-tick allocator churn.
+/// **Allocation:** the snapshot's keyset is sync'd to `world.cells` in
+/// place — stale coords dropped, missing ones inserted with all-zero
+/// arrays — so the backing storage carries over from previous ticks
+/// without per-tick allocator churn.
+///
+/// **Parallelism:** the value-fill pass runs in parallel via rayon
+/// (native targets). Each entry's six neighbor lookups read the
+/// immutable `world.cells` map by coord, so the parallel walk is
+/// bit-identical to a sequential one.
 fn refresh_neighbor_energies(world: &mut SparseWorld) {
     let cells = &world.cells;
     let snapshot = &mut world.scratch_neighbor_energies;
-    snapshot.clear();
-    snapshot.reserve(cells.len());
+    // Keyset sync: drop stale, insert empty slots for new coords.
+    snapshot.retain(|coord, _| cells.contains_key(coord));
+    snapshot.reserve(cells.len().saturating_sub(snapshot.len()));
     for coord in cells.keys() {
-        let mut energies = [0u32; Direction::COUNT];
+        snapshot.entry(*coord).or_default();
+    }
+
+    let body = |coord: &Coord, energies: &mut [u32; Direction::COUNT]| {
         for &d in &Direction::ALL {
             let neighbor_coord = coord.neighbor(d);
-            energies[d.index()] = cells.get(&neighbor_coord).map_or(0, crate::Cell::energy);
+            energies[d.index()] = cells.get(&neighbor_coord).map_or(0, Cell::energy);
         }
-        snapshot.insert(*coord, energies);
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    snapshot.par_iter_mut().for_each(|(c, e)| body(c, e));
+    #[cfg(target_arch = "wasm32")]
+    for (c, e) in snapshot.iter_mut() {
+        body(c, e);
     }
 }
 
@@ -429,6 +446,7 @@ pub fn combined_clamped(
 /// in parallel via rayon (native targets); each cell's work depends
 /// only on its own state plus the read-only `inflows_by_target` map,
 /// so the parallel walk is bit-identical to a sequential one.
+#[allow(clippy::too_many_lines)]
 pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
     // Phase 1: shrink each source by its total outgoing slot count.
@@ -453,21 +471,28 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // Phase 2: build per-target inflow lists with dominance.
     // -------------------------------------------------------------------
     //
-    // Per target: vec of (slots, dominance, src_origin_tag, dir_from_target_index).
-    // `dir_from_target_index` is the OPPOSITE of the source's emission
-    // dir, used as a deterministic tie-breaker when multiple inflows
-    // share the same dominance.
+    // The inflow map is pulled out of `world` via `mem::take` so its
+    // per-target `Vec` capacities — `clear()`-reused across ticks —
+    // skip the ~200 k `Vec::with_capacity(0)→reserve(N)` cycle the
+    // freshly-built `FxHashMap::default()` version was paying.
     let move_threshold = world.move_threshold.max(f32::EPSILON);
-    let mut inflows_by_target: FxHashMap<Coord, Vec<InflowEntry<'_>>> = FxHashMap::default();
-    inflows_by_target.reserve(outflow.len());
+    let mut inflows_by_target = std::mem::take(&mut world.scratch_inflows_by_target);
+    // Clear value lengths but keep capacities; the keyset stays as
+    // whatever it was last tick (most coords overlap), and stale
+    // entries are dropped at the end of the apply phase.
+    for v in inflows_by_target.values_mut() {
+        v.clear();
+    }
+    inflows_by_target.reserve(outflow.len().saturating_sub(inflows_by_target.len()));
 
     for (source_coord, per_dir) in outflow {
-        // After phase 1, cell.energy() is already the post-burn value
-        // (`max(1, …)` keeps the divisor strictly positive for the
-        // dominance ratio).
-        let attacker_post = world.cells.get(source_coord).map_or(0, Cell::energy);
+        // One cell lookup covers both fields we need from the source
+        // (energy and origin tag), instead of two separate `get` calls.
+        let (attacker_post, src_origin_tag) = world
+            .cells
+            .get(source_coord)
+            .map_or((0u32, 0u32), |c| (c.energy(), c.origin_tag));
         let attacker_post_burn = u32::max(1, attacker_post);
-        let src_origin_tag = world.cells.get(source_coord).map_or(0, |c| c.origin_tag);
 
         for &d in &Direction::ALL {
             let slots = &per_dir[d.index()];
@@ -475,21 +500,22 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
                 continue;
             }
             let target_coord = source_coord.neighbor(d);
-            // Same trick: the target's current energy *is* its
-            // post-outflow energy, since phase 1 has already shrunk
-            // anyone with outflow.
             let target_e_post = world.cells.get(&target_coord).map_or(0, Cell::energy);
 
             let r = u32_to_f32(target_e_post) / u32_to_f32(attacker_post_burn);
             let dom = (1.0 - r / move_threshold).clamp(0.0, 1.0);
 
             let dir_from_target = d.opposite().index() as u8;
-            inflows_by_target.entry(target_coord).or_default().push((
-                slots.as_slice(),
-                dom,
-                src_origin_tag,
-                dir_from_target,
-            ));
+            inflows_by_target
+                .entry(target_coord)
+                .or_default()
+                .push(InflowEntry {
+                    source_coord: *source_coord,
+                    source_dir: d.index() as u8,
+                    dominance: dom,
+                    src_origin_tag,
+                    dir_from_target,
+                });
         }
     }
 
@@ -499,18 +525,26 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
     // Sort sequentially so the per-target apply can run from a
     // read-only `inflows_by_target` reference under `par_iter_mut`.
+    // Empty `Vec`s (stale entries from previous ticks) are skipped —
+    // their capacity stays reserved for next tick.
     for entries in inflows_by_target.values_mut() {
+        if entries.len() <= 1 {
+            continue;
+        }
         entries.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
+            b.dominance
+                .partial_cmp(&a.dominance)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.3.cmp(&b.3))
+                .then_with(|| a.dir_from_target.cmp(&b.dir_from_target))
         });
     }
     // Alloc-on-write for any target that didn't exist yet, so the
     // parallel walk over `world.cells` finds every receiver as a
-    // single mutable bucket.
-    for target_coord in inflows_by_target.keys() {
-        world.get_or_alloc(*target_coord);
+    // single mutable bucket. Skip stale entries with empty `Vec`s.
+    for (target_coord, entries) in &inflows_by_target {
+        if !entries.is_empty() {
+            world.get_or_alloc(*target_coord);
+        }
     }
 
     let inflows = &inflows_by_target;
@@ -532,28 +566,40 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         // Origin-tag inheritance: highest-dominance source wins, but
         // only if its dominance crosses the metempsychosis threshold.
         if let Some(top) = entries.first() {
-            if top.1 >= 0.5 {
-                target.origin_tag = top.2;
+            if top.dominance >= 0.5 {
+                target.origin_tag = top.src_origin_tag;
             }
         }
 
         // One reserve covers every following splice — keeps the
-        // allocator out of the inner loop.
-        let total_added: usize = entries.iter().map(|(s, _, _, _)| s.len()).sum();
+        // allocator out of the inner loop. Looking up slots on demand
+        // (one `outflow.get` per applied entry) trades a cheap
+        // cache-warm hash lookup for the ability to pool
+        // `inflows_by_target` across ticks.
+        let total_added: usize = entries
+            .iter()
+            .map(|e| {
+                outflow
+                    .get(&e.source_coord)
+                    .map_or(0, |per_dir| per_dir[e.source_dir as usize].len())
+            })
+            .sum();
         target.memory.reserve(total_added);
 
-        for (slots, dominance, _, dir_from_target) in entries {
+        for entry in entries {
+            let Some(per_dir) = outflow.get(&entry.source_coord) else {
+                continue;
+            };
+            let slots = &per_dir[entry.source_dir as usize];
             let current = target.memory.len();
-            let intrusion_depth = ((*dominance) * usize_to_f32(current)) as usize;
+            let intrusion_depth = (entry.dominance * usize_to_f32(current)) as usize;
             let write_start = current.saturating_sub(intrusion_depth);
 
-            // In-place insert: empty splice range = pure insertion.
-            // Capacity already covers the final size, so no realloc.
             target
                 .memory
                 .splice(write_start..write_start, slots.iter().copied());
 
-            let dir_idx = *dir_from_target as usize;
+            let dir_idx = entry.dir_from_target as usize;
             let slots_len = u32::try_from(slots.len()).unwrap_or(u32::MAX);
             target.inflow[dir_idx] = target.inflow[dir_idx].saturating_add(slots_len);
         }
@@ -577,14 +623,45 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     for (c, cell) in &mut world.cells {
         body(c, cell);
     }
+
+    // Return the pooled inflow map to the world so its per-target
+    // `Vec` capacities carry over to the next tick's apply.
+    world.scratch_inflows_by_target = inflows_by_target;
 }
 
-/// Inflow entry built during phase 3 of [`apply_outflow`]: a slice of
-/// slots to insert, the attacker's dominance against the target, the
-/// attacker's origin tag (for metempsychosis), and the direction the
-/// inflow appears from the target's perspective (used as a deterministic
-/// tie-breaker when sorting equal-dominance inflows).
-type InflowEntry<'a> = (&'a [u32], f32, u32, u8);
+/// Inflow entry built during phase 2 of [`apply_outflow`].
+///
+/// Stores the minimum needed to look up the slice of slots in the
+/// source's [`Outflow`] entry on demand (no borrow), the attacker's
+/// dominance against the target, and the attacker's origin tag for
+/// metempsychosis.
+///
+/// The struct holds `(source_coord, source_dir)` rather than a `&[u32]`
+/// so the containing `Vec` can live on [`SparseWorld`] across ticks
+/// (no lifetime parameter, so capacity reuse via `Vec::clear` is
+/// possible). The slots are recovered in phase 3 with one extra
+/// `outflow.get(source_coord)` lookup per applied inflow — at ~6
+/// inflows per target × ~200 k targets that's well under a millisecond
+/// of cache-warm hash lookups, far less than the ~200 k `Vec`
+/// allocations the pooled storage replaces.
+#[derive(Debug, Clone, Copy)]
+pub struct InflowEntry {
+    /// Source cell that emitted this inflow.
+    pub source_coord: crate::Coord,
+    /// Direction in which the source emitted (`d` such that
+    /// `target_coord = source_coord.neighbor(d)`).
+    pub source_dir: u8,
+    /// Dominance score of this inflow against the target.
+    pub dominance: f32,
+    /// Attacker's `origin_tag`, used for metempsychosis if dominance
+    /// crosses the threshold.
+    pub src_origin_tag: u32,
+    /// Direction-from-target: the face the inflow appears to enter
+    /// through. Equal to `Direction::from(source_dir).opposite().index()`,
+    /// cached here so the sort tie-breaker and the
+    /// `target.inflow[dir]` update don't need to recompute it.
+    pub dir_from_target: u8,
+}
 
 /// `u32 → f32` cast for dominance arithmetic. Cell energies stay well
 /// below `2^24` in any realistic world (where `f32` is exact), so the
@@ -631,8 +708,11 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 /// in another cell's sensor reads in the same tick. This matches the
 /// introspection invariant from `docs/aenternis.md`.
 ///
-/// Cells are visited in `BTreeMap` (canonical) order. Each cell's
-/// budget runs to completion before the next cell starts.
+/// **Determinism:** each cell's instruction budget reads only the
+/// shared snapshot and writes only into its own state, so the parallel
+/// walk below produces the same result as a sequential one. The
+/// per-cell-per-tick RNG (if any opcode draws one) is keyed by
+/// `(world_seed, tick, coord)`, not by iteration order.
 pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     // The neighbor-energy snapshot is shared with `compute_natural_rates`
     // when `cpu_phase` runs inside [`step`]. If a caller invokes
@@ -645,8 +725,7 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     let k_safe = k.max(1);
     let snapshot = &world.scratch_neighbor_energies;
 
-    // Phase 2: run each cell's instruction budget against the snapshot.
-    for (coord, cell) in &mut world.cells {
+    let body = |coord: &Coord, cell: &mut Cell| {
         let neighbors = snapshot
             .get(coord)
             .copied()
@@ -655,6 +734,16 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
         for _ in 0..budget {
             crate::vm::execute_instruction(cell, &neighbors);
         }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    world
+        .cells
+        .par_iter_mut()
+        .for_each(|(c, cell)| body(c, cell));
+    #[cfg(target_arch = "wasm32")]
+    for (c, cell) in &mut world.cells {
+        body(c, cell);
     }
 }
 
