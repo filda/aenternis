@@ -33,7 +33,13 @@
 use rustc_hash::FxHashMap;
 
 use crate::cell::proportional_clamp;
-use crate::{Coord, Direction, Rng, SparseWorld};
+use crate::{Cell, Coord, Direction, Rng, SparseWorld};
+
+// Rayon's parallel iterator traits are only pulled in on native
+// targets. WASM builds fall back to sequential `iter_mut()` (rayon
+// needs `SharedArrayBuffer` + COOP/COEP, separate infrastructure).
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
 
 /// Compute natural per-direction rates for every cell in the world.
 ///
@@ -63,32 +69,33 @@ use crate::{Coord, Direction, Rng, SparseWorld};
 pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     refresh_neighbor_energies(world);
 
-    // Pull Copy fields off the world so the mutable iteration below
-    // doesn't conflict with shared borrows.
+    // Pull Copy fields off the world so the per-cell closure below
+    // doesn't hold a shared borrow during the (parallel) mutable phase.
     let world_seed = world.world_seed;
     // JS prototype 9-B computes the layout for step #N at the end of
     // step #(N-1), *before* incrementing `this.tick` — so the rng_tick
     // used is N-2 (saturated at 0). We always run in 9-B parity, so
     // this offset is hardcoded.
     let rng_tick = world.tick.saturating_sub(1);
-
-    // Phase 2: compute rates per cell. Split-borrow lets us read the
-    // shared snapshot while mutating each cell.
     let snapshot = &world.scratch_neighbor_energies;
-    for (coord, cell) in &mut world.cells {
+
+    // Per-cell work: reads `snapshot` and `world_seed` / `rng_tick` /
+    // `coeff` only via shared captures, writes only into its own
+    // `cell.rates`. Each cell's RNG is freshly seeded from
+    // `(world_seed, rng_tick, coord)` — order of execution doesn't
+    // affect the result, so this is safe to run in parallel without
+    // breaking the bit-identity contract against JS prototype 9-B.
+    let body = |coord: &Coord, cell: &mut Cell| {
         let my_energy = cell.energy();
         if my_energy == 0 {
             cell.rates = [0; Direction::COUNT];
-            continue;
+            return;
         }
-
-        // One HashMap lookup per cell instead of six (one per direction).
         let neighbor_energies = snapshot
             .get(coord)
             .copied()
             .unwrap_or([0; Direction::COUNT]);
         let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, *coord);
-
         for &d in &Direction::ALL {
             let neighbor_energy = neighbor_energies[d.index()];
             let rate = if my_energy > neighbor_energy {
@@ -101,10 +108,19 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             };
             cell.rates[d.index()] = rate;
         }
-
         if cell.total_rate() > my_energy {
             proportional_clamp(&mut cell.rates, my_energy);
         }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    world
+        .cells
+        .par_iter_mut()
+        .for_each(|(c, cell)| body(c, cell));
+    #[cfg(target_arch = "wasm32")]
+    for (c, cell) in &mut world.cells {
+        body(c, cell);
     }
 }
 
@@ -172,32 +188,82 @@ pub type Outflow = FxHashMap<Coord, [Vec<u32>; Direction::COUNT]>;
 /// is keyed by `Coord` and independent of iteration order — same per-cell
 /// inputs always produce the same per-direction slots.
 ///
-/// **Allocation:** allocates one `Vec<u32>` per direction per cell, even
-/// when the rate is zero. That's six small allocations per cell per tick,
-/// which is fine for the prototype phase. A pooled-buffer variant can come
-/// later if profiling shows it's worth the complexity.
+/// **Allocation:** allocates the `Outflow` map plus one `Vec<u32>` per
+/// emitting direction per cell. For long-running simulations (where
+/// the world has hundreds of thousands of cells), prefer
+/// [`collect_outflow_into`] — it reuses an externally owned `Outflow`
+/// across ticks so the `Vec` capacities stay allocated. [`step`] uses
+/// that path internally via [`SparseWorld::scratch_outflow`].
 #[must_use]
 pub fn collect_outflow(world: &SparseWorld) -> Outflow {
     let mut outflow = Outflow::default();
-    for (coord, cell) in world {
+    collect_outflow_into(world, &mut outflow);
+    outflow
+}
+
+/// Fill an externally owned [`Outflow`] from the current world, reusing
+/// its existing per-direction `Vec` capacities across ticks.
+///
+/// Semantics match [`collect_outflow`]: same per-cell, per-direction
+/// slot extraction, same combined-and-clamped emission size. The only
+/// difference is allocation behaviour — entries are `clear()`ed and
+/// refilled in place so a steady-state world doesn't hit the allocator
+/// for the hot per-tick `Vec<u32>` storage.
+///
+/// **Keyset sync:** stale coords (no longer in `world.cells`) are
+/// dropped, missing coords are inserted with default-constructed
+/// (non-allocating) per-direction arrays before the parallel fill.
+///
+/// **Determinism:** per-entry work is independent and depends only on
+/// the cell's own state, so parallel and sequential paths produce
+/// identical results.
+pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
+    // Sync keyset: drop entries for coords that no longer exist, then
+    // insert empty slots for new ones. Default-constructing
+    // `[Vec<u32>; 6]` is non-allocating (`Vec::new()` per slot).
+    outflow.retain(|coord, _| world.cells.contains_key(coord));
+    outflow.reserve(world.cells.len().saturating_sub(outflow.len()));
+    for coord in world.cells.keys() {
+        outflow.entry(*coord).or_default();
+    }
+
+    // Per-entry work: clear the per-direction buffers (keeps capacity),
+    // then refill from the cell's memory. Each entry's cell is read by
+    // coord lookup against the immutable `world.cells`, so per-entry
+    // tasks are fully independent.
+    let cells = &world.cells;
+    let body = |coord: &Coord, per_dir: &mut [Vec<u32>; Direction::COUNT]| {
+        for v in per_dir.iter_mut() {
+            v.clear();
+        }
+        let Some(cell) = cells.get(coord) else {
+            return;
+        };
         let mem_size = cell.memory.len();
-        let mut per_direction: [Vec<u32>; Direction::COUNT] = Default::default();
-        if mem_size > 0 {
-            let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
-            let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
-            for &d in &Direction::ALL {
-                let rate = combined[d.index()] as usize;
-                let ptr = cell.pointers[d.index()] as usize;
-                let mut buf = Vec::with_capacity(rate);
-                for k in 0..rate {
-                    buf.push(cell.memory[(ptr + k) % mem_size]);
-                }
-                per_direction[d.index()] = buf;
+        if mem_size == 0 {
+            return;
+        }
+        let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
+        let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
+        for &d in &Direction::ALL {
+            let rate = combined[d.index()] as usize;
+            let ptr = cell.pointers[d.index()] as usize;
+            let buf = &mut per_dir[d.index()];
+            buf.reserve(rate);
+            for k in 0..rate {
+                buf.push(cell.memory[(ptr + k) % mem_size]);
             }
         }
-        outflow.insert(*coord, per_direction);
-    }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
     outflow
+        .par_iter_mut()
+        .for_each(|(c, per_dir)| body(c, per_dir));
+    #[cfg(target_arch = "wasm32")]
+    for (c, per_dir) in outflow.iter_mut() {
+        body(c, per_dir);
+    }
 }
 
 /// Lay out per-direction pointers for every cell in the world.
@@ -214,14 +280,24 @@ pub fn collect_outflow(world: &SparseWorld) -> Outflow {
 /// with JS `Number` arithmetic when `rates + active_outflow` exceeds
 /// `u32::MAX`.
 pub fn lay_out_pointers(world: &mut SparseWorld) {
-    for cell in world.cells.values_mut() {
+    // Per-cell pointer layout has no inter-cell dependencies — each
+    // cell only reads its own rates / active_outflow / memory size.
+    // Parallelizing is bit-identical to the sequential walk.
+    let body = |cell: &mut Cell| {
         let mem_size = cell.memory.len();
         if mem_size == 0 {
-            continue;
+            return;
         }
         let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
         let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
         cell.lay_out_pointers(&combined);
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    world.cells.par_iter_mut().for_each(|(_, cell)| body(cell));
+    #[cfg(target_arch = "wasm32")]
+    for cell in world.cells.values_mut() {
+        body(cell);
     }
 }
 
@@ -588,8 +664,13 @@ pub fn step(world: &mut SparseWorld, coeff: f64, k: u32) {
     initialize(world, coeff);
     cpu_phase(world, k);
     lay_out_pointers(world);
-    let outflow = collect_outflow(world);
+    // `mem::take` pulls the scratch buffer out so we can pass `&mut
+    // world.cells` into `apply_outflow` while still owning a populated
+    // `Outflow`. Reattach at the end so capacities persist across ticks.
+    let mut outflow = std::mem::take(&mut world.scratch_outflow);
+    collect_outflow_into(world, &mut outflow);
     apply_outflow(world, &outflow);
+    world.scratch_outflow = outflow;
     end_of_tick(world);
     world.gc_empty();
     world.tick = world.tick.saturating_add(1);
@@ -626,8 +707,10 @@ pub fn initialize(world: &mut SparseWorld, coeff: f64) {
 /// source ends up appended into exactly one neighbor.
 pub fn step_diffusion(world: &mut SparseWorld, coeff: f64) {
     initialize(world, coeff);
-    let outflow = collect_outflow(world);
+    let mut outflow = std::mem::take(&mut world.scratch_outflow);
+    collect_outflow_into(world, &mut outflow);
     apply_outflow(world, &outflow);
+    world.scratch_outflow = outflow;
     end_of_tick(world);
     world.gc_empty();
     world.tick = world.tick.saturating_add(1);

@@ -83,6 +83,20 @@ pub struct SparseWorld {
     /// Per-tick scratch: total outflow per source coord, used inside
     /// [`crate::tick::apply_outflow`] to compute attacker `post_burn`.
     pub(crate) scratch_total_outflow: FxHashMap<Coord, u32>,
+
+    /// Per-tick scratch: outflow buffer used by
+    /// [`crate::tick::collect_outflow`]. Reused across ticks so the
+    /// per-direction `Vec<u32>` capacities stay allocated even when
+    /// rates fluctuate inside their typical range — at a few hundred
+    /// thousand cells this avoids `~6 × n_cells` `Vec` allocations per
+    /// tick and was the single biggest win of the parallelization
+    /// pass.
+    ///
+    /// [`crate::tick::step`] pulls this field out via [`std::mem::take`]
+    /// during the outflow phase (so `&mut world.cells` and `&Outflow`
+    /// can coexist for [`crate::tick::apply_outflow`]) and puts it back
+    /// before the tick ends.
+    pub(crate) scratch_outflow: FxHashMap<Coord, [Vec<u32>; Direction::COUNT]>,
 }
 
 impl SparseWorld {
@@ -102,6 +116,7 @@ impl SparseWorld {
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
             scratch_pre_energy: FxHashMap::with_hasher(FxBuildHasher),
             scratch_total_outflow: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
         }
     }
 

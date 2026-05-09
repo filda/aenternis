@@ -11,6 +11,16 @@ repository.workspace = true
 [dependencies]
 rustc-hash = { workspace = true }
 
+# Rayon is the data-parallelism runtime used by the per-tick phases
+# (`compute_natural_rates`, `lay_out_pointers`, `collect_outflow`).
+# It only ships on native targets — `wasm32` builds (the production
+# `aenternis-wasm` cdylib path) fall back to sequential iteration via
+# `cfg(target_arch = "wasm32")` gates inside the crate. Browser-side
+# parallelism would require `wasm-bindgen-rayon` plus COOP/COEP headers,
+# which is a separate piece of infrastructure to wire up.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 
