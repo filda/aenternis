@@ -344,6 +344,45 @@ export function bootstrap(): void {
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
 
+  // ----- Auto-zoom-out after a fresh fit -------------------------------------
+  // The initial fit lands tight against the tick-0 bbox; auto-zoom-out gently
+  // pulls the camera back as the world grows. Cancelled the moment the user
+  // touches the canvas or presses any key so manual control always wins.
+  const AUTO_ZOOM_TICKS = 200;
+  const AUTO_ZOOM_TOTAL_FACTOR = 150.0;
+  let autoZoomTicksLeft = 0;
+  let autoZoomBaseTick = 0;
+  let autoZoomBaseDist = 0;
+  const autoZoomDir = new THREE.Vector3();
+
+  function startAutoZoom(tick: number): void {
+    autoZoomDir.subVectors(camera.position, controls.target);
+    autoZoomBaseDist = autoZoomDir.length();
+    if (autoZoomBaseDist < 1e-6) {
+      autoZoomTicksLeft = 0;
+      return;
+    }
+    autoZoomDir.normalize();
+    autoZoomBaseTick = tick;
+    autoZoomTicksLeft = AUTO_ZOOM_TICKS;
+  }
+
+  function cancelAutoZoom(): void {
+    autoZoomTicksLeft = 0;
+  }
+
+  function stepAutoZoom(): void {
+    if (autoZoomTicksLeft <= 0 || !latestSnapshot) return;
+    const elapsed = latestSnapshot.tick - autoZoomBaseTick;
+    const progress = Math.max(0, Math.min(1, elapsed / AUTO_ZOOM_TICKS));
+    const dist = autoZoomBaseDist * Math.pow(AUTO_ZOOM_TOTAL_FACTOR, progress);
+    camera.position.copy(controls.target).addScaledVector(autoZoomDir, dist);
+    if (progress >= 1) autoZoomTicksLeft = 0;
+  }
+
+  renderer.domElement.addEventListener('pointerdown', cancelAutoZoom);
+  renderer.domElement.addEventListener('wheel', cancelAutoZoom, { passive: true });
+
   // Postprocessing pipeline: scene render → unreal bloom. Bloom picks
   // up pixels brighter than `threshold` and bleeds them into a glow,
   // which combined with the warm-end heat ramp makes hot cells feel
@@ -487,6 +526,7 @@ export function bootstrap(): void {
 
   window.addEventListener('keydown', (ev) => {
     if (isInputFocused(ev.target)) return;
+    cancelAutoZoom();
     const k = ev.key.toLowerCase();
     if (k in keyState) keyState[k] = true;
     if (k === 'shift') keyState['shift'] = true;
@@ -863,6 +903,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     if (dt > 0) fpsAvg = 0.9 * fpsAvg + 0.1 * (1000 / dt);
 
     applyWsad(dt);
+    stepAutoZoom();
 
     if (latestSnapshot && latestSnapshot.tick !== lastRenderedTick) {
       renderSnapshot(latestSnapshot);
@@ -914,6 +955,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     if (cameraFitDirty && cellCount > 0) {
       fitCameraToBbox(bbox);
       cameraFitDirty = false;
+      startAutoZoom(state.tick);
     }
 
     for (let i = 0; i < cellCount; i += 1) {
