@@ -337,3 +337,19 @@ fn cell_tick_seed_domain_separation() {
     assert_ne!(s1, s2, "domain 1 and 2 collided");
     assert_ne!(s0, s2, "domain 0 and 2 collided");
 }
+
+#[test]
+fn cell_tick_seed_salted_path_matches_reference() {
+    // Reference snapshot for `domain != 0`. Pins the post-salt mix
+    // (`h.wrapping_add(domain).wrapping_mul(K) ^ (h >> 15)`) to exact
+    // output values, so any drift in the shift direction, the XOR
+    // operator, or the multiplier breaks at least one assertion.
+    // Two different domains for the same `(world_seed, tick, coord)`
+    // diverge to confirm the salt's diffusion across the seed.
+    assert_eq!(cell_tick_seed(0, 0, Coord::new(0, 0, 0), 1), 292_749_432);
+    assert_eq!(
+        cell_tick_seed(1234, 3, Coord::new(2, 5, 7), 1),
+        2_729_484_746
+    );
+    assert_eq!(cell_tick_seed(1234, 3, Coord::new(2, 5, 7), 2), 31_935_216);
+}

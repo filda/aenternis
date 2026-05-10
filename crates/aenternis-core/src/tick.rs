@@ -436,35 +436,37 @@ pub fn combined_clamped(
     }
     // Distribute leftover by Largest-Remainder with shuffled tie-break.
     // `cap >= new_total` always holds: each `floored ≤ combined * scale`
-    // and `sum(combined * scale) = cap`, so `new_total ≤ cap`.
+    // and `sum(combined * scale) = cap`, so `new_total ≤ cap`. The
+    // shuffle + sort runs unconditionally even when `leftover == 0`
+    // (the rare case where `f64` rounding leaves `new_total == cap`
+    // exactly): a `take(0)` below makes that path a no-op without an
+    // observable-equivalent `if leftover > 0` early-skip that mutation
+    // tests would correctly flag as redundant.
     let leftover = cap.saturating_sub(new_total) as usize;
-    if leftover > 0 {
-        let mut order: [usize; Direction::COUNT] = [0, 1, 2, 3, 4, 5];
-        let mut rng =
-            Rng::for_cell_at_tick(world_seed, rng_tick, coord, COMBINED_CLAMPED_RNG_DOMAIN);
-        // Fisher-Yates shuffle of `order`. Indices i in (0..6).rev()
-        // pick a uniformly-distributed swap target in `0..=i` from the
-        // RNG. After this loop `order` is a uniformly-random permutation
-        // of `[0, 1, 2, 3, 4, 5]` deterministic in
-        // `(world_seed, rng_tick, coord)`.
-        for i in (1..Direction::COUNT).rev() {
-            // `next_u32() as usize % (i + 1)` — unbiased enough at this
-            // tiny range; the modulo bias for a 32-bit draw over 2..=6
-            // is below 2^-29 and we are already shuffling six elements.
-            let j = (rng.next_u32() as usize) % (i + 1);
-            order.swap(i, j);
-        }
-        // Stable sort `order` by `frac` descending — equal remainders
-        // keep their (already-shuffled) relative order, so the tie-break
-        // is independent of `Direction::ALL`'s canonical ordering.
-        order.sort_by(|&a, &b| {
-            frac[b]
-                .partial_cmp(&frac[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for &idx in order.iter().take(leftover) {
-            clamped[idx] = clamped[idx].saturating_add(1);
-        }
+    let mut order: [usize; Direction::COUNT] = [0, 1, 2, 3, 4, 5];
+    let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, coord, COMBINED_CLAMPED_RNG_DOMAIN);
+    // Fisher-Yates shuffle of `order`. Indices i in (1..6).rev() pick a
+    // uniformly-distributed swap target in `0..=i` from the RNG. After
+    // this loop `order` is a uniformly-random permutation of
+    // `[0, 1, 2, 3, 4, 5]` deterministic in `(world_seed, rng_tick,
+    // coord)`.
+    for i in (1..Direction::COUNT).rev() {
+        // `next_u32() as usize % (i + 1)` — unbiased enough at this
+        // tiny range; the modulo bias for a 32-bit draw over 2..=6 is
+        // below 2^-29, and we are already shuffling six elements.
+        let j = (rng.next_u32() as usize) % (i + 1);
+        order.swap(i, j);
+    }
+    // Stable sort `order` by `frac` descending — equal remainders keep
+    // their (already-shuffled) relative order, so the tie-break is
+    // independent of `Direction::ALL`'s canonical ordering.
+    order.sort_by(|&a, &b| {
+        frac[b]
+            .partial_cmp(&frac[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for &idx in order.iter().take(leftover) {
+        clamped[idx] = clamped[idx].saturating_add(1);
     }
     clamped
 }
