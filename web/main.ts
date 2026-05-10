@@ -31,6 +31,7 @@ import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
 import { heatColor, meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
 import { JITTER_AMPLITUDE, gridJitter } from '../src/jitter.ts';
+import type { SimChannel } from '../src/native-client.ts';
 import { parseProgramText } from '../src/program-text.ts';
 import type {
   CellDetailMsg,
@@ -42,6 +43,7 @@ import type {
   StepMsg,
   WorkerToMainMsg,
 } from '../src/protocol.ts';
+import { openNativeClient } from './native-client.ts';
 import { analyzeSnapshot, type SnapshotBbox } from '../src/snapshot.ts';
 import {
   EMPTY_TRACKER_STATE,
@@ -56,6 +58,56 @@ interface RuntimeConfig {
   coeff: number;
   k: number;
   moveThreshold: number;
+}
+
+interface BackendChoice {
+  readonly backend: 'wasm' | 'native';
+  /** Used only when `backend === 'native'`. */
+  readonly server: string;
+}
+
+/** localStorage keys for the backend choice. Exported as constants
+ *  so a future settings page can read/write them by name. */
+const BACKEND_KEY = 'aenternis.backend';
+const SERVER_KEY = 'aenternis.server';
+
+/** Default WS endpoint when none is configured. Picks `location.hostname`
+ *  so a viewer opened from a LAN IP (e.g. via `vite --host`) connects
+ *  back to the same host's `aenternis-server`. */
+function defaultServerUrl(): string {
+  return `ws://${window.location.hostname || 'localhost'}:8765/sim`;
+}
+
+/** Resolve the backend choice from URL query, then localStorage,
+ *  then defaults. URL flags (`?backend=...`, `?server=...`) override
+ *  *and persist* — once you visit the URL the choice survives the
+ *  next plain reload. */
+function resolveBackendChoice(): BackendChoice {
+  const params = new URLSearchParams(window.location.search);
+  const urlBackend = params.get('backend');
+  if (urlBackend === 'native' || urlBackend === 'wasm') {
+    window.localStorage.setItem(BACKEND_KEY, urlBackend);
+  }
+  const urlServer = params.get('server');
+  if (urlServer) {
+    window.localStorage.setItem(SERVER_KEY, urlServer);
+  }
+  const stored = window.localStorage.getItem(BACKEND_KEY);
+  const backend: 'wasm' | 'native' = stored === 'native' ? 'native' : 'wasm';
+  const server = window.localStorage.getItem(SERVER_KEY) ?? defaultServerUrl();
+  return { backend, server };
+}
+
+/** Build the SimChannel for the chosen backend. */
+function createSimChannel(choice: BackendChoice): SimChannel {
+  if (choice.backend === 'native') {
+    return openNativeClient(choice.server);
+  }
+  // The Web Worker shape (postMessage / onmessage / terminate) is a
+  // structural superset of SimChannel; the cast is just to satisfy
+  // the type checker.
+  const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  return worker as unknown as SimChannel;
 }
 
 /** Look up an element by id and assert its concrete type, throwing a
@@ -138,23 +190,63 @@ export function bootstrap(): void {
     envEnabled: requireEl('envEnabled', HTMLInputElement),
     envBackground: requireEl('envBackground', HTMLInputElement),
     inspector: requireEl('inspector', HTMLElement),
+    backendNative: requireEl('backendNative', HTMLInputElement),
+    backendUrl: requireEl('backendUrl', HTMLSpanElement),
   };
 
-  // ----- Worker setup --------------------------------------------------------
-  // `./worker.js` resolves to the tsc-emitted file in production and to
-  // `./worker.ts` source in Vite dev (Vite rewrites `.js` → `.ts`).
-  const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  // ----- Backend channel setup ----------------------------------------------
+  // Two backends live behind the same `SimChannel` interface:
+  //   - WASM Web Worker (default): `./worker.js` resolves to the
+  //     tsc-emitted file in production and `./worker.ts` source in
+  //     Vite dev (Vite rewrites `.js` → `.ts`).
+  //   - Native dev backend: WebSocket to `aenternis-server`. Picked
+  //     when the URL query or localStorage selects `backend=native`.
+  // The Worker shape is structurally compatible with `SimChannel`
+  // (postMessage / onmessage / terminate), so the rest of the file
+  // doesn't care which backend it talks to.
+  const backendChoice = resolveBackendChoice();
+  const channel: SimChannel = createSimChannel(backendChoice);
+  const isNativeBackend = backendChoice.backend === 'native';
   let latestSnapshot: SnapshotMsg | null = null;
   let workerReady = false;
 
-  worker.onmessage = (ev: MessageEvent<WorkerToMainMsg>) => {
-    const msg = ev.data;
+  // ----- Backend UI binding --------------------------------------------------
+  // Show the current backend in the side panel. The checkbox toggles
+  // `localStorage` and reloads — we don't hot-swap the channel. The
+  // user expects "switch backend" to mean "talk to the other one
+  // from a clean slate"; reload makes that contract obvious.
+  dom.backendNative.checked = isNativeBackend;
+  dom.backendUrl.textContent = isNativeBackend ? backendChoice.server : '(WASM Worker)';
+  dom.backendNative.addEventListener('change', () => {
+    window.localStorage.setItem(
+      BACKEND_KEY,
+      dom.backendNative.checked ? 'native' : 'wasm',
+    );
+    window.location.reload();
+  });
+
+  channel.onmessage = (ev) => {
+    const msg = ev.data as WorkerToMainMsg;
     if (msg.type === 'ready') {
       workerReady = true;
-      // Page load lands in the same paused state as Reset — user sees
-      // tick 0 of the snapshot and decides when to start with Pause/
-      // Resume or Tick.
+      if (isNativeBackend) {
+        // Server already owns the shared world; don't reset it on
+        // connect. Wait for the Welcome frame that follows to learn
+        // the current `running` state. Reset stays available via
+        // the explicit Reset button (which is a global action — it
+        // resets the world for every connected client).
+        return;
+      }
+      // Page load lands in the same paused state as Reset — user
+      // sees tick 0 of the snapshot and decides when to start with
+      // Pause/Resume or Tick.
       initPaused();
+    } else if (msg.type === 'welcome') {
+      // Native-only: server tells a fresh client whether the shared
+      // world is currently ticking. Sync the Pause/Resume button so
+      // late-joiners don't show a stale "Resume" while ticks fly.
+      running = msg.running;
+      dom.pauseBtn.textContent = running ? 'Pause' : 'Resume';
     } else if (msg.type === 'snapshot') {
       latestSnapshot = msg;
     } else if (msg.type === 'cellDetail') {
@@ -187,7 +279,7 @@ export function bootstrap(): void {
       moveThreshold: config.moveThreshold,
       program,
     };
-    worker.postMessage(init);
+    channel.postMessage(init);
     cameraFitDirty = true;
     trackerState = resetTrackerState();
   }
@@ -200,25 +292,25 @@ export function bootstrap(): void {
       k: config.k,
       moveThreshold: config.moveThreshold,
     };
-    worker.postMessage(cfg);
+    channel.postMessage(cfg);
   }
 
   function sendRunning(running: boolean): void {
     if (!workerReady) return;
     const msg: RunningMsg = { type: 'running', running };
-    worker.postMessage(msg);
+    channel.postMessage(msg);
   }
 
   function sendStep(): void {
     if (!workerReady) return;
     const msg: StepMsg = { type: 'step' };
-    worker.postMessage(msg);
+    channel.postMessage(msg);
   }
 
   function requestInspect(x: number, y: number, z: number): void {
     if (!workerReady) return;
     const msg: InspectMsg = { type: 'inspect', x, y, z };
-    worker.postMessage(msg);
+    channel.postMessage(msg);
   }
 
   // ----- Three.js setup ------------------------------------------------------

@@ -1,0 +1,45 @@
+[package]
+name = "aenternis-server"
+description = "Native dev backend for Aenternis: shared world over WebSocket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Single binary; tests live next to source modules under `src/`.
+[[bin]]
+name = "aenternis-server"
+path = "src/main.rs"
+
+[dependencies]
+# Simulation core, shared by the WASM wrapper and this native server.
+aenternis-core = { path = "../aenternis-core" }
+# Tokio is the async runtime; `signal` for Ctrl-C graceful shutdown,
+# `sync` for the world_actor channels, `net` for the TCP listener,
+# `time` for the tick-rate metrics rolling average.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "net", "time"] }
+# Axum hosts the HTTP + WebSocket surface. Step 2 only wires the
+# `/health` route; the `/sim` upgrade lands in step 4.
+axum = { version = "0.7", features = ["ws"] }
+# Control messages travel as JSON in both directions, mirroring
+# `src/protocol.ts` exactly. Snapshot and cellDetail are binary
+# frames (see `protocol::binary` in this crate).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# `futures-util` for `SinkExt::send` / `StreamExt::next` over the
+# axum WebSocket sink/stream halves. Already pulled in transitively
+# by axum, listed explicitly so the import path is stable.
+futures-util = "0.3"
+
+[dev-dependencies]
+# Real WebSocket client for the integration test in `src/ws.rs` —
+# brings up the full axum stack on a random port and exercises the
+# handshake + message flow end-to-end.
+tokio-tungstenite = "0.24"
+
+[lints]
+workspace = true

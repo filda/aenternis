@@ -18,6 +18,7 @@
 - Coverage and mutation testing on the Rust side will be added once the core has more than skeleton modules: `cargo llvm-cov` for coverage and `cargo mutants` for mutation testing (analogue of the JS Stryker pipeline). Same expectation: thresholds high, surviving mutants are missing assertions.
 - When working in Rust, follow the same "all production code must have tests" rule. Tests can live next to the module (`#[cfg(test)] mod tests`) for unit work or under `tests/` for integration. The `aenternis-core` crate has a `tests/coord.rs` example to mirror.
 - The production Rust + WASM implementation targets sparse 3D from day one (see `docs/plan.md`). Toroidal models live only as fixed-N reference implementations for the bit-identity harness against the JS prototypes.
+- A second backend lives alongside WASM: **`aenternis-server`** (`crates/aenternis-server/`) is a native Rust binary that hosts a shared `SparseWorld` over WebSocket on `ws://127.0.0.1:8765/sim` (configurable). The viewer (`web/main.ts`) picks WASM (default) or native via `?backend=...` URL flag or a checkbox in the side panel. The wire format mirrors `src/protocol.ts`: JSON for control, binary frames for snapshot and cellDetail. See `docs/native-server.md` for the dev workflow and operational notes.
 
 ## Project Basics
 

@@ -55,6 +55,18 @@ export interface ReadyMsg {
   readonly type: 'ready';
 }
 
+/** Server-side bootstrap message sent right after `ready` over the
+ *  native WebSocket transport. Tells a fresh viewer whether the
+ *  shared world it just joined is currently ticking, so the
+ *  Pause/Resume button reflects reality instead of the page's
+ *  default `running=false`. The Web Worker (WASM) transport never
+ *  emits this message — workers always start with their world held
+ *  on tick 0, so the default is correct there. */
+export interface WelcomeMsg {
+  readonly type: 'welcome';
+  readonly running: boolean;
+}
+
 export interface SnapshotMsg {
   readonly type: 'snapshot';
   readonly tick: number;
@@ -76,7 +88,7 @@ export interface CellDetailMsg {
   readonly prefix: number;
 }
 
-export type WorkerToMainMsg = ReadyMsg | SnapshotMsg | CellDetailMsg;
+export type WorkerToMainMsg = ReadyMsg | WelcomeMsg | SnapshotMsg | CellDetailMsg;
 
 // ---- Helpers ---------------------------------------------------------------
 

@@ -231,6 +231,27 @@
     </div>
 
     <details class="panel">
+      <summary>Backend</summary>
+      <div class="body">
+        <div class="row">
+          <label style="font-weight: normal;">
+            <input id="backendNative" type="checkbox">
+            native dev backend
+          </label>
+        </div>
+        <div class="row">
+          <span class="label">URL</span>
+          <span class="value" id="backendUrl" style="font-family: ui-monospace, monospace; font-size: 10px;">-</span>
+        </div>
+        <div class="row hint">
+          Změna se projeví po reloadu. URL flagy <code>?backend=wasm|native</code>
+          a <code>?server=ws://host:port/sim</code> přepíší a uloží.
+          Default native URL: <code>ws://&lt;hostname&gt;:8765/sim</code>.
+        </div>
+      </div>
+    </details>
+
+    <details class="panel">
       <summary>Config</summary>
       <div class="body">
       <div class="row">

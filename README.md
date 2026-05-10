@@ -90,6 +90,15 @@ npm run dev:p8       # opens prototype 8 directly
 
 The Vite dev server is required for the Web Worker mode in prototype 8 (Chrome blocks workers from `file://` null origin). Each prototype is otherwise a self-contained static page and can also be opened directly via `file://` if you don't need workers.
 
+### Backends
+
+The 3D viewer at `web/` runs against either of two interchangeable backends:
+
+- **WASM Web Worker** (default) — `wasm-pack` builds `aenternis-wasm` into a `.wasm` bundle and the viewer runs the simulation inside a Web Worker. Self-contained, deployable to GitHub Pages.
+- **Native dev backend** — `cargo run -p aenternis-server` starts a Rust binary that hosts a *shared* `SparseWorld` over WebSocket on `ws://127.0.0.1:8765/sim`. Viewer connects to it when launched with `?backend=native` (or via the "Backend" panel in the side hud). Multi-tab clients see the same world; reset/pause from any tab applies globally. Faster ticks (rayon, native LLVM) and quicker rebuild loop than WASM, but dev-only — no auth, no deployment story.
+
+See [docs/native-server.md](docs/native-server.md) for the full dev workflow.
+
 ## Tests
 
 ### JavaScript
