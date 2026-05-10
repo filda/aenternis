@@ -12,8 +12,13 @@ target/
 crates/*/pkg/
 /AGENTS.local.md
 /.claude/settings.local.json
+/.claude/*.lock
 
 # samply / flamegraph output
 profile.json.gz
 flamegraph.svg
 perf.data*
+
+# cargo-mutants output (current run + rotated previous run)
+mutants.out/
+mutants.out.old/
