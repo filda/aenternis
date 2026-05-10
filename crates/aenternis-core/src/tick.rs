@@ -95,7 +95,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             .get(coord)
             .copied()
             .unwrap_or([0; Direction::COUNT]);
-        let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, *coord);
+        let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, *coord, 0);
         for &d in &Direction::ALL {
             let neighbor_energy = neighbor_energies[d.index()];
             let rate = if my_energy > neighbor_energy {
@@ -249,6 +249,8 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
     // coord lookup against the immutable `world.cells`, so per-entry
     // tasks are fully independent.
     let cells = &world.cells;
+    let world_seed = world.world_seed;
+    let rng_tick = world.tick;
     let body = |coord: &Coord, per_dir: &mut [Vec<u32>; Direction::COUNT]| {
         for v in per_dir.iter_mut() {
             v.clear();
@@ -261,7 +263,14 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
             return;
         }
         let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
-        let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
+        let combined = combined_clamped(
+            &cell.rates,
+            &cell.active_outflow,
+            mem_size_u32,
+            world_seed,
+            rng_tick,
+            *coord,
+        );
         for &d in &Direction::ALL {
             let rate = combined[d.index()] as usize;
             let ptr = cell.pointers[d.index()] as usize;
@@ -300,23 +309,41 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
     // Per-cell pointer layout has no inter-cell dependencies — each
     // cell only reads its own rates / active_outflow / memory size.
     // Parallelizing is bit-identical to the sequential walk.
-    let body = |cell: &mut Cell| {
+    let world_seed = world.world_seed;
+    let rng_tick = world.tick;
+    let body = |coord: &Coord, cell: &mut Cell| {
         let mem_size = cell.memory.len();
         if mem_size == 0 {
             return;
         }
         let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
-        let combined = combined_clamped(&cell.rates, &cell.active_outflow, mem_size_u32);
+        let combined = combined_clamped(
+            &cell.rates,
+            &cell.active_outflow,
+            mem_size_u32,
+            world_seed,
+            rng_tick,
+            *coord,
+        );
         cell.lay_out_pointers(&combined);
     };
 
     #[cfg(not(target_arch = "wasm32"))]
-    world.cells.par_iter_mut().for_each(|(_, cell)| body(cell));
+    world
+        .cells
+        .par_iter_mut()
+        .for_each(|(c, cell)| body(c, cell));
     #[cfg(target_arch = "wasm32")]
-    for cell in world.cells.values_mut() {
-        body(cell);
+    for (c, cell) in &mut world.cells {
+        body(c, cell);
     }
 }
+
+/// RNG domain salt for [`combined_clamped`]'s leftover-distribution
+/// tie-break. Distinct from the default domain (`0`) used by
+/// [`compute_natural_rates`] so the two streams cannot correlate even
+/// when they share `(world_seed, tick, coord)`.
+pub(crate) const COMBINED_CLAMPED_RNG_DOMAIN: u32 = 1;
 
 /// Compute clamped combined per-direction rate for one cell.
 ///
@@ -338,11 +365,37 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
 /// `Math.floor(combined * cap / total)` to the bit. `u64` integer
 /// division would also be correct mathematically but disagrees with
 /// JS at boundary values (truncation vs round-to-nearest-then-floor).
+///
+/// ## Leftover distribution — Largest-Remainder with shuffled tie-break
+///
+/// After `floor(combined * scale)` the per-direction sum may be up to
+/// `Direction::COUNT - 1 = 5` short of `cap`. Hamilton/Hare
+/// apportionment closes that gap: indices are sorted by their
+/// fractional remainder descending and the top `leftover` get `+1`
+/// each. Ties between equal remainders are broken by a Fisher-Yates
+/// shuffle of `[0..6]` seeded from `(world_seed, rng_tick, coord)`
+/// under a dedicated [`COMBINED_CLAMPED_RNG_DOMAIN`].
+///
+/// **Statistical isotropy.** Across many `(world_seed, rng_tick,
+/// coord)` triples each direction wins/loses the tie-break with equal
+/// probability, so the leftover distribution does not introduce a
+/// systematic preference for any face — the macro emission balance
+/// over a populated world is uniform across `Direction::ALL`. (Strict
+/// per-call equivariance under direction permutation is provably
+/// incompatible with exact conservation + integer outputs + per-
+/// direction non-exceedance, so it is not part of the contract; see
+/// `tick_combined_clamped_contracts.rs` for the operational test.)
+///
+/// The fast path (`total <= cap`) skips RNG and sort entirely; only
+/// the actually-clamping path pays the (constant, six-element) cost.
 #[must_use]
 pub fn combined_clamped(
     rates: &[u32; Direction::COUNT],
     active_outflow: &[u32; Direction::COUNT],
     cap: u32,
+    world_seed: u64,
+    rng_tick: u64,
+    coord: Coord,
 ) -> [u32; Direction::COUNT] {
     let combined_u64: [u64; Direction::COUNT] =
         std::array::from_fn(|i| u64::from(rates[i]) + u64::from(active_outflow[i]));
@@ -364,6 +417,7 @@ pub fn combined_clamped(
     )]
     let scale = f64::from(cap) / total as f64;
     let mut clamped: [u32; Direction::COUNT] = [0; Direction::COUNT];
+    let mut frac: [f64; Direction::COUNT] = [0.0; Direction::COUNT];
     let mut new_total: u32 = 0;
     for i in 0..Direction::COUNT {
         #[allow(
@@ -371,26 +425,45 @@ pub fn combined_clamped(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss
         )]
-        let scaled = (combined_u64[i] as f64 * scale).floor();
+        let combined_f = combined_u64[i] as f64;
+        let scaled = combined_f * scale;
+        let floored = scaled.floor();
+        frac[i] = scaled - floored;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = scaled as u32;
+        let val = floored as u32;
         clamped[i] = val;
         new_total = new_total.saturating_add(val);
     }
-    // Distribute leftover (floor rounding may have lost up to DIRS - 1).
-    let mut leftover = cap.saturating_sub(new_total);
-    while leftover > 0 {
-        let mut added = false;
-        for r in &mut clamped {
-            if *r > 0 && leftover > 0 {
-                *r += 1;
-                leftover -= 1;
-                added = true;
-                break;
-            }
+    // Distribute leftover by Largest-Remainder with shuffled tie-break.
+    // `cap >= new_total` always holds: each `floored ≤ combined * scale`
+    // and `sum(combined * scale) = cap`, so `new_total ≤ cap`.
+    let leftover = cap.saturating_sub(new_total) as usize;
+    if leftover > 0 {
+        let mut order: [usize; Direction::COUNT] = [0, 1, 2, 3, 4, 5];
+        let mut rng =
+            Rng::for_cell_at_tick(world_seed, rng_tick, coord, COMBINED_CLAMPED_RNG_DOMAIN);
+        // Fisher-Yates shuffle of `order`. Indices i in (0..6).rev()
+        // pick a uniformly-distributed swap target in `0..=i` from the
+        // RNG. After this loop `order` is a uniformly-random permutation
+        // of `[0, 1, 2, 3, 4, 5]` deterministic in
+        // `(world_seed, rng_tick, coord)`.
+        for i in (1..Direction::COUNT).rev() {
+            // `next_u32() as usize % (i + 1)` — unbiased enough at this
+            // tiny range; the modulo bias for a 32-bit draw over 2..=6
+            // is below 2^-29 and we are already shuffling six elements.
+            let j = (rng.next_u32() as usize) % (i + 1);
+            order.swap(i, j);
         }
-        if !added {
-            break;
+        // Stable sort `order` by `frac` descending — equal remainders
+        // keep their (already-shuffled) relative order, so the tie-break
+        // is independent of `Direction::ALL`'s canonical ordering.
+        order.sort_by(|&a, &b| {
+            frac[b]
+                .partial_cmp(&frac[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for &idx in order.iter().take(leftover) {
+            clamped[idx] = clamped[idx].saturating_add(1);
         }
     }
     clamped

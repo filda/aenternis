@@ -48,8 +48,8 @@ fn new_seed_zero_is_forced_to_one() {
 #[test]
 fn for_cell_at_tick_is_deterministic() {
     let coord = Coord::new(3, -7, 11);
-    let mut a = Rng::for_cell_at_tick(0xDEAD_BEEF, 42, coord);
-    let mut b = Rng::for_cell_at_tick(0xDEAD_BEEF, 42, coord);
+    let mut a = Rng::for_cell_at_tick(0xDEAD_BEEF, 42, coord, 0);
+    let mut b = Rng::for_cell_at_tick(0xDEAD_BEEF, 42, coord, 0);
     for _ in 0..100 {
         assert_eq!(a.next_u32(), b.next_u32());
     }
@@ -57,10 +57,10 @@ fn for_cell_at_tick_is_deterministic() {
 
 #[test]
 fn for_cell_at_tick_independent_across_coords() {
-    let mut a = Rng::for_cell_at_tick(0, 0, Coord::new(0, 0, 0));
-    let mut b = Rng::for_cell_at_tick(0, 0, Coord::new(1, 0, 0));
-    let mut c = Rng::for_cell_at_tick(0, 0, Coord::new(0, 1, 0));
-    let mut d = Rng::for_cell_at_tick(0, 0, Coord::new(0, 0, 1));
+    let mut a = Rng::for_cell_at_tick(0, 0, Coord::new(0, 0, 0), 0);
+    let mut b = Rng::for_cell_at_tick(0, 0, Coord::new(1, 0, 0), 0);
+    let mut c = Rng::for_cell_at_tick(0, 0, Coord::new(0, 1, 0), 0);
+    let mut d = Rng::for_cell_at_tick(0, 0, Coord::new(0, 0, 1), 0);
 
     let outputs: [u32; 4] = [a.next_u32(), b.next_u32(), c.next_u32(), d.next_u32()];
     for i in 0..4 {
@@ -73,9 +73,9 @@ fn for_cell_at_tick_independent_across_coords() {
 #[test]
 fn for_cell_at_tick_independent_across_ticks() {
     let coord = Coord::new(5, 5, 5);
-    let mut a = Rng::for_cell_at_tick(0, 0, coord);
-    let mut b = Rng::for_cell_at_tick(0, 1, coord);
-    let mut c = Rng::for_cell_at_tick(0, 2, coord);
+    let mut a = Rng::for_cell_at_tick(0, 0, coord, 0);
+    let mut b = Rng::for_cell_at_tick(0, 1, coord, 0);
+    let mut c = Rng::for_cell_at_tick(0, 2, coord, 0);
 
     let outputs: [u32; 3] = [a.next_u32(), b.next_u32(), c.next_u32()];
     for i in 0..3 {
@@ -88,9 +88,46 @@ fn for_cell_at_tick_independent_across_ticks() {
 #[test]
 fn for_cell_at_tick_independent_across_world_seeds() {
     let coord = Coord::new(0, 0, 0);
-    let mut a = Rng::for_cell_at_tick(0, 0, coord);
-    let mut b = Rng::for_cell_at_tick(1, 0, coord);
+    let mut a = Rng::for_cell_at_tick(0, 0, coord, 0);
+    let mut b = Rng::for_cell_at_tick(1, 0, coord, 0);
     assert_ne!(a.next_u32(), b.next_u32());
+}
+
+#[test]
+fn for_cell_at_tick_independent_across_domains() {
+    // Two different `domain` values for the same `(world_seed, tick,
+    // coord)` must produce visibly distinct streams. This is the
+    // contract that lets stochastic operations within one tick draw
+    // independently without correlating their outputs.
+    let coord = Coord::new(7, -2, 3);
+    let mut a = Rng::for_cell_at_tick(0xCAFE, 11, coord, 0);
+    let mut b = Rng::for_cell_at_tick(0xCAFE, 11, coord, 1);
+    let mut c = Rng::for_cell_at_tick(0xCAFE, 11, coord, 2);
+    let outputs: [u32; 3] = [a.next_u32(), b.next_u32(), c.next_u32()];
+    for i in 0..3 {
+        for j in (i + 1)..3 {
+            assert_ne!(outputs[i], outputs[j], "domains {i} and {j} aliased");
+        }
+    }
+}
+
+#[test]
+fn for_cell_at_tick_domain_zero_is_pre_domain_stream() {
+    // `domain == 0` is the default and must be bit-identical to the
+    // pre-domain hash output. The reference values below are the same
+    // ones pinned in `for_cell_at_tick_reference_stream_for_nonzero_inputs`
+    // and were captured before the `domain` parameter existed —
+    // domain=0 must reproduce them exactly.
+    let mut r = Rng::for_cell_at_tick(0xDEAD_BEEF, 5, Coord::new(3, -7, 11), 0);
+    let expected = [
+        2_677_452_818_u32,
+        2_064_535_512,
+        3_965_174_498,
+        2_507_838_471,
+    ];
+    for (i, &want) in expected.iter().enumerate() {
+        assert_eq!(r.next_u32(), want, "domain=0 stream drifted at [{i}]");
+    }
 }
 
 #[test]
@@ -227,8 +264,10 @@ fn xorshift32_seed_42_reference_stream() {
 #[test]
 fn for_cell_at_tick_reference_stream_for_nonzero_inputs() {
     // Uses world_seed, tick, and all coord components non-zero so the
-    // `cell_tick_seed` hash mix has every input slot active.
-    let mut r = Rng::for_cell_at_tick(0xDEAD_BEEF, 5, Coord::new(3, -7, 11));
+    // `cell_tick_seed` hash mix has every input slot active. `domain
+    // == 0` is the pre-domain reference path, so this snapshot remains
+    // a stability anchor for the JS-9B-parity stream.
+    let mut r = Rng::for_cell_at_tick(0xDEAD_BEEF, 5, Coord::new(3, -7, 11), 0);
     let expected = [
         2_677_452_818_u32,
         2_064_535_512,
@@ -264,19 +303,37 @@ fn cell_seed_independent_across_coords() {
 
 #[test]
 fn cell_tick_seed_matches_reference_for_nonzero_inputs() {
-    // The hash mixes via `h ^= h >> 16` (last line of `cell_tick_seed`).
-    // Pinning exact outputs catches shift-direction and operator
-    // mutations that pass coarser determinism tests.
-    assert_eq!(cell_tick_seed(0, 0, Coord::new(0, 0, 0)), 3_127_886_501);
-    assert_eq!(cell_tick_seed(1234, 3, Coord::new(2, 5, 7)), 3_577_743_044);
+    // The hash mixes via `h ^= h >> 16` (last line of `cell_tick_seed`
+    // for `domain == 0`). Pinning exact outputs catches shift-direction
+    // and operator mutations that pass coarser determinism tests.
+    // `domain == 0` is required for these reference values — the salted
+    // path is checked separately.
+    assert_eq!(cell_tick_seed(0, 0, Coord::new(0, 0, 0), 0), 3_127_886_501);
+    assert_eq!(
+        cell_tick_seed(1234, 3, Coord::new(2, 5, 7), 0),
+        3_577_743_044
+    );
 }
 
 #[test]
 fn cell_tick_seed_advances_with_tick() {
     let coord = Coord::new(5, -3, 2);
-    let s0 = cell_tick_seed(42, 0, coord);
-    let s1 = cell_tick_seed(42, 1, coord);
-    let s2 = cell_tick_seed(42, 2, coord);
+    let s0 = cell_tick_seed(42, 0, coord, 0);
+    let s1 = cell_tick_seed(42, 1, coord, 0);
+    let s2 = cell_tick_seed(42, 2, coord, 0);
     assert_ne!(s0, s1);
     assert_ne!(s1, s2);
+}
+
+#[test]
+fn cell_tick_seed_domain_separation() {
+    // Different domains yield different seeds for the same
+    // `(world_seed, tick, coord)`. This is the salt's contract.
+    let coord = Coord::new(2, -1, 3);
+    let s0 = cell_tick_seed(0xBEEF, 7, coord, 0);
+    let s1 = cell_tick_seed(0xBEEF, 7, coord, 1);
+    let s2 = cell_tick_seed(0xBEEF, 7, coord, 2);
+    assert_ne!(s0, s1, "domain 0 and 1 collided");
+    assert_ne!(s1, s2, "domain 1 and 2 collided");
+    assert_ne!(s0, s2, "domain 0 and 2 collided");
 }

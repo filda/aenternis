@@ -12,10 +12,14 @@
 //! - [`Rng`] is the streaming generator itself — wrap a `u32` seed and
 //!   pull `u32` / `f64` outputs via [`Rng::next_u32`] /
 //!   [`Rng::next_f64`].
-//! - [`Rng::for_cell_at_tick`] derives a per-`(world_seed, tick, coord)`
-//!   stream so that two different cells get independent randomness, and
-//!   the same cell at the same tick of the same world always sees the
-//!   same stream — regardless of allocation history.
+//! - [`Rng::for_cell_at_tick`] derives a per-`(world_seed, tick, coord,
+//!   domain)` stream so that two different cells get independent
+//!   randomness, and the same cell at the same tick of the same world
+//!   always sees the same stream — regardless of allocation history. The
+//!   `domain` salt lets independent stochastic operations within one
+//!   tick draw from independent streams without mutual interference;
+//!   `domain == 0` is the default and is bit-identical to the
+//!   pre-domain hash output.
 //!
 //! Reference: the JS port of cellSeed/cellTickSeed lives in
 //! `prototypes/09-sparse-world/world.js`. Output bytes match.
@@ -51,16 +55,24 @@ impl Rng {
     }
 
     /// Build a per-cell-per-tick generator deterministic in
-    /// `(world_seed, tick, coord)`.
+    /// `(world_seed, tick, coord, domain)`.
     ///
     /// The intended use is "call once at the start of every per-cell
     /// stochastic operation". Two different cells get independent
     /// streams; the same cell at the same tick of the same world always
     /// sees the same stream — regardless of allocation order, regardless
     /// of whether other cells came or went between ticks.
+    ///
+    /// `domain` separates independent stochastic operations within the
+    /// same `(world_seed, tick, coord)` context: `domain == 0` is the
+    /// default stream (used by [`crate::tick::compute_natural_rates`]),
+    /// and other values produce uncorrelated streams for callers that
+    /// need their own draws inside the same per-cell-per-tick scope.
+    /// `domain == 0` is bit-identical to the pre-domain hash output, so
+    /// existing callsites' streams do not shift.
     #[must_use]
-    pub const fn for_cell_at_tick(world_seed: u64, tick: u64, coord: Coord) -> Self {
-        Self::new(cell_tick_seed(world_seed, tick, coord))
+    pub const fn for_cell_at_tick(world_seed: u64, tick: u64, coord: Coord, domain: u32) -> Self {
+        Self::new(cell_tick_seed(world_seed, tick, coord, domain))
     }
 
     /// Advance state and return the next 32-bit pseudo-random integer.
@@ -129,16 +141,28 @@ pub const fn cell_seed(world_seed: u64, coord: Coord) -> u32 {
     }
 }
 
-/// JS `cellTickSeed` ported verbatim — `(world_seed, coord, tick) → u32`.
+/// JS `cellTickSeed` ported verbatim — `(world_seed, coord, tick) → u32`,
+/// with an extra `domain` salt for separating independent per-cell
+/// stochastic operations within one tick.
 ///
 /// Combines the per-cell seed with the tick number through one more
 /// multiply-mix pass; the output is the seed handed to xorshift32 for
 /// the per-cell-tick stream.
+///
+/// `domain == 0` skips the salt mix entirely, so the output is
+/// bit-equal to the pre-domain hash — that path is the JS-9B reference
+/// stream and must not shift. Non-zero `domain` runs an extra
+/// multiply-xor pass that diffuses the salt across all 32 bits of the
+/// seed so that two domains' streams are well separated.
 #[must_use]
-pub const fn cell_tick_seed(world_seed: u64, tick: u64, coord: Coord) -> u32 {
+pub const fn cell_tick_seed(world_seed: u64, tick: u64, coord: Coord, domain: u32) -> u32 {
     let base = cell_seed(world_seed, coord);
     let mut h = base.wrapping_add(tick as u32).wrapping_mul(2_246_822_507);
     h ^= h >> 16;
+    if domain != 0 {
+        h = h.wrapping_add(domain).wrapping_mul(1_597_334_677);
+        h ^= h >> 15;
+    }
     if h == 0 {
         1
     } else {
