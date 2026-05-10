@@ -1,72 +1,38 @@
-# cargo-mutants config — equivalent mutations to exclude from analysis.
+# cargo-mutants configuration for aenternis.
 #
-# Each entry below is a mutation whose effect is *not* observable through
-# any test we can write without contrived inputs (probability-zero cases,
-# arithmetic equivalences at boundaries). The reasoning is recorded
-# inline so future readers can decide whether new code makes a
-# previously-equivalent mutation testable, in which case the entry
-# should be removed.
-#
-# After this file lands, `cargo mutants` reports the project as clean —
-# any new "MISSED" line in a future run is a real test-coverage gap, not
-# a known equivalent.
-#
-# Format: regex matched as a substring against the mutant names produced
-# by `cargo mutants --list`. We anchor each entry on `file.rs:LINE:COL:`
-# plus the specific operator pair to avoid suppressing testable mutations
-# on the same line. TOML literal strings (single-quoted) so backslashes
-# stay literal in the regex.
-
+# Each entry in `exclude_re` is a regex matched against the mutant
+# label, which has the form
+#   `crates/<crate>/src/<file>:<line>:<col>: <transformation> in <function>`
+# Exclusions document *equivalent* mutants — those whose mutated
+# program produces output indistinguishable from the unmutated one
+# under the constraints of the surrounding code, so no test could
+# distinguish them. Exclusions document the *why*, not just suppress.
 exclude_re = [
-    # --- tick.rs ---------------------------------------------------------
-    # `if my_energy > neighbor_energy`. With `>=`, the equal branch
-    # computes `delta = 0`, then `stochastic_floor(0)` early-returns 0
-    # without advancing the RNG — same observable effect as native.
-    'tick\.rs:94:.*replace > with >=',
+    # `r < frac` vs `r <= frac` in `stochastic_floor`. The two
+    # comparisons differ only when `r == frac` exactly. Both `r` (from
+    # `next_f64`) and `frac` (from `value - whole`) are arbitrary
+    # 32-bit-derived f64 values; the probability of bit-exact equality
+    # is below `2^-32` per draw, and any such tie shifts a *single*
+    # rounded output by 1 — undetectable through the statistical
+    # `stochastic_floor_expectation_matches_input` tolerance and
+    # invisible to any deterministic snapshot.
+    "rng\\.rs:.*replace < with <= in Rng::stochastic_floor",
 
-    # `if cell.total_rate() > my_energy { proportional_clamp(...) }`.
-    # proportional_clamp is a no-op when total == cap (returns the rates
-    # unchanged via the early-return), so > and >= produce identical output.
-    'tick\.rs:105:.*replace > with >=',
-
-    # `if mem_size > 0 { ... }` in collect_outflow. When mem_size == 0
-    # the cell's energy is also 0 (memory.len() == energy invariant), so
-    # every rate is 0 and the loop body would produce the same all-empty
-    # outflow either way.
-    'tick\.rs:185:.*replace > with >=',
-
-    # Leftover-distribution loop in combined_clamped: `while leftover > 0`
-    # (outer) and the inner `leftover > 0` (redundant with the outer
-    # guard) both behave identically with `>=` because `if !added { break }`
-    # exits the moment no positive rate exists — which is the only case
-    # `>=` would let the loop enter.
-    'tick\.rs:289:20: replace > with >=',
-    'tick\.rs:292:35: replace > with >=',
-
-    # `target.pc %= target.memory.len() as u32`. The else branch is marked
-    # "defensive" in the source — the inflow phase only grows memory, so
-    # pc < memory.len() always holds when this line runs, and the modulo
-    # is a no-op. += and /= produce the same `pc` here.
-    'tick\.rs:486:23: replace %= with /=',
-    'tick\.rs:486:23: replace %= with \+=',
-
-    # --- cell.rs ---------------------------------------------------------
-    # L259, L262:39: same leftover-distribution pattern as combined_clamped
-    # in tick.rs — proportional_clamp here is its sibling, identical loop
-    # shape with the same `if !added { break }` short-circuit.
-    'cell\.rs:259:24: replace > with >=',
-    'cell\.rs:262:39: replace > with >=',
-
-    # --- world/sparse.rs -------------------------------------------------
-    # bounding_box was rewritten to delegate to `i32::min` / `i32::max`
-    # via a single fold, so the inline `<` / `>` comparisons that used to
-    # produce equivalent mutations (no-op assignments at equality, plus
-    # iteration-order-dependent silent passes) no longer exist. No entries
-    # here at the moment.
-
-    # --- rng.rs ----------------------------------------------------------
-    # `r < frac` vs `r <= frac` in `stochastic_floor` differ only when r
-    # equals frac exactly, which has probability ~2^-52 for uniform
-    # random r in `f64`. No realistic test seed hits this boundary.
-    'rng\.rs:106:.*replace < with <=',
+    # Two `> → >=` mutants in `compute_natural_rates`, both equivalent
+    # for different but converging reasons:
+    #
+    #   `if my_energy > neighbor_energy { stochastic_floor(...) } else { 0 }`
+    # — with `>=`, the equality case enters the first branch and
+    # computes `stochastic_floor(0.0 * coeff)`, which short-circuits
+    # to `0` without advancing the RNG (`value <= 0.0` early-return).
+    # Same rate=0 *and* same RNG state.
+    #
+    #   `if cell.total_rate() > my_energy { proportional_clamp(...) }`
+    # — with `>=`, the equality case calls
+    # `proportional_clamp(rates, my_energy, ...)`, which short-circuits
+    # at `if total <= cap64 || total == 0 { return; }` without
+    # modifying rates or drawing from RNG.
+    #
+    # Both are truly observation-equivalent.
+    "tick\\.rs:.*replace > with >= in compute_natural_rates",
 ]

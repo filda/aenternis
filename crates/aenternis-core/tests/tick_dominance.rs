@@ -235,6 +235,140 @@ fn multiple_inflows_apply_strongest_first() {
     );
 }
 
+#[test]
+fn six_inflows_with_equal_dominance_apply_in_canonical_direction_order() {
+    // Six attackers, one per cardinal neighbor of origin, all with the
+    // same dominance — tied scores force the secondary sort key
+    // (`dir_from_target` ascending = canonical `Direction::ALL`
+    // order: Xp, Xn, Yp, Yn, Zp, Zn) to determine processing order.
+    //
+    // Without the sort (i.e., if the `entries.len() <= 1` fast-skip is
+    // mutated to skip multi-entry vectors instead), the apply order
+    // falls back to insertion order — which is the FxHashMap
+    // iteration order over the six attacker coords. That order is
+    // hash-derived and almost never matches canonical Direction
+    // order for these specific coords, so the resulting memory layout
+    // diverges from the expected one and this test fires. The
+    // existing two-attacker `multiple_inflows_apply_strongest_first`
+    // can survive the same mutation when FxHashMap happens to iterate
+    // in dominance order; six entries spread across well-mixed coord
+    // hashes makes that coincidence vanishingly unlikely.
+    //
+    // Setup:
+    //   target at origin: 5 slots [B0..B4], no outflow → target_post = 5
+    //   each attacker: 6 energy, emits 1 toward origin → post_burn = 5
+    //   r = target_post / attacker_post_burn = 5 / 5 = 1.0
+    //   dominance = clamp(1 - 1.0/2.0, 0, 1) = 0.5 (move_threshold = 2)
+    //
+    // Sorted apply trace (intrusion_depth = floor(0.5 * mem_size)):
+    //   start mem=5: A0 (dir_from_target=Xp) intrudes 2, write_start 3
+    //     [B0,B1,B2,A0,B3,B4] mem=6
+    //   A1 (Xn) intrudes 3, write_start 3
+    //     [B0,B1,B2,A1,A0,B3,B4] mem=7
+    //   A2 (Yp) intrudes 3 (floor(0.5*7)=3), write_start 4
+    //     [B0,B1,B2,A1,A2,A0,B3,B4] mem=8
+    //   A3 (Yn) intrudes 4, write_start 4
+    //     [B0,B1,B2,A1,A3,A2,A0,B3,B4] mem=9
+    //   A4 (Zp) intrudes 4 (floor(0.5*9)=4), write_start 5
+    //     [B0,B1,B2,A1,A3,A4,A2,A0,B3,B4] mem=10
+    //   A5 (Zn) intrudes 5, write_start 5
+    //     [B0,B1,B2,A1,A3,A5,A4,A2,A0,B3,B4] mem=11
+    let mut w = SparseWorld::new(0);
+
+    let target = Cell::with_memory(vec![0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
+    w.insert(Coord::ORIGIN, target);
+
+    // Attacker layout: each at the cardinal neighbor of origin in
+    // direction `face`, emitting back toward origin via the opposite
+    // direction `face.opposite()`. Token value encodes which attacker
+    // it came from (0xA0..0xA5 in canonical Direction order).
+    let attackers: [(Direction, u32); 6] = [
+        (Direction::Xp, 0x00A0),
+        (Direction::Xn, 0x00A1),
+        (Direction::Yp, 0x00A2),
+        (Direction::Yn, 0x00A3),
+        (Direction::Zp, 0x00A4),
+        (Direction::Zn, 0x00A5),
+    ];
+    for &(face, token) in &attackers {
+        let coord = Coord::ORIGIN.neighbor(face);
+        // Memory: 5 filler slots + 1 token at the end. The emit pointer
+        // points at the token so it's the slot that flows out.
+        let mut mem = vec![0u32; 5];
+        mem.push(token);
+        let mut a = Cell::with_memory(mem);
+        let emit_dir = face.opposite();
+        a.rates[emit_dir.index()] = 1;
+        a.pointers[emit_dir.index()] = 5;
+        w.insert(coord, a);
+    }
+
+    let outflow = collect_outflow(&w);
+    apply_outflow(&mut w, &outflow);
+
+    let target = w.get(Coord::ORIGIN).unwrap();
+    assert_eq!(
+        target.memory,
+        vec![0xB0, 0xB1, 0xB2, 0x00A1, 0x00A3, 0x00A5, 0x00A4, 0x00A2, 0x00A0, 0xB3, 0xB4,],
+        "memory layout must reflect canonical-direction tie-break order — \
+         any divergence indicates the multi-inflow sort was skipped",
+    );
+}
+
+#[test]
+fn pc_wraps_into_range_when_shrink_outpaces_inflow_for_dual_role_cell() {
+    // A cell is BOTH source (phase 1 shrink) AND target (phase 3 grow)
+    // in the same tick. If the shrink is bigger than the grow and the
+    // pre-tick pc was at the tail, pc ends up greater than the new
+    // memory length — the trailing `target.pc %= memory.len()` in
+    // `apply_outflow`'s body brings it back into range.
+    //
+    // The defensive comment in the source says this scenario only
+    // arises if a future change adds shrink mid-step; the dual-role
+    // case constructed here triggers it today, so the modulo is
+    // observable and `%=` mutated to `/=` or `+=` produces a
+    // different pc.
+    //
+    // Setup:
+    //   A at origin: memory = [0..11] (12 slots), pc = 10. Emits 6
+    //     slots toward +x → phase 1 shrinks A to 6 slots, pc stays 10.
+    //   B at (1, 0, 0): memory = [0x99] (1 slot), pc = 0. Emits 1 slot
+    //     toward -x (origin) → phase 1 shrinks B to 0, the 1 slot
+    //     becomes inflow for A.
+    //
+    // Phase 3 body for A:
+    //   - dominance check: A_post = 6, B_post_burn = max(1, 0) = 1,
+    //     r = 6.0, dom = clamp(1 - 6/2, 0, 1) = 0.
+    //   - intrusion_depth = 0 * 6 = 0, write_start = 6 (tail).
+    //   - splice [0x99] at 6 → A.memory = [0..5, 0x99], len = 7.
+    //   - pc was 10; correct: 10 % 7 = 3. mutants:
+    //       /= → 10 / 7 = 1
+    //       += → 10 + 7 = 17
+    let mut w = SparseWorld::new(0);
+
+    let mut a = Cell::with_memory((0u32..12).collect());
+    a.pc = 10;
+    a.rates[Direction::Xp.index()] = 6;
+    a.pointers[Direction::Xp.index()] = 0;
+    w.insert(Coord::ORIGIN, a);
+
+    let mut b = Cell::with_memory(vec![0x99]);
+    b.rates[Direction::Xn.index()] = 1;
+    b.pointers[Direction::Xn.index()] = 0;
+    w.insert(Coord::new(1, 0, 0), b);
+
+    let outflow = collect_outflow(&w);
+    apply_outflow(&mut w, &outflow);
+
+    let a = w.get(Coord::ORIGIN).expect("origin must still exist");
+    assert_eq!(
+        a.memory.len(),
+        7,
+        "A grew from 6 (post-shrink) to 7 via inflow"
+    );
+    assert_eq!(a.pc, 3, "pc must wrap via modulo: 10 % 7 == 3");
+}
+
 // ----- conservation ----------------------------------------------------------
 
 #[test]
