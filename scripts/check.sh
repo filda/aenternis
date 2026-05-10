@@ -74,6 +74,8 @@ OVERALL=0
 step "rustfmt" "${CARGO[@]}" fmt --all -- --check                                || OVERALL=1
 step "clippy"  "${CARGO[@]}" clippy --workspace --all-targets -- -D warnings     || OVERALL=1
 step "tests"   "${CARGO[@]}" test --workspace                                    || OVERALL=1
+# step "tests"   "${CARGO[@]}" install cargo-llvm-cov                              || OVERALL=1
+# step "tests"   "${CARGO[@]}" llvm-cov --workspace --html                         || OVERALL=1
 
 # Optional WASM bundle build. Skipped if wasm-pack isn't on PATH so the
 # script keeps working before the toolchain is set up. When present, the
