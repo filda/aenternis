@@ -109,7 +109,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             cell.rates[d.index()] = rate;
         }
         if cell.total_rate() > my_energy {
-            proportional_clamp(&mut cell.rates, my_energy);
+            proportional_clamp(&mut cell.rates, my_energy, world_seed, rng_tick, *coord);
         }
     };
 

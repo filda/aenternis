@@ -11,7 +11,7 @@
 //!    that sums to exactly `min(original_sum, cap)`.
 
 use aenternis_core::cell::{proportional_clamp, LAYOUT_ORDER};
-use aenternis_core::{Cell, Direction};
+use aenternis_core::{Cell, Coord, Direction};
 
 #[test]
 fn new_returns_empty_cell() {
@@ -291,70 +291,90 @@ fn append_slots_empty_input_is_noop() {
 
 // ----- proportional_clamp -----
 
+// Helper: drop the `(world_seed, rng_tick, coord)` boilerplate for the
+// cases below where we only care about `(rates, cap)` outputs. Bias-
+// independent assertions (sum, non-exceedance) hold for any RNG seed;
+// tie-break-dependent specific outputs are pinned via the fixed
+// `(0, 0, ORIGIN)` triple, same as in `tests/proportional_clamp.rs`.
+fn pc(rates: &mut [u32; 6], cap: u32) {
+    proportional_clamp(rates, cap, 0, 0, Coord::ORIGIN);
+}
+
 #[test]
 fn proportional_clamp_under_cap_is_noop() {
     let mut rates = [1u32, 2, 3, 4, 5, 6];
-    proportional_clamp(&mut rates, 100);
+    pc(&mut rates, 100);
     assert_eq!(rates, [1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
 fn proportional_clamp_at_cap_is_noop() {
     let mut rates = [1u32, 2, 3, 4, 5, 6];
-    proportional_clamp(&mut rates, 21);
+    pc(&mut rates, 21);
     assert_eq!(rates, [1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
 fn proportional_clamp_zero_total_is_noop() {
     let mut rates = [0u32; 6];
-    proportional_clamp(&mut rates, 10);
+    pc(&mut rates, 10);
     assert_eq!(rates, [0; 6]);
 }
 
 #[test]
 fn proportional_clamp_exact_proportions_preserved() {
     // rates [10, 20, 30, 40, 50, 60] sum to 210; cap 21.
-    // Each rate scales by 10x → [1, 2, 3, 4, 5, 6].
+    // Each rate scales by exactly 10x → [1, 2, 3, 4, 5, 6]. Floors are
+    // exact (no fractional remainder), so leftover = 0 and the
+    // tie-break path is irrelevant here.
     let mut rates = [10u32, 20, 30, 40, 50, 60];
-    proportional_clamp(&mut rates, 21);
+    pc(&mut rates, 21);
     assert_eq!(rates.iter().copied().fold(0u32, u32::saturating_add), 21);
     assert_eq!(rates, [1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
 fn proportional_clamp_distributes_leftover_to_match_cap() {
-    // rates [1, 1, 1, 1, 1, 1] sum to 6; cap 4.
-    // Floor scaling by 4/6 ≈ 0.667 → all rates floor to 0; leftover 4
-    // gets distributed back to the first non-zero positions, which
-    // means we walk the iterator and bump each position once until
-    // we run out. But all rates are zero after flooring, so nothing
-    // gets bumped — leftover-distribution only adds to non-zero entries
-    // (so it doesn't invent emission directions that weren't there).
+    // rates [1, 1, 1, 1, 1, 1] sum to 6; cap 4. Floor 4/6 ≈ 0.667 →
+    // every rate floors to 0, frac = 0.667 in every slot. Leftover = 4
+    // is distributed to four of the six tied indices via the per-cell
+    // shuffled tie-break — post-clamp sum reaches cap exactly, two
+    // indices stay at 0 (RNG decides which two).
     let mut rates = [1u32; 6];
-    proportional_clamp(&mut rates, 4);
+    pc(&mut rates, 4);
     let total: u32 = rates.iter().copied().fold(0u32, u32::saturating_add);
-    // We can't bump zero rates back up, so the post-clamp total is 0.
-    // The function does not synthesize emission where none existed.
-    assert_eq!(total, 0);
-    assert_eq!(rates, [0; 6]);
+    assert_eq!(total, 4);
+    let ones = rates.iter().filter(|&&v| v == 1).count();
+    let zeros = rates.iter().filter(|&&v| v == 0).count();
+    assert_eq!(ones, 4);
+    assert_eq!(zeros, 2);
+    // Per-direction non-exceedance: clamped[i] <= original[i] = 1.
+    for &v in &rates {
+        assert!(v <= 1);
+    }
 }
 
 #[test]
 fn proportional_clamp_distributes_leftover_when_some_nonzero() {
     // rates [10, 10, 0, 0, 0, 0] sum to 20; cap 7.
     // 10 * 7 / 20 = 3.5 → floor 3 each; total 6; leftover 1.
-    // Leftover goes to the first non-zero entry (index 0).
+    // fracs [0.5, 0.5, 0, 0, 0, 0] — idx 0 and idx 1 tied for first
+    // place; the +1 goes to one of them via shuffle. Dirs 2..5 stay 0.
     let mut rates = [10u32, 10, 0, 0, 0, 0];
-    proportional_clamp(&mut rates, 7);
+    pc(&mut rates, 7);
     assert_eq!(rates.iter().copied().fold(0u32, u32::saturating_add), 7);
-    assert_eq!(rates, [4, 3, 0, 0, 0, 0]);
+    assert_eq!(rates[2..], [0, 0, 0, 0]);
+    let head_pair = (rates[0], rates[1]);
+    assert!(
+        head_pair == (4, 3) || head_pair == (3, 4),
+        "expected one of (4,3) or (3,4), got {head_pair:?}",
+    );
 }
 
 #[test]
 fn proportional_clamp_to_zero_cap_zeroes_everything() {
     let mut rates = [3u32, 5, 7, 11, 13, 17];
-    proportional_clamp(&mut rates, 0);
+    pc(&mut rates, 0);
     assert_eq!(rates, [0; 6]);
 }
 
@@ -371,7 +391,7 @@ fn proportional_clamp_post_total_never_exceeds_cap() {
     for (rates, cap) in cases {
         let mut r = rates;
         let original_total: u32 = rates.iter().copied().fold(0u32, u32::saturating_add);
-        proportional_clamp(&mut r, cap);
+        pc(&mut r, cap);
         let new_total: u32 = r.iter().copied().fold(0u32, u32::saturating_add);
         assert!(
             new_total <= cap,

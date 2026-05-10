@@ -18,7 +18,7 @@
 //! one unit of energy *is* one slot of memory. The two are alternative names
 //! for the same quantity.
 
-use crate::Direction;
+use crate::{Coord, Direction, Rng};
 
 /// Order in which pointers are laid out from the end of memory.
 ///
@@ -198,18 +198,38 @@ impl Default for Cell {
     }
 }
 
+/// RNG domain salt for [`proportional_clamp`]'s leftover-distribution
+/// tie-break. Distinct from the default domain (`0`) used by
+/// `compute_natural_rates` for `stochastic_floor` draws and from
+/// `tick::COMBINED_CLAMPED_RNG_DOMAIN` (`1`), so all three streams stay
+/// uncorrelated even when they share `(world_seed, tick, coord)`.
+pub(crate) const PROPORTIONAL_CLAMP_RNG_DOMAIN: u32 = 2;
+
 /// Scale `rates` down in place so their sum does not exceed `cap`.
 ///
 /// Used when the combined per-direction rate exceeds the cell's current
 /// memory size — proportional clamping ensures total outflow never exceeds
 /// the available memory budget. Floor-rounded scaling can lose up to
-/// `DIRS - 1` units to rounding; the leftover is distributed back to
-/// non-zero directions in canonical order so the post-clamp sum is exactly
-/// `min(original_sum, cap)`.
+/// `DIRS - 1` units to rounding; the leftover is distributed back via
+/// Largest-Remainder apportionment with a per-cell-deterministic
+/// Fisher-Yates tie-break, so the post-clamp sum is exactly
+/// `min(original_sum, cap)` *and* the choice of which directions absorb
+/// the leftover does not bias toward any specific face of the
+/// `Direction::ALL` ordering.
 ///
-/// **Determinism:** the leftover-distribution loop walks directions in the
-/// order they appear in the array, so the result is independent of cell
-/// allocation order or other ambient state.
+/// **Statistical isotropy.** Across many `(world_seed, rng_tick,
+/// coord)` triples each direction wins/loses the leftover tie-break
+/// with equal probability, so the macro emission balance is uniform
+/// across `Direction::ALL`. (Strict per-call equivariance under
+/// direction permutation is provably incompatible with exact
+/// conservation + integer outputs + per-direction non-exceedance, so it
+/// is not part of the contract; the structural argument is the same as
+/// for [`crate::tick::combined_clamped`].)
+///
+/// **Determinism:** the leftover tie-break is keyed by `(world_seed,
+/// rng_tick, coord, PROPORTIONAL_CLAMP_RNG_DOMAIN)`, so the result is
+/// independent of cell allocation order or other ambient state. See
+/// [`PROPORTIONAL_CLAMP_RNG_DOMAIN`] for the salt's purpose.
 ///
 /// **Total in `u64`:** the sum of six `u32` rates can exceed `u32::MAX`
 /// when `port` accumulates `active_outflow` close to its saturation
@@ -218,7 +238,13 @@ impl Default for Cell {
 /// `rates[d] * cap / total` ratio mathematically correct in that case;
 /// a `u32` saturating sum would underestimate `total` and let the post-
 /// clamp sum spill over `cap`.
-pub fn proportional_clamp(rates: &mut [u32; Direction::COUNT], cap: u32) {
+pub fn proportional_clamp(
+    rates: &mut [u32; Direction::COUNT],
+    cap: u32,
+    world_seed: u64,
+    rng_tick: u64,
+    coord: Coord,
+) {
     let total: u64 = rates.iter().copied().map(u64::from).sum();
     let cap64 = u64::from(cap);
     if total <= cap64 || total == 0 {
@@ -247,28 +273,37 @@ pub fn proportional_clamp(rates: &mut [u32; Direction::COUNT], cap: u32) {
         // we can't use the lossless cast here.) `cap` and `r` are u32,
         // so `f64::from` is safe and idiomatic.
         let scale = f64::from(cap) / total as f64;
+        let mut frac: [f64; Direction::COUNT] = [0.0; Direction::COUNT];
         let mut new_total: u32 = 0;
-        for r in &mut *rates {
-            let scaled = (f64::from(*r) * scale).floor();
-            let scaled_u32 = scaled as u32;
+        for (i, r) in rates.iter_mut().enumerate() {
+            let scaled = f64::from(*r) * scale;
+            let floored = scaled.floor();
+            frac[i] = scaled - floored;
+            let scaled_u32 = floored as u32;
             *r = scaled_u32;
             new_total = new_total.saturating_add(scaled_u32);
         }
-        // Distribute leftover (floor rounding may have lost up to DIRS - 1 units).
-        let mut leftover = cap.saturating_sub(new_total);
-        while leftover > 0 {
-            let mut added = false;
-            for r in &mut *rates {
-                if *r > 0 && leftover > 0 {
-                    *r += 1;
-                    leftover -= 1;
-                    added = true;
-                    break;
-                }
-            }
-            if !added {
-                break;
-            }
+        // Distribute leftover by Largest-Remainder with shuffled
+        // tie-break (same algorithm as `tick::combined_clamped`; see
+        // its docstring for the structural argument). The shuffle +
+        // sort runs unconditionally even when `leftover == 0` — the
+        // `take(0)` below is a no-op and we trade a rare extra branch
+        // for a structure that's exhaustively mutation-tested.
+        let leftover = cap.saturating_sub(new_total) as usize;
+        let mut order: [usize; Direction::COUNT] = [0, 1, 2, 3, 4, 5];
+        let mut rng =
+            Rng::for_cell_at_tick(world_seed, rng_tick, coord, PROPORTIONAL_CLAMP_RNG_DOMAIN);
+        for i in (1..Direction::COUNT).rev() {
+            let j = (rng.next_u32() as usize) % (i + 1);
+            order.swap(i, j);
+        }
+        order.sort_by(|&a, &b| {
+            frac[b]
+                .partial_cmp(&frac[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for &idx in order.iter().take(leftover) {
+            rates[idx] = rates[idx].saturating_add(1);
         }
     }
 }
