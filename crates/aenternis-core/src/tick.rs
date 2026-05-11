@@ -773,6 +773,7 @@ pub fn step(world: &mut SparseWorld, coeff: f64, k: u32) {
     world.scratch_outflow = outflow;
     end_of_tick(world);
     world.gc_empty();
+    world.rebuild_indices_if_dirty();
     world.tick = world.tick.saturating_add(1);
 }
 
@@ -813,5 +814,6 @@ pub fn step_diffusion(world: &mut SparseWorld, coeff: f64) {
     world.scratch_outflow = outflow;
     end_of_tick(world);
     world.gc_empty();
+    world.rebuild_indices_if_dirty();
     world.tick = world.tick.saturating_add(1);
 }

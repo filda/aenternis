@@ -368,6 +368,10 @@ fn sorted_iter_walks_cells_in_canonical_order() {
     w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![3]));
     w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![2]));
     w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1]));
+    // Tests that mutate outside the tick loop have to refresh the
+    // sorted/bbox cache themselves before reading — the tick loop
+    // does this after `gc_empty`, but a bare `insert` does not.
+    w.rebuild_indices_if_dirty();
 
     let collected: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
     assert_eq!(
@@ -465,4 +469,163 @@ fn coords_yields_just_inserted_keys() {
     assert!(keys.contains(&Coord::new(2, 0, 0)));
     assert!(keys.contains(&Coord::new(3, 0, 0)));
     assert!(keys.contains(&Coord::new(5, 0, 0)));
+}
+
+// ----- sorted index + bbox cache (plan-sorted-index-bbox.md) -----
+
+#[test]
+fn big_bang_initializes_cache() {
+    // The big-bang path bypasses `insert` and pokes `cells` directly,
+    // so it has to seed the indices itself; otherwise `sorted_iter` /
+    // `bounding_box` before the first tick would read stale state.
+    let w = SparseWorld::big_bang(7, 8);
+    let collected: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
+    assert_eq!(collected, vec![Coord::ORIGIN]);
+    assert_eq!(w.bounding_box(), Some((0, 0, 0, 0, 0, 0)));
+}
+
+#[test]
+fn bbox_extends_on_get_or_alloc_outside_current_box() {
+    // `get_or_alloc` is on the hot path of `apply_outflow`; an
+    // incremental bbox extend lets us skip the per-tick `O(n)` fold.
+    let mut w = SparseWorld::big_bang(0, 4);
+    w.get_or_alloc(Coord::new(5, -3, 7));
+    // Eager extend — no `rebuild_indices_if_dirty` between mutation
+    // and read. Both axes must stretch on the right side.
+    assert_eq!(w.bounding_box(), Some((0, 5, -3, 0, 0, 7)));
+}
+
+#[test]
+fn bbox_extends_on_insert_outside_current_box() {
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
+    w.insert(Coord::new(-4, 2, -1), Cell::with_memory(vec![1]));
+    w.insert(Coord::new(3, -5, 6), Cell::with_memory(vec![1]));
+    assert_eq!(w.bounding_box(), Some((-4, 3, -5, 2, -1, 6)));
+}
+
+#[test]
+fn sorted_iter_after_insert_remove_cycle_is_lex_ordered() {
+    // Drive a pseudo-random mutation sequence through the side-table
+    // and check that the canonical-order contract still holds. Using
+    // a fixed xorshift32 stream keeps the test deterministic.
+    let mut w = SparseWorld::new(0);
+    let mut rng: u32 = 0x1234_5678;
+    let mut next = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        rng
+    };
+    for _ in 0..200 {
+        // `next() % 21` is in `0..=20` — fits in i32 without wrap.
+        let x = i32::try_from(next() % 21).unwrap() - 10;
+        let y = i32::try_from(next() % 21).unwrap() - 10;
+        let z = i32::try_from(next() % 21).unwrap() - 10;
+        let coord = Coord::new(x, y, z);
+        match next() % 3 {
+            0 => {
+                w.insert(coord, Cell::with_memory(vec![1]));
+            }
+            1 => {
+                w.get_or_alloc(coord);
+            }
+            _ => {
+                w.remove(coord);
+            }
+        }
+    }
+    w.rebuild_indices_if_dirty();
+    let collected: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
+    let mut expected = collected.clone();
+    expected.sort_unstable();
+    assert_eq!(collected, expected);
+    assert_eq!(collected.len(), w.len());
+}
+
+#[test]
+fn bbox_invariant_matches_naive_after_mutations() {
+    // After every rebuild, the cached bbox must match a fresh fold
+    // over `cells.keys()`. This catches both stale-extend bugs and
+    // missing dirty flags.
+    let mut w = SparseWorld::big_bang(0, 1);
+    w.insert(Coord::new(4, -2, 6), Cell::with_memory(vec![1]));
+    w.insert(Coord::new(-7, 3, -8), Cell::with_memory(vec![1]));
+    w.remove(Coord::ORIGIN);
+    w.rebuild_indices_if_dirty();
+    let naive = w.coords().fold(None, |acc, c| {
+        Some(acc.map_or(
+            (c.x, c.x, c.y, c.y, c.z, c.z),
+            |(xmn, xmx, ymn, ymx, zmn, zmx): (i32, i32, i32, i32, i32, i32)| {
+                (
+                    xmn.min(c.x),
+                    xmx.max(c.x),
+                    ymn.min(c.y),
+                    ymx.max(c.y),
+                    zmn.min(c.z),
+                    zmx.max(c.z),
+                )
+            },
+        ))
+    });
+    assert_eq!(w.bounding_box(), naive);
+}
+
+#[test]
+fn bbox_recomputes_after_gc_clears_extremes() {
+    // gc_empty drops every empty cell; if the cell that anchored
+    // x_min is among them, bbox has to shrink. An incremental
+    // extend-only update would leave x_min stale.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(-10, 0, 0), Cell::new()); // empty → gc target
+    w.insert(Coord::new(10, 0, 0), Cell::with_memory(vec![1]));
+    w.gc_empty();
+    w.rebuild_indices_if_dirty();
+    let bb = w.bounding_box().unwrap();
+    assert_eq!(bb.0, 10, "x_min must shrink to 10, got {bb:?}");
+    assert_eq!(bb.1, 10);
+}
+
+#[test]
+fn bbox_is_none_after_gc_clears_all() {
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(1, 2, 3), Cell::new());
+    w.insert(Coord::new(-1, -2, -3), Cell::new());
+    w.gc_empty();
+    w.rebuild_indices_if_dirty();
+    assert_eq!(w.bounding_box(), None);
+    assert_eq!(w.sorted_iter().count(), 0);
+}
+
+#[test]
+fn clone_preserves_cache_validity() {
+    // Derived Clone copies the Vec + Option fields; the clone must
+    // therefore read its sorted_iter / bounding_box without an extra
+    // rebuild — the invariant carries.
+    let mut w = SparseWorld::big_bang(0, 4);
+    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
+    w.rebuild_indices_if_dirty();
+    let clone = w.clone();
+    let collected: Vec<Coord> = clone.sorted_iter().map(|(c, _)| *c).collect();
+    assert_eq!(collected, vec![Coord::ORIGIN, Coord::new(2, 0, 0)]);
+    assert_eq!(clone.bounding_box(), Some((0, 2, 0, 0, 0, 0)));
+}
+
+#[test]
+fn insert_replace_does_not_invalidate_sorted_cache() {
+    // Replacing the value at an existing key leaves the keyset
+    // identical, so sorted_cache should stay valid — no rebuild
+    // needed before the next read. This pins the optimization so a
+    // "set dirty on every insert" mutant gets caught.
+    let mut w = SparseWorld::new(0);
+    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1]));
+    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
+    w.rebuild_indices_if_dirty();
+    let cache_before: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
+    // Replace at an existing coord — should NOT dirty the cache.
+    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![99]));
+    // Read without an intervening rebuild — relies on the cache
+    // still being valid.
+    let cache_after: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
+    assert_eq!(cache_before, cache_after);
 }

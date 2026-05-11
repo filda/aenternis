@@ -33,7 +33,7 @@
 //! bit-identity harness against JS, which compares per-cell state at
 //! known coordinates rather than relying on iteration order.
 
-use std::collections::hash_map::{Iter, IterMut, Keys};
+use std::collections::hash_map::{Entry, Iter, IterMut, Keys};
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
@@ -100,6 +100,33 @@ pub struct SparseWorld {
     /// `&mut world.cells` while still reading the populated inflow
     /// lists, then puts it back.
     pub(crate) scratch_inflows_by_target: FxHashMap<Coord, Vec<crate::tick::InflowEntry>>,
+
+    /// Lex-sorted snapshot of `cells.keys()`. Mirrors the canonical
+    /// `(x, y, z)` order that [`Self::sorted_iter`] commits to.
+    ///
+    /// Maintained by [`Self::rebuild_indices_if_dirty`], which the
+    /// tick loop runs after `gc_empty` and before the tick counter
+    /// advances. Reading [`Self::sorted_iter`] outside that contract
+    /// (after a manual mutation, before a tick) requires calling
+    /// `rebuild_indices_if_dirty` first — `debug_assert` enforces it.
+    sorted_cache: Vec<Coord>,
+
+    /// `true` if at least one mutation since the last
+    /// `rebuild_indices_if_dirty` added or removed a key, so
+    /// `sorted_cache` is stale. Pure value replacement (e.g.
+    /// [`Self::insert`] over an existing coord) leaves it `false`.
+    sorted_dirty: bool,
+
+    /// Cached `(x_min, x_max, y_min, y_max, z_min, z_max)` over all
+    /// live cells, `None` for the empty world. Maintained eagerly on
+    /// insert (incremental extend) and rebuilt lazily on
+    /// remove/`gc_empty` (full fold over `sorted_cache`).
+    bbox_cache: Option<(i32, i32, i32, i32, i32, i32)>,
+
+    /// `true` if a removal since the last `rebuild_indices_if_dirty`
+    /// may have shrunk the bbox; the next rebuild does a full fold to
+    /// recompute. Inserts don't set this — they extend bbox in place.
+    bbox_dirty: bool,
 }
 
 impl SparseWorld {
@@ -119,6 +146,10 @@ impl SparseWorld {
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
             scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
+            sorted_cache: Vec::new(),
+            sorted_dirty: false,
+            bbox_cache: None,
+            bbox_dirty: false,
         }
     }
 
@@ -176,6 +207,11 @@ impl SparseWorld {
         let mut cell = Cell::with_memory(memory);
         cell.origin_tag = origin_tag;
         world.cells.insert(Coord::ORIGIN, cell);
+        // Eager init — by-passing the public `insert` here means we
+        // own the index seeding too, otherwise the first `sorted_iter`
+        // before any tick would trip `debug_assert!(!sorted_dirty)`.
+        world.sorted_cache.push(Coord::ORIGIN);
+        world.bbox_cache = Some((0, 0, 0, 0, 0, 0));
         world
     }
 
@@ -189,9 +225,17 @@ impl SparseWorld {
     /// alloc-on-write during the inflow phase.
     pub fn get_or_alloc(&mut self, coord: Coord) -> &mut Cell {
         let world_seed = self.world_seed;
-        self.cells
-            .entry(coord)
-            .or_insert_with(|| fresh_cell(world_seed, coord))
+        match self.cells.entry(coord) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(slot) => {
+                // Keyset grew → sorted_cache is now stale. Bbox is
+                // extended in place; only removals need a lazy
+                // rebuild, so we don't touch `bbox_dirty` here.
+                self.sorted_dirty = true;
+                self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
+                slot.insert(fresh_cell(world_seed, coord))
+            }
+        }
     }
 
     /// Number of cells currently in the world.
@@ -226,12 +270,27 @@ impl SparseWorld {
     /// Insert (or replace) a cell at `coord`. Returns the previous cell if
     /// one existed there, mirroring `BTreeMap::insert`.
     pub fn insert(&mut self, coord: Coord, cell: Cell) -> Option<Cell> {
-        self.cells.insert(coord, cell)
+        let prev = self.cells.insert(coord, cell);
+        if prev.is_none() {
+            // New key — sorted_cache is stale, and bbox needs to
+            // extend. Pure replacement leaves both caches valid.
+            self.sorted_dirty = true;
+            self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
+        }
+        prev
     }
 
     /// Remove the cell at `coord`, returning it if it was there.
     pub fn remove(&mut self, coord: Coord) -> Option<Cell> {
-        self.cells.remove(&coord)
+        let removed = self.cells.remove(&coord);
+        if removed.is_some() {
+            // Keyset shrank — sorted_cache is stale, and the bbox
+            // might need to contract on this axis (we don't know
+            // without a full pass; the rebuild handles that lazily).
+            self.sorted_dirty = true;
+            self.bbox_dirty = true;
+        }
+        removed
     }
 
     /// Borrow the orthogonal neighbor of `coord` in `direction`, if any.
@@ -260,31 +319,18 @@ impl SparseWorld {
     /// `(x_min, x_max, y_min, y_max, z_min, z_max)`. Returns `None` when
     /// the world is empty.
     ///
-    /// `O(n)` in the cell count — walks the whole map. Cheap enough at
-    /// the prototype's million-cell scale (one tick of `step` is already
-    /// `O(n)`); upgrade to a maintained-on-write bbox if profiling ever
-    /// flags this.
+    /// `O(1)` — reads a side-table maintained by
+    /// [`Self::rebuild_indices_if_dirty`] (which the tick loop runs
+    /// after `gc_empty`). Callers that mutate outside the tick loop
+    /// must call `rebuild_indices_if_dirty` before reading; the
+    /// `debug_assert!` here flags forgotten rebuilds in test builds.
     #[must_use]
     pub fn bounding_box(&self) -> Option<(i32, i32, i32, i32, i32, i32)> {
-        // Single-pass fold over coords. Delegating min/max to the stdlib
-        // means there are no inline `<` / `>` comparisons left for a
-        // mutator to flip — the ordering logic lives in `i32::min` /
-        // `i32::max`, which are tested by stdlib itself.
-        self.cells.keys().fold(None, |acc, c| {
-            Some(acc.map_or(
-                (c.x, c.x, c.y, c.y, c.z, c.z),
-                |(x_min, x_max, y_min, y_max, z_min, z_max)| {
-                    (
-                        x_min.min(c.x),
-                        x_max.max(c.x),
-                        y_min.min(c.y),
-                        y_max.max(c.y),
-                        z_min.min(c.z),
-                        z_max.max(c.z),
-                    )
-                },
-            ))
-        })
+        debug_assert!(
+            !self.bbox_dirty,
+            "bounding_box read while bbox cache is dirty — call rebuild_indices_if_dirty first"
+        );
+        self.bbox_cache
     }
 
     /// Drop every cell whose memory is empty (energy == 0). This is the
@@ -292,7 +338,45 @@ impl SparseWorld {
     /// `docs/mechanics.md` — the sparse-world counterpart of "the cell
     /// stops existing once it holds no energy."
     pub fn gc_empty(&mut self) {
+        let len_before = self.cells.len();
         self.cells.retain(|_, cell| !cell.is_empty());
+        if self.cells.len() != len_before {
+            self.sorted_dirty = true;
+            self.bbox_dirty = true;
+        }
+    }
+
+    /// Bring the sorted index and bbox cache up to date if any mutation
+    /// since the last rebuild marked them stale. Called by
+    /// [`crate::tick::step`] / [`crate::tick::step_diffusion`] after
+    /// `gc_empty` so the snapshot path can read both fields without
+    /// triggering work per call.
+    ///
+    /// Idempotent: a second call with no intervening mutation is a
+    /// pair of cheap flag checks. Callers that mutate outside the
+    /// tick loop (manual `insert` / `remove` / `get_or_alloc`) and
+    /// then want to read [`Self::sorted_iter`] or [`Self::bounding_box`]
+    /// must call this themselves first — the read paths
+    /// `debug_assert!` on the flags.
+    pub fn rebuild_indices_if_dirty(&mut self) {
+        if self.sorted_dirty {
+            self.sorted_cache.clear();
+            self.sorted_cache.reserve(self.cells.len());
+            self.sorted_cache.extend(self.cells.keys().copied());
+            self.sorted_cache.sort_unstable();
+            self.sorted_dirty = false;
+        }
+        if self.bbox_dirty {
+            // Full fold — only fires when at least one removal
+            // happened. Reads from `sorted_cache` (which we just
+            // brought up to date if it was dirty) for cache-friendly
+            // sequential access.
+            self.bbox_cache = self
+                .sorted_cache
+                .iter()
+                .fold(None, |acc, c| Some(extend_bbox(acc, *c)));
+            self.bbox_dirty = false;
+        }
     }
 
     /// Iterate over `(coord, cell)` pairs in `FxHashMap` hash order
@@ -316,15 +400,44 @@ impl SparseWorld {
 
     /// Iterate over `(coord, cell)` pairs in `(x, y, z)` lex order.
     ///
-    /// Allocates a `Vec` of references on each call to do the sort, so
-    /// avoid in tight inner loops — it's intended for snapshot/export
-    /// boundaries (see `aenternis-wasm`'s `cellsSnapshot`) and for tests
-    /// that pin canonical iteration order.
-    #[must_use]
-    pub fn sorted_iter(&self) -> std::vec::IntoIter<(&Coord, &Cell)> {
-        let mut entries: Vec<_> = self.cells.iter().collect();
-        entries.sort_unstable_by_key(|(c, _)| **c);
-        entries.into_iter()
+    /// Reads a side-table maintained by
+    /// [`Self::rebuild_indices_if_dirty`]; the per-call cost is one
+    /// `Vec` walk plus per-element `HashMap::get`, no sort or
+    /// allocation. The tick loop refreshes the side-table after
+    /// `gc_empty`, so snapshot callers (`cellsSnapshot`,
+    /// `build_snapshot_payload`) read straight through.
+    ///
+    /// Callers that mutate outside the tick loop must call
+    /// `rebuild_indices_if_dirty` before iterating; the
+    /// `debug_assert!` here flags forgotten rebuilds in test builds.
+    ///
+    /// # Panics
+    ///
+    /// `expect`s that every coord in `sorted_cache` also exists in
+    /// `cells`. The cache is private and only updated through the
+    /// `insert`/`remove`/`get_or_alloc`/`gc_empty` mutators (which
+    /// keep the invariant) and `rebuild_indices_if_dirty` (which
+    /// reseeds from `cells.keys()`), so this is unreachable unless
+    /// the struct's internal invariants are broken — in which case
+    /// the panic is a louder signal than silently returning a
+    /// half-empty iterator.
+    pub fn sorted_iter(&self) -> impl Iterator<Item = (&Coord, &Cell)> + '_ {
+        debug_assert!(
+            !self.sorted_dirty,
+            "sorted_iter read while sorted cache is dirty — call rebuild_indices_if_dirty first"
+        );
+        debug_assert_eq!(
+            self.sorted_cache.len(),
+            self.cells.len(),
+            "sorted_cache and cells must agree on size when cache is clean"
+        );
+        self.sorted_cache.iter().map(move |c| {
+            let cell = self
+                .cells
+                .get(c)
+                .expect("sorted_cache invariant: every cached coord exists in cells");
+            (c, cell)
+        })
     }
 }
 
@@ -340,6 +453,34 @@ const fn fresh_cell(world_seed: u64, coord: Coord) -> Cell {
     let mut cell = Cell::new();
     cell.origin_tag = origin_tag;
     cell
+}
+
+/// Stretch a bbox to also include `coord`. The bbox tuple layout is
+/// `(x_min, x_max, y_min, y_max, z_min, z_max)`; `None` becomes the
+/// single-point bbox at `coord`.
+///
+/// Delegating to `i32::min` / `i32::max` keeps the per-axis ordering
+/// logic out of mutable inline `<` / `>` operators — any mutation
+/// inside this function lands inside the stdlib, which has its own
+/// tests; the only thing left here for mutants to flip is which axis
+/// each min/max applies to, and the axis-specific bbox tests cover
+/// that.
+#[must_use]
+fn extend_bbox(
+    bbox: Option<(i32, i32, i32, i32, i32, i32)>,
+    coord: Coord,
+) -> (i32, i32, i32, i32, i32, i32) {
+    match bbox {
+        None => (coord.x, coord.x, coord.y, coord.y, coord.z, coord.z),
+        Some((x_min, x_max, y_min, y_max, z_min, z_max)) => (
+            x_min.min(coord.x),
+            x_max.max(coord.x),
+            y_min.min(coord.y),
+            y_max.max(coord.y),
+            z_min.min(coord.z),
+            z_max.max(coord.z),
+        ),
+    }
 }
 
 // `IntoIterator` impls so that `for (coord, cell) in &world` and
