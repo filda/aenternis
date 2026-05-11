@@ -19,6 +19,7 @@
 //! Cell, world, RNG, VM, and tick logic are scheduled to land in subsequent
 //! commits — see `docs/plan.md` for the roadmap.
 
+pub mod apportion;
 pub mod cell;
 pub mod coord;
 pub mod rng;

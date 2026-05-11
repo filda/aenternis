@@ -29,9 +29,11 @@ exclude_re = [
     #
     #   `if cell.total_rate() > my_energy { proportional_clamp(...) }`
     # — with `>=`, the equality case calls
-    # `proportional_clamp(rates, my_energy, ...)`, which short-circuits
-    # at `if total <= cap64 || total == 0 { return; }` without
-    # modifying rates or drawing from RNG.
+    # `proportional_clamp(rates, my_energy, ...)`, which delegates to
+    # `apportion_with_shuffle` and hits its `if total <= cap64` fast
+    # path. The fast path returns the input values cast back to `u32`
+    # and the wrapper writes them to `rates` unchanged; no RNG draw
+    # happens because the seed init is past the early return.
     #
     # Both are truly observation-equivalent.
     "tick\\.rs:.*replace > with >= in compute_natural_rates",

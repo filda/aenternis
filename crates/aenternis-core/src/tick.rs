@@ -32,6 +32,7 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::apportion::{apportion_with_shuffle, COMBINED_CLAMPED_RNG_DOMAIN};
 use crate::cell::proportional_clamp;
 use crate::{Cell, Coord, Direction, Rng, SparseWorld};
 
@@ -349,12 +350,6 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
     }
 }
 
-/// RNG domain salt for [`combined_clamped`]'s leftover-distribution
-/// tie-break. Distinct from the default domain (`0`) used by
-/// [`compute_natural_rates`] so the two streams cannot correlate even
-/// when they share `(world_seed, tick, coord)`.
-pub(crate) const COMBINED_CLAMPED_RNG_DOMAIN: u32 = 1;
-
 /// Compute clamped combined per-direction rate for one cell.
 ///
 /// `combined = rates[d] + active_outflow[d]`, summed in `u64` so the
@@ -370,34 +365,12 @@ pub(crate) const COMBINED_CLAMPED_RNG_DOMAIN: u32 = 1;
 /// the two paths could disagree on the clamp output by ~1500 slots
 /// per direction.
 ///
-/// The clamp uses `f64` for `cap / total` and the per-direction
-/// `combined * scale` step, matching JS prototype 9-B's
-/// `Math.floor(combined * cap / total)` to the bit. `u64` integer
-/// division would also be correct mathematically but disagrees with
-/// JS at boundary values (truncation vs round-to-nearest-then-floor).
-///
-/// ## Leftover distribution — Largest-Remainder with shuffled tie-break
-///
-/// After `floor(combined * scale)` the per-direction sum may be up to
-/// `Direction::COUNT - 1 = 5` short of `cap`. Hamilton/Hare
-/// apportionment closes that gap: indices are sorted by their
-/// fractional remainder descending and the top `leftover` get `+1`
-/// each. Ties between equal remainders are broken by a Fisher-Yates
-/// shuffle of `[0..6]` seeded from `(world_seed, rng_tick, coord)`
-/// under a dedicated [`COMBINED_CLAMPED_RNG_DOMAIN`].
-///
-/// **Statistical isotropy.** Across many `(world_seed, rng_tick,
-/// coord)` triples each direction wins/loses the tie-break with equal
-/// probability, so the leftover distribution does not introduce a
-/// systematic preference for any face — the macro emission balance
-/// over a populated world is uniform across `Direction::ALL`. (Strict
-/// per-call equivariance under direction permutation is provably
-/// incompatible with exact conservation + integer outputs + per-
-/// direction non-exceedance, so it is not part of the contract; see
-/// `tick_combined_clamped_contracts.rs` for the operational test.)
-///
-/// The fast path (`total <= cap`) skips RNG and sort entirely; only
-/// the actually-clamping path pays the (constant, six-element) cost.
+/// The algorithmic core (proportional `f64` scale + Largest-Remainder
+/// leftover distribution with a Fisher-Yates tie-break) lives in
+/// [`crate::apportion::apportion_with_shuffle`]; see that module for the
+/// JS bit-parity argument, the statistical-isotropy contract, and the
+/// `f64`-precision bounds. This wrapper only builds the `[u64; 6]`
+/// input from `rates + active_outflow`.
 #[must_use]
 pub fn combined_clamped(
     rates: &[u32; Direction::COUNT],
@@ -407,78 +380,16 @@ pub fn combined_clamped(
     rng_tick: u64,
     coord: Coord,
 ) -> [u32; Direction::COUNT] {
-    let combined_u64: [u64; Direction::COUNT] =
+    let combined: [u64; Direction::COUNT] =
         std::array::from_fn(|i| u64::from(rates[i]) + u64::from(active_outflow[i]));
-    let total: u64 = combined_u64.iter().sum();
-    let cap64 = u64::from(cap);
-    if total <= cap64 {
-        // Each `combined_u64[i]` is bounded above by `total <= cap` here,
-        // so `as u32` is lossless.
-        #[allow(clippy::cast_possible_truncation)]
-        return std::array::from_fn(|i| combined_u64[i] as u32);
-    }
-    // Clamp via `f64` to bit-match JS. `total` reaches at most
-    // `6 * (u32::MAX + small_natural_rate)` ≈ `2^34.6`, well under
-    // `f64`'s `2^53` exact-integer ceiling.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let scale = f64::from(cap) / total as f64;
-    let mut clamped: [u32; Direction::COUNT] = [0; Direction::COUNT];
-    let mut frac: [f64; Direction::COUNT] = [0.0; Direction::COUNT];
-    let mut new_total: u32 = 0;
-    for i in 0..Direction::COUNT {
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
-        )]
-        let combined_f = combined_u64[i] as f64;
-        let scaled = combined_f * scale;
-        let floored = scaled.floor();
-        frac[i] = scaled - floored;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = floored as u32;
-        clamped[i] = val;
-        new_total = new_total.saturating_add(val);
-    }
-    // Distribute leftover by Largest-Remainder with shuffled tie-break.
-    // `cap >= new_total` always holds: each `floored ≤ combined * scale`
-    // and `sum(combined * scale) = cap`, so `new_total ≤ cap`. The
-    // shuffle + sort runs unconditionally even when `leftover == 0`
-    // (the rare case where `f64` rounding leaves `new_total == cap`
-    // exactly): a `take(0)` below makes that path a no-op without an
-    // observable-equivalent `if leftover > 0` early-skip that mutation
-    // tests would correctly flag as redundant.
-    let leftover = cap.saturating_sub(new_total) as usize;
-    let mut order: [usize; Direction::COUNT] = [0, 1, 2, 3, 4, 5];
-    let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, coord, COMBINED_CLAMPED_RNG_DOMAIN);
-    // Fisher-Yates shuffle of `order`. Indices i in (1..6).rev() pick a
-    // uniformly-distributed swap target in `0..=i` from the RNG. After
-    // this loop `order` is a uniformly-random permutation of
-    // `[0, 1, 2, 3, 4, 5]` deterministic in `(world_seed, rng_tick,
-    // coord)`.
-    for i in (1..Direction::COUNT).rev() {
-        // `next_u32() as usize % (i + 1)` — unbiased enough at this
-        // tiny range; the modulo bias for a 32-bit draw over 2..=6 is
-        // below 2^-29, and we are already shuffling six elements.
-        let j = (rng.next_u32() as usize) % (i + 1);
-        order.swap(i, j);
-    }
-    // Stable sort `order` by `frac` descending — equal remainders keep
-    // their (already-shuffled) relative order, so the tie-break is
-    // independent of `Direction::ALL`'s canonical ordering.
-    order.sort_by(|&a, &b| {
-        frac[b]
-            .partial_cmp(&frac[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for &idx in order.iter().take(leftover) {
-        clamped[idx] = clamped[idx].saturating_add(1);
-    }
-    clamped
+    apportion_with_shuffle(
+        &combined,
+        cap,
+        world_seed,
+        rng_tick,
+        coord,
+        COMBINED_CLAMPED_RNG_DOMAIN,
+    )
 }
 
 /// Apply an [`Outflow`] snapshot to the world with collision-as-soft-mixing

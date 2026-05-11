@@ -18,7 +18,8 @@
 //! one unit of energy *is* one slot of memory. The two are alternative names
 //! for the same quantity.
 
-use crate::{Coord, Direction, Rng};
+use crate::apportion::{apportion_with_shuffle, PROPORTIONAL_CLAMP_RNG_DOMAIN};
+use crate::{Coord, Direction};
 
 /// Order in which pointers are laid out from the end of memory.
 ///
@@ -198,46 +199,16 @@ impl Default for Cell {
     }
 }
 
-/// RNG domain salt for [`proportional_clamp`]'s leftover-distribution
-/// tie-break. Distinct from the default domain (`0`) used by
-/// `compute_natural_rates` for `stochastic_floor` draws and from
-/// `tick::COMBINED_CLAMPED_RNG_DOMAIN` (`1`), so all three streams stay
-/// uncorrelated even when they share `(world_seed, tick, coord)`.
-pub(crate) const PROPORTIONAL_CLAMP_RNG_DOMAIN: u32 = 2;
-
 /// Scale `rates` down in place so their sum does not exceed `cap`.
 ///
 /// Used when the combined per-direction rate exceeds the cell's current
 /// memory size — proportional clamping ensures total outflow never exceeds
-/// the available memory budget. Floor-rounded scaling can lose up to
-/// `DIRS - 1` units to rounding; the leftover is distributed back via
-/// Largest-Remainder apportionment with a per-cell-deterministic
-/// Fisher-Yates tie-break, so the post-clamp sum is exactly
-/// `min(original_sum, cap)` *and* the choice of which directions absorb
-/// the leftover does not bias toward any specific face of the
-/// `Direction::ALL` ordering.
-///
-/// **Statistical isotropy.** Across many `(world_seed, rng_tick,
-/// coord)` triples each direction wins/loses the leftover tie-break
-/// with equal probability, so the macro emission balance is uniform
-/// across `Direction::ALL`. (Strict per-call equivariance under
-/// direction permutation is provably incompatible with exact
-/// conservation + integer outputs + per-direction non-exceedance, so it
-/// is not part of the contract; the structural argument is the same as
-/// for [`crate::tick::combined_clamped`].)
-///
-/// **Determinism:** the leftover tie-break is keyed by `(world_seed,
-/// rng_tick, coord, PROPORTIONAL_CLAMP_RNG_DOMAIN)`, so the result is
-/// independent of cell allocation order or other ambient state. See
-/// [`PROPORTIONAL_CLAMP_RNG_DOMAIN`] for the salt's purpose.
-///
-/// **Total in `u64`:** the sum of six `u32` rates can exceed `u32::MAX`
-/// when `port` accumulates `active_outflow` close to its saturation
-/// boundary across multiple directions. Computing the sum (and the
-/// scaling denominator) in `u64` is the only way to keep the
-/// `rates[d] * cap / total` ratio mathematically correct in that case;
-/// a `u32` saturating sum would underestimate `total` and let the post-
-/// clamp sum spill over `cap`.
+/// the available memory budget. The algorithmic core (proportional `f64`
+/// scale + Largest-Remainder leftover distribution with a Fisher-Yates
+/// tie-break) lives in [`crate::apportion::apportion_with_shuffle`];
+/// see that module for the JS bit-parity argument, the statistical-
+/// isotropy contract, and the `f64`-precision bounds. This wrapper only
+/// widens `rates` to `[u64; 6]` and writes the result back in place.
 pub fn proportional_clamp(
     rates: &mut [u32; Direction::COUNT],
     cap: u32,
@@ -245,65 +216,13 @@ pub fn proportional_clamp(
     rng_tick: u64,
     coord: Coord,
 ) {
-    let total: u64 = rates.iter().copied().map(u64::from).sum();
-    let cap64 = u64::from(cap);
-    if total <= cap64 || total == 0 {
-        return;
-    }
-    // Floor-rounded scale via `f64` arithmetic to bit-match JS prototype
-    // 9-B's `Math.floor(rate * (cap / total))`. Pure `u64` integer
-    // division would be exact but produces results that disagree with
-    // JS at boundary cases — JS `cap / total` is rounded-to-nearest
-    // f64, then `rate * scale` carries that rounding through, then
-    // `Math.floor` may step the result down by 1 vs the integer-exact
-    // value. Replicating that path keeps the dominance / intrusion
-    // distribution of inflows aligned with 9-B; without it, the
-    // last-mile equivalence diff bleeds 1351-1890-slot shifts between
-    // adjacent directions per cell. Rates and `cap` always fit in
-    // `f64` exactly (well under `2^53`), so this path is safe.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    {
-        // `total` is `u64` and can reach 6 * u32::MAX ≈ 2^34.6 — well
-        // under f64's 2^53 precision boundary, so `as f64` is exact for
-        // any value we'll see. (No `From<u64> for f64` impl exists, so
-        // we can't use the lossless cast here.) `cap` and `r` are u32,
-        // so `f64::from` is safe and idiomatic.
-        let scale = f64::from(cap) / total as f64;
-        let mut frac: [f64; Direction::COUNT] = [0.0; Direction::COUNT];
-        let mut new_total: u32 = 0;
-        for (i, r) in rates.iter_mut().enumerate() {
-            let scaled = f64::from(*r) * scale;
-            let floored = scaled.floor();
-            frac[i] = scaled - floored;
-            let scaled_u32 = floored as u32;
-            *r = scaled_u32;
-            new_total = new_total.saturating_add(scaled_u32);
-        }
-        // Distribute leftover by Largest-Remainder with shuffled
-        // tie-break (same algorithm as `tick::combined_clamped`; see
-        // its docstring for the structural argument). The shuffle +
-        // sort runs unconditionally even when `leftover == 0` — the
-        // `take(0)` below is a no-op and we trade a rare extra branch
-        // for a structure that's exhaustively mutation-tested.
-        let leftover = cap.saturating_sub(new_total) as usize;
-        let mut order: [usize; Direction::COUNT] = [0, 1, 2, 3, 4, 5];
-        let mut rng =
-            Rng::for_cell_at_tick(world_seed, rng_tick, coord, PROPORTIONAL_CLAMP_RNG_DOMAIN);
-        for i in (1..Direction::COUNT).rev() {
-            let j = (rng.next_u32() as usize) % (i + 1);
-            order.swap(i, j);
-        }
-        order.sort_by(|&a, &b| {
-            frac[b]
-                .partial_cmp(&frac[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for &idx in order.iter().take(leftover) {
-            rates[idx] = rates[idx].saturating_add(1);
-        }
-    }
+    let values: [u64; Direction::COUNT] = std::array::from_fn(|i| u64::from(rates[i]));
+    *rates = apportion_with_shuffle(
+        &values,
+        cap,
+        world_seed,
+        rng_tick,
+        coord,
+        PROPORTIONAL_CLAMP_RNG_DOMAIN,
+    );
 }
