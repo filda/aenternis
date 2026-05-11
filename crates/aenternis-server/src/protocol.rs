@@ -99,7 +99,7 @@ pub(crate) enum ServerControl {
 }
 
 /// Tag byte for a snapshot binary frame.
-pub(crate) const SNAPSHOT_TAG: u8 = 1;
+pub const SNAPSHOT_TAG: u8 = 1;
 
 /// Tag byte for a cellDetail binary frame.
 pub(crate) const CELL_DETAIL_TAG: u8 = 2;
@@ -107,7 +107,7 @@ pub(crate) const CELL_DETAIL_TAG: u8 = 2;
 /// Snapshot stride: number of `u32` fields per cell in the snapshot
 /// payload. Matches `aenternis-wasm::World::SNAPSHOT_STRIDE` so JS
 /// callers see an identical layout regardless of backend.
-pub(crate) const SNAPSHOT_STRIDE: u32 = 6;
+pub const SNAPSHOT_STRIDE: u32 = 6;
 
 /// `CellDetail` prefix length: number of `u32` fields in the fixed
 /// header before the variable-length memory dump. Matches
@@ -117,29 +117,50 @@ pub(crate) const INSPECT_PREFIX: u32 = 28;
 /// All the inputs needed to encode a snapshot binary frame. Held by
 /// reference so we don't copy the (potentially large) `snap` payload
 /// just to hand it to the encoder.
-pub(crate) struct SnapshotFrame<'a> {
-    pub(crate) tick: u32,
-    pub(crate) cell_count: u32,
-    pub(crate) total_energy: u32,
-    pub(crate) ms_per_tick: f64,
+pub struct SnapshotFrame<'a> {
+    /// Tick counter as encoded into the binary header.
+    pub tick: u32,
+    /// Cell count for the header; must equal `snap.len() / SNAPSHOT_STRIDE`.
+    pub cell_count: u32,
+    /// Total energy summed across cells, for the header.
+    pub total_energy: u32,
+    /// Rolling-average per-tick wall time in milliseconds.
+    pub ms_per_tick: f64,
     /// `[x_min, x_max, y_min, y_max, z_min, z_max]`. Empty world
     /// senders should fill with zeros; the JS side already handles
     /// the degenerate bbox case.
-    pub(crate) bbox: [i32; 6],
+    pub bbox: [i32; 6],
     /// Flat cell payload, `cell_count * SNAPSHOT_STRIDE` `u32`s long.
-    pub(crate) snap: &'a [u32],
+    pub snap: &'a [u32],
 }
 
 impl SnapshotFrame<'_> {
     /// Length in bytes of the fixed-width header preceding the cell
     /// payload (tag + tick + `cell_count` + `total_energy` +
     /// `ms_per_tick` + stride + bbox6).
-    pub(crate) const HEADER_LEN: usize = 1 + 4 + 4 + 4 + 8 + 4 + 6 * 4;
+    pub const HEADER_LEN: usize = 1 + 4 + 4 + 4 + 8 + 4 + 6 * 4;
 }
 
-/// Encode a snapshot binary frame.
-pub(crate) fn encode_snapshot_frame(frame: &SnapshotFrame<'_>) -> Vec<u8> {
+/// Encode a snapshot binary frame into a fresh `Vec<u8>`. Thin
+/// convenience wrapper around [`encode_snapshot_frame_into`] for
+/// call-sites that don't have a buffer to recycle (notably tests).
+#[must_use]
+pub fn encode_snapshot_frame(frame: &SnapshotFrame<'_>) -> Vec<u8> {
     let mut out = Vec::with_capacity(SnapshotFrame::HEADER_LEN + frame.snap.len() * 4);
+    encode_snapshot_frame_into(&mut out, frame);
+    out
+}
+
+/// Encode a snapshot binary frame into `out`, clearing the buffer
+/// first. Capacity is preserved across calls — the `WorldActor`
+/// relies on this to amortize allocation across ticks.
+///
+/// No explicit `reserve` here: in the steady-state actor path the
+/// buffer already has peak capacity from the previous tick, and on
+/// the cold path `write_u32_slice_le` reaches the final length in
+/// one `resize` call so at most one realloc happens regardless.
+pub fn encode_snapshot_frame_into(out: &mut Vec<u8>, frame: &SnapshotFrame<'_>) {
+    out.clear();
     out.push(SNAPSHOT_TAG);
     out.extend_from_slice(&frame.tick.to_le_bytes());
     out.extend_from_slice(&frame.cell_count.to_le_bytes());
@@ -149,10 +170,7 @@ pub(crate) fn encode_snapshot_frame(frame: &SnapshotFrame<'_>) -> Vec<u8> {
     for v in frame.bbox {
         out.extend_from_slice(&v.to_le_bytes());
     }
-    for v in frame.snap {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    out
+    write_u32_slice_le(out, frame.snap);
 }
 
 /// Inputs for a cellDetail binary frame. `data` is the
@@ -173,9 +191,19 @@ impl CellDetailFrame<'_> {
     pub(crate) const HEADER_LEN: usize = 1 + 4 * 4 + 4 + 4;
 }
 
-/// Encode a cellDetail binary frame.
+/// Encode a cellDetail binary frame into a fresh `Vec<u8>`. Thin
+/// convenience wrapper around [`encode_cell_detail_frame_into`].
 pub(crate) fn encode_cell_detail_frame(frame: &CellDetailFrame<'_>) -> Vec<u8> {
     let mut out = Vec::with_capacity(CellDetailFrame::HEADER_LEN + frame.data.len() * 4);
+    encode_cell_detail_frame_into(&mut out, frame);
+    out
+}
+
+/// Encode a cellDetail binary frame into `out`, clearing the buffer
+/// first. Capacity is preserved across calls; see the matching note
+/// on [`encode_snapshot_frame_into`] for why no `reserve` is needed.
+pub(crate) fn encode_cell_detail_frame_into(out: &mut Vec<u8>, frame: &CellDetailFrame<'_>) {
+    out.clear();
     out.push(CELL_DETAIL_TAG);
     out.extend_from_slice(&frame.x.to_le_bytes());
     out.extend_from_slice(&frame.y.to_le_bytes());
@@ -184,18 +212,30 @@ pub(crate) fn encode_cell_detail_frame(frame: &CellDetailFrame<'_>) -> Vec<u8> {
     out.extend_from_slice(&INSPECT_PREFIX.to_le_bytes());
     let data_len = u32::try_from(frame.data.len()).unwrap_or(u32::MAX);
     out.extend_from_slice(&data_len.to_le_bytes());
-    for v in frame.data {
-        out.extend_from_slice(&v.to_le_bytes());
+    write_u32_slice_le(out, frame.data);
+}
+
+/// Append `slice` as little-endian bytes to `out`. `resize` reserves
+/// the full output region in one step, then a tight indexed loop
+/// stores four bytes per element via `copy_from_slice` — the compiler
+/// vectorizes that into SIMD stores on every target we care about,
+/// and the workspace's `unsafe_code = "forbid"` keeps us in safe Rust
+/// throughout.
+fn write_u32_slice_le(out: &mut Vec<u8>, slice: &[u32]) {
+    let start = out.len();
+    out.resize(start + slice.len() * 4, 0);
+    for (i, &v) in slice.iter().enumerate() {
+        let off = start + i * 4;
+        out[off..off + 4].copy_from_slice(&v.to_le_bytes());
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_cell_detail_frame, encode_snapshot_frame, CellDetailFrame, ClientMessage,
-        ServerControl, SnapshotFrame, CELL_DETAIL_TAG, INSPECT_PREFIX, SNAPSHOT_STRIDE,
-        SNAPSHOT_TAG,
+        encode_cell_detail_frame, encode_cell_detail_frame_into, encode_snapshot_frame,
+        encode_snapshot_frame_into, CellDetailFrame, ClientMessage, ServerControl, SnapshotFrame,
+        CELL_DETAIL_TAG, INSPECT_PREFIX, SNAPSHOT_STRIDE, SNAPSHOT_TAG,
     };
 
     // -- JSON layer -----------------------------------------------------------
@@ -447,6 +487,94 @@ mod tests {
             assert_eq!(r.u32(), expected, "mismatch at index {i}");
         }
         assert_eq!(r.pos, bytes.len());
+    }
+
+    #[test]
+    fn encode_snapshot_frame_into_buffer_reuse() {
+        // First encode produces a known-good baseline; second encode
+        // into the same buffer must overwrite it, not append, and the
+        // resulting bytes must match a fresh encode of the second
+        // frame. The retained capacity is the whole point of the
+        // _into form — the WorldActor relies on it per tick.
+        let snap_a: Vec<u32> = vec![10, 20, 30, 40, 50, 60];
+        let frame_a = SnapshotFrame {
+            tick: 1,
+            cell_count: 1,
+            total_energy: 40,
+            ms_per_tick: 1.0,
+            bbox: [-1, 1, -1, 1, -1, 1],
+            snap: &snap_a,
+        };
+        let snap_b: Vec<u32> = vec![
+            1, 2, 3, 4, 5, 6, //
+            7, 8, 9, 10, 11, 12,
+        ];
+        let frame_b = SnapshotFrame {
+            tick: 999,
+            cell_count: 2,
+            total_energy: 22,
+            ms_per_tick: 8.0,
+            bbox: [0, 10, 0, 10, 0, 10],
+            snap: &snap_b,
+        };
+
+        let mut buf = Vec::new();
+        encode_snapshot_frame_into(&mut buf, &frame_a);
+        let baseline_a = encode_snapshot_frame(&frame_a);
+        assert_eq!(buf, baseline_a, "first encode must match fresh-Vec encode");
+
+        let cap_after_a = buf.capacity();
+        encode_snapshot_frame_into(&mut buf, &frame_b);
+        let baseline_b = encode_snapshot_frame(&frame_b);
+        assert_eq!(
+            buf, baseline_b,
+            "second encode must overwrite, not append, and match fresh-Vec encode"
+        );
+        assert_eq!(
+            buf[0], SNAPSHOT_TAG,
+            "second frame must start at byte 0 (clear-then-fill semantics)"
+        );
+        assert!(
+            buf.capacity() >= cap_after_a,
+            "capacity must be retained across calls (got {}, was {})",
+            buf.capacity(),
+            cap_after_a
+        );
+    }
+
+    #[test]
+    fn encode_cell_detail_frame_into_buffer_reuse() {
+        let data_a: Vec<u32> = (0..30).collect();
+        let frame_a = CellDetailFrame {
+            x: 1,
+            y: 2,
+            z: 3,
+            tick: 4,
+            data: &data_a,
+        };
+        let data_b: Vec<u32> = (100..110).collect();
+        let frame_b = CellDetailFrame {
+            x: -10,
+            y: -20,
+            z: -30,
+            tick: 77,
+            data: &data_b,
+        };
+
+        let mut buf = Vec::new();
+        encode_cell_detail_frame_into(&mut buf, &frame_a);
+        let baseline_a = encode_cell_detail_frame(&frame_a);
+        assert_eq!(buf, baseline_a);
+
+        let cap_after_a = buf.capacity();
+        encode_cell_detail_frame_into(&mut buf, &frame_b);
+        let baseline_b = encode_cell_detail_frame(&frame_b);
+        assert_eq!(
+            buf, baseline_b,
+            "second encode must overwrite, not append, and match fresh-Vec encode"
+        );
+        assert_eq!(buf[0], CELL_DETAIL_TAG);
+        assert!(buf.capacity() >= cap_after_a);
     }
 
     #[test]

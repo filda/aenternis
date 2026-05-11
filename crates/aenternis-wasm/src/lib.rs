@@ -39,6 +39,11 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct World {
     inner: SparseWorld,
+    /// Persistent scratch buffer for [`World::cells_snapshot`].
+    /// Reused across ticks so the steady-state cost is a `clear` +
+    /// fill rather than a fresh allocation per snapshot; capacity
+    /// grows monotonically to peak cell count.
+    snapshot_buf: Vec<u32>,
 }
 
 #[wasm_bindgen]
@@ -54,6 +59,7 @@ impl World {
     pub fn new(seed: u32, energy: u32) -> Self {
         Self {
             inner: SparseWorld::big_bang(u64::from(seed), energy),
+            snapshot_buf: Vec::new(),
         }
     }
 
@@ -71,6 +77,7 @@ impl World {
     pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
         Self {
             inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
+            snapshot_buf: Vec::new(),
         }
     }
 
@@ -175,26 +182,30 @@ impl World {
     /// boundary sorts the underlying `FxHashMap` (which iterates in
     /// non-lex hash order) so JS callers see the canonical layout.
     ///
-    /// Returns a freshly-allocated `Vec` each call. For multi-million
-    /// cell worlds this is wasteful; a persistent buffer + length API
-    /// is on the roadmap for sub-phase 3c when it becomes a measurable
-    /// bottleneck.
+    /// Internally fills the persistent `snapshot_buf` and clones it
+    /// out — `wasm_bindgen` lowers `Vec<u32>` to a JS-side copy
+    /// regardless, so the clone is unavoidable on the boundary, but
+    /// the working buffer's capacity is retained across calls and
+    /// the steady-state per-tick allocation cost vanishes after the
+    /// first peak-sized world.
     #[must_use]
     #[wasm_bindgen(js_name = cellsSnapshot)]
-    pub fn cells_snapshot(&self) -> Vec<u32> {
-        let mut out = Vec::with_capacity(self.inner.cells.len() * Self::SNAPSHOT_STRIDE);
+    pub fn cells_snapshot(&mut self) -> Vec<u32> {
+        self.snapshot_buf.clear();
+        self.snapshot_buf
+            .reserve(self.inner.cells.len() * Self::SNAPSHOT_STRIDE);
         // sorted_iter walks cells in `(x, y, z)` lex order — the snapshot's
         // documented contract. The world's internal FxHashMap iterates in
         // hash order, which is deterministic but not lex.
         for (coord, cell) in self.inner.sorted_iter() {
-            out.push(coord.x as u32);
-            out.push(coord.y as u32);
-            out.push(coord.z as u32);
-            out.push(cell.energy());
-            out.push(cell.origin_tag);
-            out.push(cell.appearance);
+            self.snapshot_buf.push(coord.x as u32);
+            self.snapshot_buf.push(coord.y as u32);
+            self.snapshot_buf.push(coord.z as u32);
+            self.snapshot_buf.push(cell.energy());
+            self.snapshot_buf.push(cell.origin_tag);
+            self.snapshot_buf.push(cell.appearance);
         }
-        out
+        self.snapshot_buf.clone()
     }
 
     /// Number of `u32` fields per cell in [`World::cells_snapshot`].

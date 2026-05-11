@@ -22,12 +22,11 @@
 #![allow(clippy::redundant_pub_crate)]
 
 mod args;
-mod protocol;
-mod world_actor;
-mod ws;
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
+
+use aenternis_server::{world_actor, ws};
 
 use crate::args::{parse, Args, ParseOutcome, USAGE};
 

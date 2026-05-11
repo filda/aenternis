@@ -95,13 +95,13 @@ fn same_seed_produces_same_state_through_wrapper() {
 
 #[test]
 fn snapshot_is_empty_for_empty_world() {
-    let w = World::new(0, 0);
+    let mut w = World::new(0, 0);
     assert!(w.cells_snapshot().is_empty());
 }
 
 #[test]
 fn snapshot_length_is_stride_times_cell_count() {
-    let w = World::new(7, 16);
+    let mut w = World::new(7, 16);
     let snap = w.cells_snapshot();
     assert_eq!(snap.len(), w.cell_count() as usize * 6);
     assert_eq!(snap.len(), 6); // single big-bang cell
@@ -109,7 +109,7 @@ fn snapshot_length_is_stride_times_cell_count() {
 
 #[test]
 fn snapshot_first_cell_after_big_bang_is_at_origin() {
-    let w = World::new(7, 16);
+    let mut w = World::new(7, 16);
     let snap = w.cells_snapshot();
     // First cell: x=0, y=0, z=0 (origin), then energy, origin_tag, appearance.
     assert_eq!(snap[0], 0); // x
@@ -133,9 +133,37 @@ fn snapshot_total_energy_matches_world_total_energy() {
 
 #[test]
 fn snapshot_is_deterministic_for_same_seed() {
-    let a = World::new(42, 50);
-    let b = World::new(42, 50);
+    let mut a = World::new(42, 50);
+    let mut b = World::new(42, 50);
     assert_eq!(a.cells_snapshot(), b.cells_snapshot());
+}
+
+#[test]
+fn cells_snapshot_reuse_buffer_back_to_back() {
+    // Two snapshots in a row, no intervening mutation, must return
+    // identical content — clear-and-refill semantics must not leak
+    // stale bytes from the previous call.
+    let mut w = World::new(0xDEAD_BEEF, 200);
+    let first = w.cells_snapshot();
+    let second = w.cells_snapshot();
+    assert_eq!(first, second);
+}
+
+#[test]
+fn cells_snapshot_reuse_buffer_across_step() {
+    // After a step the snapshot content must reflect the new world
+    // state; the reused buffer must shrink/grow correctly. Repeating
+    // the call after the step must still produce identical bytes.
+    let mut w = World::new(0, 100);
+    let before = w.cells_snapshot();
+    w.step(0.30, 1);
+    let after_a = w.cells_snapshot();
+    let after_b = w.cells_snapshot();
+    assert_eq!(after_a, after_b, "consecutive post-step snapshots match");
+    assert_ne!(
+        before, after_a,
+        "snapshot must reflect post-step state, not the leftover buffer"
+    );
 }
 
 #[test]

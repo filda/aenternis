@@ -7,10 +7,11 @@
 //! One tokio task owns the world; every WS connection task talks to
 //! it through a [`Handle`]. Inbound commands arrive via an unbounded
 //! mpsc channel, snapshots fan out via a `tokio::sync::broadcast` of
-//! `Arc<Vec<u8>>` (the encoded binary frame, allocated once and
-//! shared zero-copy across connections). Late-join welcome state
-//! lives behind a `tokio::sync::watch` so a freshly connected client
-//! can read it without sitting on the broadcast queue.
+//! `Arc<[u8]>` (the encoded binary frame, refcounted across
+//! connections — one heap allocation per snapshot, fan-out is a
+//! pointer bump). Late-join welcome state lives behind a
+//! `tokio::sync::watch` so a freshly connected client can read it
+//! without sitting on the broadcast queue.
 //!
 //! Inspect requests carry a `oneshot::Sender` so the cellDetail frame
 //! goes back to the requesting client only.
@@ -22,7 +23,7 @@ use aenternis_core::{tick, Cell, Coord, SparseWorld};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::protocol::{
-    encode_cell_detail_frame, encode_snapshot_frame, CellDetailFrame, SnapshotFrame,
+    encode_cell_detail_frame, encode_snapshot_frame_into, CellDetailFrame, SnapshotFrame,
     SNAPSHOT_STRIDE,
 };
 
@@ -41,9 +42,9 @@ const TICK_MS_SMOOTHING: f64 = 0.85;
 /// take a clone, send commands through it, subscribe to the snapshot
 /// broadcast, and peek at welcome state for late-join.
 #[derive(Clone)]
-pub(crate) struct Handle {
+pub struct Handle {
     cmd_tx: mpsc::UnboundedSender<Command>,
-    event_tx: broadcast::Sender<Arc<Vec<u8>>>,
+    event_tx: broadcast::Sender<Arc<[u8]>>,
     welcome_rx: watch::Receiver<WelcomeState>,
 }
 
@@ -57,7 +58,7 @@ impl Handle {
 
     /// New broadcast subscription for snapshot frames. Each
     /// connection takes its own; broadcast handles fan-out.
-    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<Arc<Vec<u8>>> {
+    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<Arc<[u8]>> {
         self.event_tx.subscribe()
     }
 
@@ -115,7 +116,8 @@ pub(crate) enum Command {
 /// Spawn the world actor with default config and return a handle for
 /// connection tasks. The actor task runs until the last [`Handle`]
 /// (or rather its underlying `cmd_tx`) is dropped.
-pub(crate) fn spawn() -> Handle {
+#[must_use]
+pub fn spawn() -> Handle {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (event_tx, _drop_initial_rx) = broadcast::channel(SNAPSHOT_BROADCAST_CAP);
     let (welcome_tx, welcome_rx) = watch::channel(WelcomeState { running: false });
@@ -130,6 +132,8 @@ pub(crate) fn spawn() -> Handle {
         cmd_rx,
         event_tx: event_tx.clone(),
         welcome_tx,
+        snapshot_buf: Vec::new(),
+        encoded_buf: Vec::new(),
     };
 
     tokio::spawn(actor.run());
@@ -149,8 +153,16 @@ struct WorldActor {
     running: bool,
     tick_ms_avg: f64,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
-    event_tx: broadcast::Sender<Arc<Vec<u8>>>,
+    event_tx: broadcast::Sender<Arc<[u8]>>,
     welcome_tx: watch::Sender<WelcomeState>,
+    /// Sort-and-pack scratch buffer, reused across every snapshot
+    /// broadcast. Capacity grows monotonically with peak cell count;
+    /// `clear()` between ticks does not release capacity.
+    snapshot_buf: Vec<u32>,
+    /// Binary-encoded snapshot frame scratch buffer, reused across
+    /// every broadcast. Same capacity-growth contract as
+    /// `snapshot_buf`.
+    encoded_buf: Vec<u8>,
 }
 
 impl WorldActor {
@@ -249,8 +261,14 @@ impl WorldActor {
             TICK_MS_SMOOTHING.mul_add(self.tick_ms_avg, (1.0 - TICK_MS_SMOOTHING) * elapsed_ms);
     }
 
-    fn broadcast_snapshot(&self) {
-        let snap = build_snapshot_payload(&self.world);
+    fn broadcast_snapshot(&mut self) {
+        // No subscribers → skip the sort+pack+encode entirely. A
+        // future fresh subscriber sees the next live snapshot; pause/
+        // resume bookkeeping is independent of broadcast traffic.
+        if self.event_tx.receiver_count() == 0 {
+            return;
+        }
+        build_snapshot_payload_into(&mut self.snapshot_buf, &self.world);
         let cell_count = u32::try_from(self.world.len()).unwrap_or(u32::MAX);
         let total_energy = u32::try_from(self.world.total_energy()).unwrap_or(u32::MAX);
         // Indexed access avoids `clippy::tuple_array_conversions`,
@@ -268,11 +286,17 @@ impl WorldActor {
             total_energy,
             ms_per_tick: self.tick_ms_avg,
             bbox,
-            snap: &snap,
+            snap: &self.snapshot_buf,
         };
-        let bytes = Arc::new(encode_snapshot_frame(&frame));
-        // `send` returns Err only when there are zero subscribers; we
-        // tolerate that — the snapshot just has no audience right now.
+        encode_snapshot_frame_into(&mut self.encoded_buf, &frame);
+        // `Arc::from(&[u8])` copies the bytes into a single
+        // refcounted allocation — one heap block per snapshot rather
+        // than two (Vec + Arc header) as the previous `Arc<Vec<u8>>`
+        // form required.
+        let bytes: Arc<[u8]> = Arc::from(self.encoded_buf.as_slice());
+        // `send` returns Err only when there are zero subscribers
+        // (race: last receiver dropped between our check and here);
+        // we tolerate that — the snapshot just has no audience.
         let _ = self.event_tx.send(bytes);
     }
 
@@ -305,8 +329,14 @@ impl WorldActor {
 /// per `[x, y, z, energy, origin_tag, appearance]` group, in
 /// `(x, y, z)` lex order. Mirrors `aenternis-wasm::World::cells_snapshot`
 /// bit-for-bit so the JS viewer treats both backends identically.
-fn build_snapshot_payload(world: &SparseWorld) -> Vec<u32> {
-    let mut out = Vec::with_capacity(world.len() * SNAPSHOT_STRIDE as usize);
+///
+/// `out` is cleared first and re-filled in place. Capacity is
+/// retained across calls — the `WorldActor` holds a persistent
+/// `snapshot_buf` and amortizes the allocation away after the first
+/// peak-sized world.
+fn build_snapshot_payload_into(out: &mut Vec<u32>, world: &SparseWorld) {
+    out.clear();
+    out.reserve(world.len() * SNAPSHOT_STRIDE as usize);
     for (coord, cell) in world.sorted_iter() {
         out.push(coord.x as u32);
         out.push(coord.y as u32);
@@ -315,7 +345,6 @@ fn build_snapshot_payload(world: &SparseWorld) -> Vec<u32> {
         out.push(cell.origin_tag);
         out.push(cell.appearance);
     }
-    out
 }
 
 /// Build the `[pc, energy, origin_tag, appearance, pointers×6,
@@ -350,13 +379,13 @@ mod tests {
 
     /// Receive the next snapshot, tolerating any `Lagged` events
     /// (which are fine — for tests we just want the next live frame).
-    async fn next_event(rx: &mut broadcast::Receiver<std::sync::Arc<Vec<u8>>>) -> Vec<u8> {
+    async fn next_event(rx: &mut broadcast::Receiver<std::sync::Arc<[u8]>>) -> Vec<u8> {
         loop {
             let recv = tokio::time::timeout(Duration::from_secs(2), rx.recv())
                 .await
                 .expect("timed out waiting for event");
             match recv {
-                Ok(arc) => return (*arc).clone(),
+                Ok(arc) => return arc.to_vec(),
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => panic!("event channel closed"),
             }

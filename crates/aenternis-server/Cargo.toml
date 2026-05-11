@@ -40,6 +40,13 @@ futures-util = "0.3"
 # brings up the full axum stack on a random port and exercises the
 # handshake + message flow end-to-end.
 tokio-tungstenite = "0.24"
+# Snapshot-encoder microbenchmark only; the bench lives under
+# `benches/snapshot_encode.rs` and is wired below.
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+
+[[bench]]
+name = "snapshot_encode"
+harness = false
 
 [lints]
 workspace = true

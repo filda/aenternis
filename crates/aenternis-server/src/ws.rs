@@ -28,10 +28,12 @@ use crate::world_actor::{Command, Handle};
 
 /// Axum route handler for `GET /sim`. Upgrades the connection to
 /// WebSocket and hands it off to [`handle_socket`].
-pub(crate) async fn ws_handler(
-    State(handle): State<Handle>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+///
+/// `async` is idiomatic for axum handlers even though this body
+/// needs no `.await`; the lint is silenced locally rather than
+/// flipping the signature out of convention.
+#[allow(clippy::unused_async)]
+pub async fn ws_handler(State(handle): State<Handle>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, handle))
 }
 

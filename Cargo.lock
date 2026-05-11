@@ -17,6 +17,7 @@ version = "0.0.1"
 dependencies = [
  "aenternis-core",
  "axum",
+ "criterion",
  "futures-util",
  "serde",
  "serde_json",
