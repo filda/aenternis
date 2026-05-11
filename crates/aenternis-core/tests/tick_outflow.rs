@@ -89,6 +89,52 @@ fn slots_wrap_modulo_memory_length() {
 }
 
 #[test]
+fn slots_wrap_asymmetric_split() {
+    // Asymmetric tail/wrap split: tail = 2 (m[6], m[7]), wrap = 3 (m[0..3]).
+    // Distinct from `slots_wrap_modulo_memory_length` (tail = 1, wrap = 2).
+    let mut w = SparseWorld::new(0);
+    let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50, 60, 70, 80]);
+    cell.rates[Direction::Xp.index()] = 5;
+    cell.pointers[Direction::Xp.index()] = 6;
+    w.insert(Coord::ORIGIN, cell);
+
+    let outflow = collect_outflow(&w);
+    let entry = outflow.get(&Coord::ORIGIN).unwrap();
+    assert_eq!(entry[Direction::Xp.index()], vec![70, 80, 10, 20, 30]);
+}
+
+#[test]
+fn slots_with_pointer_at_memory_end_reads_from_zero() {
+    // Boundary `ptr == mem_size`: tail = 0, wrap = rate. Exercises the wrap
+    // branch with an empty prefix slice — distinct from
+    // `slots_wrap_modulo_memory_length` where tail > 0.
+    let mut w = SparseWorld::new(0);
+    let mut cell = Cell::with_memory(vec![10, 20, 30, 40]);
+    cell.rates[Direction::Xp.index()] = 2;
+    cell.pointers[Direction::Xp.index()] = 4; // == mem_size
+    w.insert(Coord::ORIGIN, cell);
+
+    let outflow = collect_outflow(&w);
+    let entry = outflow.get(&Coord::ORIGIN).unwrap();
+    assert_eq!(entry[Direction::Xp.index()], vec![10, 20]);
+}
+
+#[test]
+fn slots_with_end_at_memory_boundary_stays_non_wrap() {
+    // Boundary `ptr + rate == mem_size`: non-wrap branch, inclusive upper
+    // bound. Catches `<=` → `<` mutations on the branch predicate.
+    let mut w = SparseWorld::new(0);
+    let mut cell = Cell::with_memory(vec![10, 20, 30, 40]);
+    cell.rates[Direction::Xp.index()] = 3;
+    cell.pointers[Direction::Xp.index()] = 1;
+    w.insert(Coord::ORIGIN, cell);
+
+    let outflow = collect_outflow(&w);
+    let entry = outflow.get(&Coord::ORIGIN).unwrap();
+    assert_eq!(entry[Direction::Xp.index()], vec![20, 30, 40]);
+}
+
+#[test]
 fn outflow_includes_all_existing_cells() {
     let mut w = SparseWorld::new(0);
     w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));

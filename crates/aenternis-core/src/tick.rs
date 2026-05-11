@@ -276,8 +276,18 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
             let ptr = cell.pointers[d.index()] as usize;
             let buf = &mut per_dir[d.index()];
             buf.reserve(rate);
-            for k in 0..rate {
-                buf.push(cell.memory[(ptr + k) % mem_size]);
+            debug_assert!(
+                rate <= mem_size,
+                "rate must be clamped to mem_size by combined_clamped"
+            );
+            let end = ptr.saturating_add(rate);
+            if end <= mem_size {
+                buf.extend_from_slice(&cell.memory[ptr..end]);
+            } else {
+                let tail = mem_size - ptr;
+                buf.extend_from_slice(&cell.memory[ptr..mem_size]);
+                let wrap = rate - tail;
+                buf.extend_from_slice(&cell.memory[..wrap]);
             }
         }
     };

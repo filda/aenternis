@@ -123,5 +123,46 @@ fn bench_warm_large(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cold, bench_warm, bench_warm_large);
+/// Huge-scale measurements at energies where `collect_outflow_into` and
+/// the parallel hot paths dominate cost. Sample size is small because
+/// each step is hundreds of milliseconds; the goal is a stable median,
+/// not a tight CI.
+fn bench_warm_huge(c: &mut Criterion) {
+    const HUGE_ENERGIES: &[u32] = &[500_000, 1_000_000];
+
+    let mut group = c.benchmark_group("tick_step/warm_huge");
+    group.sample_size(10);
+
+    for &energy in HUGE_ENERGIES {
+        let mut warmed = SparseWorld::big_bang(SEED, energy);
+        for _ in 0..WARMUP_TICKS {
+            tick::step(&mut warmed, COEFF, K);
+        }
+        let cell_count = warmed.cells.len();
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{energy}_e_{cell_count}_cells")),
+            &warmed,
+            |b, warmed| {
+                b.iter_batched(
+                    || warmed.clone(),
+                    |mut w| {
+                        tick::step(&mut w, COEFF, K);
+                        black_box(&w);
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_cold,
+    bench_warm,
+    bench_warm_large,
+    bench_warm_huge
+);
 criterion_main!(benches);
