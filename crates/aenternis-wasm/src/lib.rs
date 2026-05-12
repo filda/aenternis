@@ -132,7 +132,7 @@ impl World {
     #[must_use]
     #[wasm_bindgen(js_name = cellCount)]
     pub fn cell_count(&self) -> u32 {
-        u32::try_from(self.inner.cells.len()).unwrap_or(u32::MAX)
+        u32::try_from(self.inner.len()).unwrap_or(u32::MAX)
     }
 
     /// Current tick count. Starts at zero, increments by one per
@@ -193,7 +193,7 @@ impl World {
     pub fn cells_snapshot(&mut self) -> Vec<u32> {
         self.snapshot_buf.clear();
         self.snapshot_buf
-            .reserve(self.inner.cells.len() * Self::SNAPSHOT_STRIDE);
+            .reserve(self.inner.len() * Self::SNAPSHOT_STRIDE);
         // sorted_iter walks cells in `(x, y, z)` lex order — the snapshot's
         // documented contract. The world's internal FxHashMap iterates in
         // hash order, which is deterministic but not lex.
@@ -250,7 +250,7 @@ impl World {
     #[wasm_bindgen(js_name = cellInspect)]
     pub fn cell_inspect(&self, x: i32, y: i32, z: i32) -> Vec<u32> {
         let coord = aenternis_core::Coord::new(x, y, z);
-        let Some(cell) = self.inner.cells.get(&coord) else {
+        let Some(cell) = self.inner.get(coord) else {
             return Vec::new();
         };
         let mut out = Vec::with_capacity(Self::INSPECT_PREFIX + cell.memory.len());

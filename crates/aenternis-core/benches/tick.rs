@@ -104,7 +104,7 @@ fn bench_warm_large(c: &mut Criterion) {
     for _ in 0..WARMUP_TICKS {
         tick::step(&mut warmed, COEFF, K);
     }
-    let cell_count = warmed.cells.len();
+    let cell_count = warmed.len();
 
     group.bench_with_input(
         BenchmarkId::from_parameter(format!("{LARGE_ENERGY}_e_{cell_count}_cells")),
@@ -138,7 +138,7 @@ fn bench_warm_huge(c: &mut Criterion) {
         for _ in 0..WARMUP_TICKS {
             tick::step(&mut warmed, COEFF, K);
         }
-        let cell_count = warmed.cells.len();
+        let cell_count = warmed.len();
 
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{energy}_e_{cell_count}_cells")),
@@ -210,7 +210,7 @@ fn bench_dense_grid(c: &mut Criterion) {
 
     for &side in SIDES {
         let world = dense_grid_world(SEED, side, DENSE_CELL_ENERGY);
-        let cell_count = world.cells.len();
+        let cell_count = world.len();
 
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("side_{side}_cells_{cell_count}")),

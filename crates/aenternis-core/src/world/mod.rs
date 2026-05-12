@@ -4,6 +4,9 @@
 //! model will be added later as a fixed-N test harness for bit-identity
 //! comparison against the JS prototypes.
 
+pub mod cells;
 pub mod sparse;
+
+pub(crate) use cells::Cells;
 
 pub use crate::world::sparse::SparseWorld;

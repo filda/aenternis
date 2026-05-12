@@ -56,7 +56,7 @@ fn dump_state_at_tick_n() {
     }
 
     // Sort by (x, y, z) — same order the JS dump prints.
-    let mut cells: Vec<_> = w.cells.iter().collect();
+    let mut cells: Vec<_> = w.iter().collect();
     cells.sort_by_key(|(c, _)| (c.x, c.y, c.z));
 
     // Write to `reports/rust-tick<N>.txt` at the workspace root. The

@@ -33,11 +33,10 @@
 //! bit-identity harness against JS, which compares per-cell state at
 //! known coordinates rather than relying on iteration order.
 
-use std::collections::hash_map::{Entry, Iter, IterMut, Keys};
-
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::rng::cell_seed;
+use crate::world::Cells;
 use crate::{Cell, Coord, Direction, Rng};
 
 /// Sparse world container.
@@ -49,11 +48,18 @@ use crate::{Cell, Coord, Direction, Rng};
 /// always-on path is the only one that runs.
 #[derive(Debug, Clone)]
 pub struct SparseWorld {
-    /// Cells indexed by coordinate. Iteration order is the `FxHashMap`
-    /// internal hash order — stable across runs for the same insertion
-    /// sequence but **not** lex by `(x, y, z)`. Use
-    /// [`SparseWorld::sorted_iter`] when canonical order is required.
-    pub cells: FxHashMap<Coord, Cell>,
+    /// Cells indexed by coordinate. Iteration order is the
+    /// `coord_to_slot` hashmap order (immutable iteration) or slot
+    /// order (mutable / parallel iteration) — stable across runs
+    /// for the same insertion sequence but **not** lex by
+    /// `(x, y, z)`. Use [`SparseWorld::sorted_iter`] when canonical
+    /// order is required.
+    ///
+    /// Visible inside the crate (`pub(crate)`) so the tick loop's
+    /// per-cell closures can mutate cells directly; external callers
+    /// go through [`SparseWorld::get`] / [`SparseWorld::iter`] /
+    /// [`SparseWorld::iter_mut`].
+    pub(crate) cells: Cells,
 
     /// Seed used for any deterministic randomness in this world. Combined
     /// with the current tick and per-cell coords by [`Rng::for_cell_at_tick`]
@@ -139,7 +145,7 @@ impl SparseWorld {
     #[must_use]
     pub const fn new(world_seed: u64) -> Self {
         Self {
-            cells: FxHashMap::with_hasher(FxBuildHasher),
+            cells: Cells::new(),
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
@@ -225,17 +231,18 @@ impl SparseWorld {
     /// alloc-on-write during the inflow phase.
     pub fn get_or_alloc(&mut self, coord: Coord) -> &mut Cell {
         let world_seed = self.world_seed;
-        match self.cells.entry(coord) {
-            Entry::Occupied(e) => e.into_mut(),
-            Entry::Vacant(slot) => {
-                // Keyset grew → sorted_cache is now stale. Bbox is
-                // extended in place; only removals need a lazy
-                // rebuild, so we don't touch `bbox_dirty` here.
-                self.sorted_dirty = true;
-                self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
-                slot.insert(fresh_cell(world_seed, coord))
-            }
+        let bbox_cache = self.bbox_cache;
+        let (was_vacant, cell) = self
+            .cells
+            .get_or_insert_with(coord, || fresh_cell(world_seed, coord));
+        if was_vacant {
+            // Keyset grew → sorted_cache is now stale. Bbox is
+            // extended in place; only removals need a lazy
+            // rebuild, so we don't touch `bbox_dirty` here.
+            self.sorted_dirty = true;
+            self.bbox_cache = Some(extend_bbox(bbox_cache, coord));
         }
+        cell
     }
 
     /// Number of cells currently in the world.
@@ -265,6 +272,12 @@ impl SparseWorld {
     /// Mutably borrow the cell at `coord`, if any.
     pub fn get_mut(&mut self, coord: Coord) -> Option<&mut Cell> {
         self.cells.get_mut(&coord)
+    }
+
+    /// Iterator over `(coord, energy)` pairs of all live cells, used
+    /// by [`total_energy`](Self::total_energy) (in slot order).
+    fn values(&self) -> impl Iterator<Item = &Cell> + '_ {
+        self.cells.iter().map(|(_, c)| c)
     }
 
     /// Insert (or replace) a cell at `coord`. Returns the previous cell if
@@ -312,7 +325,7 @@ impl SparseWorld {
     /// overflow during summation (and without needing saturating math).
     #[must_use]
     pub fn total_energy(&self) -> u64 {
-        self.cells.values().map(|c| u64::from(c.energy())).sum()
+        self.values().map(|c| u64::from(c.energy())).sum()
     }
 
     /// Bounding box across all live cells, as
@@ -379,22 +392,25 @@ impl SparseWorld {
         }
     }
 
-    /// Iterate over `(coord, cell)` pairs in `FxHashMap` hash order
-    /// (deterministic per run, not lex). For canonical lex order, use
-    /// [`Self::sorted_iter`].
-    #[must_use]
-    pub fn iter(&self) -> Iter<'_, Coord, Cell> {
+    /// Iterate over `(coord, cell)` pairs in hash order
+    /// (deterministic per run, not lex). For canonical lex order,
+    /// use [`Self::sorted_iter`].
+    pub fn iter(&self) -> impl Iterator<Item = (&Coord, &Cell)> + '_ {
         self.cells.iter()
     }
 
-    /// Mutably iterate over `(coord, cell)` pairs in hash order.
-    pub fn iter_mut(&mut self) -> IterMut<'_, Coord, Cell> {
+    /// Mutably iterate over `(coord, cell)` pairs. Walks in slot
+    /// order (different from immutable `iter`) — the order is
+    /// stable per run but not the same as `iter`'s. Closures that
+    /// read only their own cell + a read-only neighbor snapshot are
+    /// order-independent, so this is safe for the per-tick walks
+    /// in [`crate::tick`].
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Coord, &mut Cell)> + '_ {
         self.cells.iter_mut()
     }
 
     /// Iterate over cell coordinates in hash order.
-    #[must_use]
-    pub fn coords(&self) -> Keys<'_, Coord, Cell> {
+    pub fn coords(&self) -> impl Iterator<Item = &Coord> + '_ {
         self.cells.keys()
     }
 
@@ -489,7 +505,7 @@ fn extend_bbox(
 
 impl<'a> IntoIterator for &'a SparseWorld {
     type Item = (&'a Coord, &'a Cell);
-    type IntoIter = Iter<'a, Coord, Cell>;
+    type IntoIter = crate::world::cells::Iter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.cells.iter()
@@ -498,7 +514,7 @@ impl<'a> IntoIterator for &'a SparseWorld {
 
 impl<'a> IntoIterator for &'a mut SparseWorld {
     type Item = (&'a Coord, &'a mut Cell);
-    type IntoIter = IterMut<'a, Coord, Cell>;
+    type IntoIter = crate::world::cells::IterMut<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.cells.iter_mut()
