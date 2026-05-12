@@ -536,55 +536,7 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
             return;
         }
 
-        // Origin-tag inheritance: highest-dominance source wins, but
-        // only if its dominance crosses the metempsychosis threshold.
-        if let Some(top) = entries.first() {
-            if top.dominance >= 0.5 {
-                target.origin_tag = top.src_origin_tag;
-            }
-        }
-
-        // One reserve covers every following splice — keeps the
-        // allocator out of the inner loop. Looking up slots on demand
-        // (one `outflow.get` per applied entry) trades a cheap
-        // cache-warm hash lookup for the ability to pool
-        // `inflows_by_target` across ticks.
-        let total_added: usize = entries
-            .iter()
-            .map(|e| {
-                outflow
-                    .get(&e.source_coord)
-                    .map_or(0, |per_dir| per_dir[e.source_dir as usize].len())
-            })
-            .sum();
-        target.memory.reserve(total_added);
-
-        for entry in entries {
-            let Some(per_dir) = outflow.get(&entry.source_coord) else {
-                continue;
-            };
-            let slots = &per_dir[entry.source_dir as usize];
-            let current = target.memory.len();
-            let intrusion_depth = (entry.dominance * usize_to_f32(current)) as usize;
-            let write_start = current.saturating_sub(intrusion_depth);
-
-            target
-                .memory
-                .splice(write_start..write_start, slots.iter().copied());
-
-            let dir_idx = entry.dir_from_target as usize;
-            let slots_len = u32::try_from(slots.len()).unwrap_or(u32::MAX);
-            target.inflow[dir_idx] = target.inflow[dir_idx].saturating_add(slots_len);
-        }
-
-        // PC stays numerically the same; bring it back into range if
-        // memory ever shrank. (Inflow phase only grows, so this is
-        // defensive — relevant only if a future change adds shrink.)
-        if target.memory.is_empty() {
-            target.pc = 0;
-        } else {
-            target.pc %= target.memory.len() as u32;
-        }
+        merge_inflows(target, entries, outflow);
     };
 
     par_or_seq_iter_mut!(&mut world.cells, body);
@@ -626,6 +578,284 @@ pub struct InflowEntry {
     /// cached here so the sort tie-breaker and the
     /// `target.inflow[dir]` update don't need to recompute it.
     pub dir_from_target: u8,
+}
+
+/// One segment of the inflow-merge rope: either a sub-range of the
+/// target's pre-existing memory, or a sub-slice of one of the entries'
+/// outflow slots. See [`merge_inflows`].
+#[derive(Debug, Clone, Copy)]
+enum MergeSegment {
+    Original {
+        start: u32,
+        end: u32,
+    },
+    Insert {
+        entry_idx: u32,
+        start: u32,
+        end: u32,
+    },
+}
+
+impl MergeSegment {
+    #[inline]
+    const fn len(self) -> u32 {
+        match self {
+            Self::Original { start, end } | Self::Insert { start, end, .. } => end - start,
+        }
+    }
+
+    /// Split the segment at `offset` (0 < offset < `self.len()`).
+    #[inline]
+    const fn split_at(self, offset: u32) -> (Self, Self) {
+        match self {
+            Self::Original { start, end } => {
+                let mid = start + offset;
+                (
+                    Self::Original { start, end: mid },
+                    Self::Original { start: mid, end },
+                )
+            }
+            Self::Insert {
+                entry_idx,
+                start,
+                end,
+            } => {
+                let mid = start + offset;
+                (
+                    Self::Insert {
+                        entry_idx,
+                        start,
+                        end: mid,
+                    },
+                    Self::Insert {
+                        entry_idx,
+                        start: mid,
+                        end,
+                    },
+                )
+            }
+        }
+    }
+}
+
+/// Worst-case rope size when merging up to 6 inflows into a target's
+/// memory: 1 initial Original + 6 Insert + up to 6 Original splits = 13.
+/// `16` rounds up for headroom and a power-of-two stack array.
+const MERGE_ROPE_CAP: usize = 16;
+
+std::thread_local! {
+    /// Per-thread scratch buffer for [`merge_inflows`]'s rope flatten.
+    /// Holds the rebuilt memory while we swap it with `target.memory`;
+    /// after the swap, the scratch holds the cell's old memory and is
+    /// `clear()`-ed (capacity preserved) on the next call. This way the
+    /// hot path pays O(new_len) memcpy and amortized-zero allocation,
+    /// matching the old splice path's per-cell allocation pattern.
+    static MERGE_SCRATCH: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Max inflow entries per target — one per face. Mirrors `Direction::COUNT`
+/// but kept as a local constant so [`merge_inflows`]'s stack arrays can
+/// be sized at compile time.
+const MERGE_MAX_ENTRIES: usize = Direction::COUNT;
+
+/// Insert `new_seg` at logical position `write_start` within the rope
+/// `rope[..rope_len]`. Returns the new `rope_len`. The rope must have
+/// at least 2 slots of free capacity (`rope_len + 2 <= rope.len()`),
+/// since one insert can produce one split + one new segment.
+///
+/// Logical positions count segment lengths from index 0: a `write_start`
+/// of 0 prepends; a `write_start` equal to the rope's total length
+/// appends. Anything in between either lands on a segment boundary (no
+/// split) or inside a segment (splits it).
+///
+/// **Accepted-as-unkillable mutants** (`cargo mutants 27.0.0`, verified
+/// 2026-05-12):
+///
+/// - `<` → `<=` at the split-condition compare: boundary splits emit a
+///   trailing empty `Original{end, end}` segment that flatten ignores.
+/// - `+` → `*` (i.e. `+1` → `*1`) in the shift-right range: copies one
+///   extra cell that the subsequent `rope[i+2] = second` immediately
+///   overwrites.
+/// - `> 0` → `>= 0` on the `original_len` guard at the caller (line ~753):
+///   for `original_len = 0` the mutant pre-seeds an `Original{0, 0}` that
+///   contributes nothing to the flatten — same output as the empty-rope
+///   start.
+///
+/// All three change the work the function does, not the data it
+/// produces — there is no observable difference for any test to detect.
+fn rope_insert(
+    rope: &mut [MergeSegment; MERGE_ROPE_CAP],
+    rope_len: usize,
+    write_start: u32,
+    new_seg: MergeSegment,
+) -> usize {
+    let mut cum: u32 = 0;
+    let mut insert_at: usize = rope_len;
+    let mut split: Option<(usize, u32)> = None;
+
+    for (i, seg) in rope[..rope_len].iter().enumerate() {
+        if write_start <= cum {
+            insert_at = i;
+            split = None;
+            break;
+        }
+        let seg_len = seg.len();
+        if write_start < cum + seg_len {
+            split = Some((i, write_start - cum));
+            break;
+        }
+        cum += seg_len;
+    }
+
+    if let Some((i, offset)) = split {
+        // Shift right by 2 to make room for [first_half, new_seg, second_half].
+        for j in (i + 1..rope_len).rev() {
+            rope[j + 2] = rope[j];
+        }
+        let (first, second) = rope[i].split_at(offset);
+        rope[i] = first;
+        rope[i + 1] = new_seg;
+        rope[i + 2] = second;
+        rope_len + 2
+    } else {
+        // Plain insert at `insert_at` — shift right by 1.
+        for j in (insert_at..rope_len).rev() {
+            rope[j + 1] = rope[j];
+        }
+        rope[insert_at] = new_seg;
+        rope_len + 1
+    }
+}
+
+/// Merge `entries` into `target.memory`, preserving the sequential
+/// splice semantics of the old `apply_outflow` inner loop without per-
+/// insert `Vec::splice` memmoves.
+///
+/// `entries` must be sorted by `(dominance desc, dir_from_target asc)`
+/// — same contract as the splice-based predecessor. `outflow` is the
+/// read-only per-source slot map.
+///
+/// **Semantics, identical to the splice predecessor:**
+///
+/// - For each entry in order: `intrusion_depth = floor(dominance *
+///   current_len)`; `write_start = current_len - intrusion_depth`.
+///   `current_len` grows by `slots.len()` after each insert.
+/// - Origin-tag inheritance: `entries[0]` wins iff its dominance ≥ 0.5.
+/// - `target.inflow[dir_from_target]` accumulates the slot count per
+///   applied entry (saturating).
+/// - PC stays numerically the same; modulo'd back into range at the end.
+///
+/// **How it works:** we build a small stack-allocated rope of segments
+/// (sub-ranges of the original memory + sub-slices of the entries'
+/// slots), simulating each splice as a segment insert with an in-place
+/// split if needed. Each insert is `O(rope_len) ≤ O(13)` constant work.
+/// Then we flatten the rope into a fresh `Vec` in one `memcpy`-per-
+/// segment pass — `O(new_len)` total — instead of `O(k * memory_len)`
+/// memmoves under the old splice loop.
+fn merge_inflows(target: &mut Cell, entries: &[InflowEntry], outflow: &Outflow) {
+    // Origin-tag inheritance fires on the highest-dominance entry only,
+    // and only when dominance ≥ 0.5. Caller has already verified
+    // `entries` is non-empty.
+    if let Some(top) = entries.first() {
+        if top.dominance >= 0.5 {
+            target.origin_tag = top.src_origin_tag;
+        }
+    }
+
+    let original_len = target.memory.len();
+
+    let mut rope = [MergeSegment::Original { start: 0, end: 0 }; MERGE_ROPE_CAP];
+    let mut rope_len: usize = if original_len > 0 {
+        rope[0] = MergeSegment::Original {
+            start: 0,
+            end: u32::try_from(original_len).unwrap_or(u32::MAX),
+        };
+        1
+    } else {
+        0
+    };
+    let mut current_len = original_len;
+
+    // Resolve each entry's slots once so flatten doesn't re-hash.
+    let mut slot_slices: [&[u32]; MERGE_MAX_ENTRIES] = [&[]; MERGE_MAX_ENTRIES];
+    let mut slot_count: usize = 0;
+
+    for entry in entries {
+        if slot_count >= MERGE_MAX_ENTRIES {
+            break;
+        }
+        let Some(per_dir) = outflow.get(&entry.source_coord) else {
+            continue;
+        };
+        let slots = &per_dir[entry.source_dir as usize];
+        if slots.is_empty() {
+            continue;
+        }
+
+        let intrusion_depth = (entry.dominance * usize_to_f32(current_len)) as usize;
+        let write_start_usize = current_len.saturating_sub(intrusion_depth);
+
+        let slots_len_u32 = u32::try_from(slots.len()).unwrap_or(u32::MAX);
+        let write_start_u32 = u32::try_from(write_start_usize).unwrap_or(u32::MAX);
+
+        let new_seg = MergeSegment::Insert {
+            entry_idx: slot_count as u32,
+            start: 0,
+            end: slots_len_u32,
+        };
+        rope_len = rope_insert(&mut rope, rope_len, write_start_u32, new_seg);
+        slot_slices[slot_count] = slots;
+        slot_count += 1;
+        current_len += slots.len();
+
+        let dir_idx = entry.dir_from_target as usize;
+        target.inflow[dir_idx] = target.inflow[dir_idx].saturating_add(slots_len_u32);
+    }
+
+    // No actual inserts (e.g., all entries had empty slots) — leave
+    // memory and pc untouched, since the splice predecessor would have
+    // produced the same no-op.
+    if slot_count == 0 {
+        return;
+    }
+
+    // Flatten the rope into a thread-local scratch buffer, then swap
+    // it with `target.memory`. The scratch holds the previous cell's
+    // memory after the swap; next call's `clear()` drops it and reuses
+    // the allocation. This way the rebuild is O(new_len) memcpy +
+    // amortized-zero allocation, instead of one fresh `Vec::with_capacity`
+    // per cell per tick.
+    let new_len = current_len;
+    MERGE_SCRATCH.with_borrow_mut(|scratch| {
+        scratch.clear();
+        scratch.reserve(new_len);
+        for seg in &rope[..rope_len] {
+            match *seg {
+                MergeSegment::Original { start, end } => {
+                    scratch.extend_from_slice(&target.memory[start as usize..end as usize]);
+                }
+                MergeSegment::Insert {
+                    entry_idx,
+                    start,
+                    end,
+                } => {
+                    let slots = slot_slices[entry_idx as usize];
+                    scratch.extend_from_slice(&slots[start as usize..end as usize]);
+                }
+            }
+        }
+        std::mem::swap(&mut target.memory, scratch);
+    });
+
+    // PC stays numerically the same; bring it back into range if memory
+    // ever shrank. (Inflow phase only grows, so this is defensive —
+    // relevant only if a future change adds shrink.)
+    if target.memory.is_empty() {
+        target.pc = 0;
+    } else {
+        target.pc %= target.memory.len() as u32;
+    }
 }
 
 /// `u32 → f32` cast for dominance arithmetic. Cell energies stay well
