@@ -21,7 +21,7 @@
 // the workspace's `missing_docs = "warn"` lint can't see through.
 #![allow(missing_docs)]
 
-use aenternis_core::{tick, SparseWorld};
+use aenternis_core::{tick, Cell, Coord, Rng, SparseWorld};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
 /// Diffusion coefficient — typical mid-range value used in the prototypes.
@@ -158,11 +158,84 @@ fn bench_warm_huge(c: &mut Criterion) {
     group.finish();
 }
 
+/// Per-cell energy budget for the dense-grid scenarios. Each cell
+/// runs this many instructions in the CPU phase, so the value sets
+/// per-cell work without blowing up wallclock at 30k+ cells.
+const DENSE_CELL_ENERGY: u32 = 32;
+
+/// Build a cubic dense grid of `side^3` cells, every coord in
+/// `[-side/2, side/2)^3` allocated with `DENSE_CELL_ENERGY` slots of
+/// PRNG-derived memory.
+///
+/// The big-bang+warmup scenarios above end up with at most ~800 cells
+/// even at 1M energy, because diffusion at `COEFF = 0.20` collapses
+/// the world long before the cell count can grow. That keeps every
+/// existing bench below the [`par_or_seq_iter_mut`] threshold (8 192)
+/// and never exercises the parallel path. This helper sidesteps that
+/// dynamic by populating the world directly, so the resulting cell
+/// count is a guaranteed `side^3` regardless of diffusion behaviour.
+fn dense_grid_world(seed: u64, side: i32, cell_energy: u32) -> SparseWorld {
+    let half = side / 2;
+    let mut world = SparseWorld::new(seed);
+    // Memory-fill PRNG: keyed off the low 32 bits of the world seed.
+    // Distinct from the per-cell-at-tick RNG that `tick::step` builds
+    // from `(world_seed, tick, coord)` — we only need any deterministic
+    // stream of `u32`s to seed each cell's memory.
+    let mut rng = Rng::new(seed as u32);
+    for x in -half..(side - half) {
+        for y in -half..(side - half) {
+            for z in -half..(side - half) {
+                let mut memory = Vec::with_capacity(cell_energy as usize);
+                for _ in 0..cell_energy {
+                    memory.push(rng.next_u32());
+                }
+                world.insert(Coord::new(x, y, z), Cell::with_memory(memory));
+            }
+        }
+    }
+    world
+}
+
+/// Dense cubic-grid benchmarks. Unlike the `big_bang`-based scenarios
+/// above, the world is constructed cell-by-cell so the per-tick cell
+/// count stays well above the [`par_or_seq_iter_mut`] threshold —
+/// `side = 22` gives 10 648 cells (just over), `side = 32` gives
+/// 32 768 cells (~4×). The parallel path is what's actually being
+/// measured here.
+fn bench_dense_grid(c: &mut Criterion) {
+    const SIDES: &[i32] = &[22, 32];
+
+    let mut group = c.benchmark_group("tick_step/dense_grid");
+    group.sample_size(20);
+
+    for &side in SIDES {
+        let world = dense_grid_world(SEED, side, DENSE_CELL_ENERGY);
+        let cell_count = world.cells.len();
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("side_{side}_cells_{cell_count}")),
+            &world,
+            |b, w| {
+                b.iter_batched(
+                    || w.clone(),
+                    |mut w| {
+                        tick::step(&mut w, COEFF, K);
+                        black_box(&w);
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_cold,
     bench_warm,
     bench_warm_large,
-    bench_warm_huge
+    bench_warm_huge,
+    bench_dense_grid
 );
 criterion_main!(benches);

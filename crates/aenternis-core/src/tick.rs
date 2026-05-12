@@ -34,11 +34,12 @@ use rustc_hash::FxHashMap;
 
 use crate::apportion::{apportion_with_shuffle, COMBINED_CLAMPED_RNG_DOMAIN};
 use crate::cell::proportional_clamp;
+use crate::parallel::par_or_seq_iter_mut;
 use crate::{Cell, Coord, Direction, Rng, SparseWorld};
 
-// Rayon's parallel iterator traits are only pulled in on native
-// targets. WASM builds fall back to sequential `iter_mut()` (rayon
-// needs `SharedArrayBuffer` + COOP/COEP, separate infrastructure).
+// Rayon prelude is pulled in at module scope (native only) so the
+// `par_or_seq_iter_mut!` expansions at each callsite resolve
+// `par_iter_mut` without re-importing on every macro invocation.
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
@@ -114,15 +115,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
         }
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    world
-        .cells
-        .par_iter_mut()
-        .for_each(|(c, cell)| body(c, cell));
-    #[cfg(target_arch = "wasm32")]
-    for (c, cell) in &mut world.cells {
-        body(c, cell);
-    }
+    par_or_seq_iter_mut!(&mut world.cells, body);
 }
 
 /// Rebuild [`SparseWorld::scratch_neighbor_energies`] from the current
@@ -140,10 +133,12 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
 /// arrays — so the backing storage carries over from previous ticks
 /// without per-tick allocator churn.
 ///
-/// **Parallelism:** the value-fill pass runs in parallel via rayon
-/// (native targets). Each entry's six neighbor lookups read the
-/// immutable `world.cells` map by coord, so the parallel walk is
-/// bit-identical to a sequential one.
+/// **Parallelism:** the value-fill pass is dispatched through
+/// [`crate::parallel::par_or_seq_iter_mut!`], which goes parallel via
+/// rayon on native targets once the map size crosses the helper's
+/// threshold and stays sequential otherwise. Each entry's six neighbor
+/// lookups read the immutable `world.cells` map by coord, so the
+/// parallel walk is bit-identical to a sequential one.
 fn refresh_neighbor_energies(world: &mut SparseWorld) {
     let cells = &world.cells;
     let snapshot = &mut world.scratch_neighbor_energies;
@@ -161,12 +156,7 @@ fn refresh_neighbor_energies(world: &mut SparseWorld) {
         }
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    snapshot.par_iter_mut().for_each(|(c, e)| body(c, e));
-    #[cfg(target_arch = "wasm32")]
-    for (c, e) in snapshot.iter_mut() {
-        body(c, e);
-    }
+    par_or_seq_iter_mut!(snapshot, body);
 }
 
 /// Per-cell, per-direction slot copies collected from the outflow phase.
@@ -293,14 +283,7 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
         }
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    outflow
-        .par_iter_mut()
-        .for_each(|(c, per_dir)| body(c, per_dir));
-    #[cfg(target_arch = "wasm32")]
-    for (c, per_dir) in outflow.iter_mut() {
-        body(c, per_dir);
-    }
+    par_or_seq_iter_mut!(outflow, body);
 }
 
 /// Lay out per-direction pointers for every cell in the world.
@@ -339,15 +322,7 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
         cell.lay_out_pointers(&combined);
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    world
-        .cells
-        .par_iter_mut()
-        .for_each(|(c, cell)| body(c, cell));
-    #[cfg(target_arch = "wasm32")]
-    for (c, cell) in &mut world.cells {
-        body(c, cell);
-    }
+    par_or_seq_iter_mut!(&mut world.cells, body);
 }
 
 /// Compute clamped combined per-direction rate for one cell.
@@ -439,9 +414,11 @@ pub fn combined_clamped(
 /// allocations per tick).
 ///
 /// **Parallelism:** the per-target apply phase iterates `world.cells`
-/// in parallel via rayon (native targets); each cell's work depends
-/// only on its own state plus the read-only `inflows_by_target` map,
-/// so the parallel walk is bit-identical to a sequential one.
+/// through [`crate::parallel::par_or_seq_iter_mut!`] — rayon-parallel
+/// on native targets above the helper's threshold, sequential below
+/// (and always on WASM). Each cell's work depends only on its own
+/// state plus the read-only `inflows_by_target` map, so the parallel
+/// walk is bit-identical to a sequential one.
 #[allow(clippy::too_many_lines)]
 pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // -------------------------------------------------------------------
@@ -520,7 +497,7 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // targets, then apply intrusion inserts in parallel.
     // -------------------------------------------------------------------
     // Sort sequentially so the per-target apply can run from a
-    // read-only `inflows_by_target` reference under `par_iter_mut`.
+    // read-only `inflows_by_target` reference inside the parallel walk.
     // Empty `Vec`s (stale entries from previous ticks) are skipped —
     // their capacity stays reserved for next tick.
     for entries in inflows_by_target.values_mut() {
@@ -610,15 +587,7 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         }
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    world
-        .cells
-        .par_iter_mut()
-        .for_each(|(c, cell)| body(c, cell));
-    #[cfg(target_arch = "wasm32")]
-    for (c, cell) in &mut world.cells {
-        body(c, cell);
-    }
+    par_or_seq_iter_mut!(&mut world.cells, body);
 
     // Return the pooled inflow map to the world so its per-target
     // `Vec` capacities carry over to the next tick's apply.
@@ -732,15 +701,7 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
         }
     };
 
-    #[cfg(not(target_arch = "wasm32"))]
-    world
-        .cells
-        .par_iter_mut()
-        .for_each(|(c, cell)| body(c, cell));
-    #[cfg(target_arch = "wasm32")]
-    for (c, cell) in &mut world.cells {
-        body(c, cell);
-    }
+    par_or_seq_iter_mut!(&mut world.cells, body);
 }
 
 /// Run one full simulation tick on the world.

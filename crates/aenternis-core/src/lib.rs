@@ -22,6 +22,7 @@
 pub mod apportion;
 pub mod cell;
 pub mod coord;
+pub mod parallel;
 pub mod rng;
 pub mod tick;
 pub mod vm;
