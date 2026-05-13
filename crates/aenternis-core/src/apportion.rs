@@ -23,14 +23,14 @@
 //!
 //! ## Why `f64` not exact integer arithmetic
 //!
-//! The clamp scales via `f64` (`cap / total`, then `value * scale`) to
-//! stay bit-identical with JS prototype 9-B's `Math.floor(value * cap /
-//! total)`. Pure `u64` integer division would be mathematically exact
-//! but disagrees with JS at boundary values (truncation vs round-to-
-//! nearest-then-floor), and the bit-identity harness against prototype
-//! 9-B is load-bearing. `total` reaches at most ~`2^35.6` (six times
-//! `(u32::MAX + u32::MAX)` for `combined_clamped`'s worst case), well
-//! under `f64`'s `2^53` exact-integer ceiling.
+//! The clamp scales via `f64` (`cap / total`, then `value * scale`)
+//! rather than via exact `u64` integer division. The two paths disagree
+//! at boundary values (truncation vs round-to-nearest-then-floor); the
+//! `f64` path is the frozen choice because it has the per-cell
+//! stochastic-rounding stream baked into it. `total` reaches at most
+//! ~`2^35.6` (six times `(u32::MAX + u32::MAX)` for `combined_clamped`'s
+//! worst case), well under `f64`'s `2^53` exact-integer ceiling, so
+//! the cast is precision-safe within its operating range.
 //!
 //! ## Statistical isotropy, not per-call equivariance
 //!
@@ -86,11 +86,12 @@ pub(crate) fn apportion_with_shuffle(
         #[allow(clippy::cast_possible_truncation)]
         return std::array::from_fn(|i| values[i] as u32);
     }
-    // Clamp via `f64` to bit-match JS prototype 9-B. `total` reaches
-    // at most ~`2^35.6` (six times `2 * u32::MAX` for the combined
-    // wrapper's worst case), well under `f64`'s `2^53` exact-integer
-    // ceiling. (No `From<u64> for f64` impl exists, so the cast is
-    // `as f64` rather than the lossless `From`.)
+    // Clamp via `f64` — see the module docs for why this is the frozen
+    // choice and not `u64` integer division. `total` reaches at most
+    // ~`2^35.6` (six times `2 * u32::MAX` for the combined wrapper's
+    // worst case), well under `f64`'s `2^53` exact-integer ceiling.
+    // (No `From<u64> for f64` impl exists, so the cast is `as f64`
+    // rather than the lossless `From`.)
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,

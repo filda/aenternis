@@ -74,10 +74,11 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // Pull Copy fields off the world so the per-cell closure below
     // doesn't hold a shared borrow during the (parallel) mutable phase.
     let world_seed = world.world_seed;
-    // JS prototype 9-B computes the layout for step #N at the end of
-    // step #(N-1), *before* incrementing `this.tick` — so the rng_tick
-    // used is N-2 (saturated at 0). We always run in 9-B parity, so
-    // this offset is hardcoded.
+    // Convention: the layout for step #N is computed at the end of
+    // step #(N-1), *before* `world.tick` is incremented — so the
+    // rng_tick used here is one behind `world.tick`. Frozen: bumping
+    // the off-by-one requires regenerating every RNG-derived baseline
+    // (see `tests/apply_outflow_bit_parity.rs`).
     let rng_tick = world.tick.saturating_sub(1);
     let snapshot = &world.scratch_neighbor_energies;
 
@@ -86,7 +87,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // `cell.rates`. Each cell's RNG is freshly seeded from
     // `(world_seed, rng_tick, coord)` — order of execution doesn't
     // affect the result, so this is safe to run in parallel without
-    // breaking the bit-identity contract against JS prototype 9-B.
+    // breaking the per-cell determinism contract.
     let body = |coord: &Coord, cell: &mut Cell| {
         let my_energy = cell.energy();
         if my_energy == 0 {
@@ -185,8 +186,8 @@ pub type Outflow = FxHashMap<Coord, [Vec<u32>; Direction::COUNT]>;
 ///
 /// Why combined-and-clamped, not just `rates`: a cell that ran `port`
 /// during the CPU phase has accumulated `active_outflow` in some
-/// direction(s); the spec (and JS prototype 9-B) say the actual
-/// per-tick emission size in that direction is `rates + active_outflow`,
+/// direction(s); per the mechanics spec the actual per-tick emission
+/// size in that direction is `rates + active_outflow`,
 /// scaled down proportionally if their sum exceeds memory. Without this
 /// clamp here, `port` would only shift *which* slots get emitted (via
 /// pointer layout) and never grow the *amount*, which silently breaks
@@ -294,11 +295,10 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
 /// holds. Honors any `pointer_override` flags set by a CPU-phase
 /// `setp` / `setpv` instruction this tick.
 ///
-/// This is the sub-tick reflow step from `docs/mechanics.md`, matching
-/// JS prototype 9-B's `applyCombinedLayout`. See [`combined_clamped`]
-/// for the per-direction `u64` accumulation that keeps Rust bit-aligned
-/// with JS `Number` arithmetic when `rates + active_outflow` exceeds
-/// `u32::MAX`.
+/// This is the sub-tick reflow step from `docs/mechanics.md`. See
+/// [`combined_clamped`] for the per-direction `u64` accumulation that
+/// safely sums `rates + active_outflow` without overflowing `u32` when
+/// the two are near the type's max.
 pub fn lay_out_pointers(world: &mut SparseWorld) {
     // Per-cell pointer layout has no inter-cell dependencies — each
     // cell only reads its own rates / active_outflow / memory size.

@@ -52,8 +52,8 @@ impl World {
     ///
     /// `seed` and `energy` are deterministic — same pair yields the
     /// same initial state on every run, on every host platform. The
-    /// RNG path is `xorshift32` keyed via JS `cellSeed`, matching JS
-    /// prototype 9-B bit-for-bit.
+    /// RNG path is `xorshift32` keyed via `cell_seed`; see
+    /// `aenternis_core::rng` for the frozen-reference-stream contract.
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(seed: u32, energy: u32) -> Self {

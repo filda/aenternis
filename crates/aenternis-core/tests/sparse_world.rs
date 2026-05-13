@@ -70,8 +70,9 @@ fn big_bang_with_program_writes_prefix() {
 
 #[test]
 fn big_bang_uses_cell_seed_as_origin_tag() {
-    // JS prototype 9-B sets `originTag = cellSeed(seed, x, y, z)` directly
-    // (not the first RNG draw). The Rust port must reproduce that.
+    // `origin_tag = cell_seed(seed, x, y, z)` — the seed value itself,
+    // not the first RNG draw. This contract is part of the lineage
+    // tracker's identity definition.
     let w = SparseWorld::big_bang(7, 16);
     let cell = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(cell.origin_tag, cell_seed(7, Coord::ORIGIN));

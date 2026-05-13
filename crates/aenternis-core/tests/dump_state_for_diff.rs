@@ -1,24 +1,25 @@
-//! Diagnostic dump of world state for cell-by-cell comparison against
-//! JS prototype 9-B.
+//! Diagnostic state dump — archived historical harness.
 //!
 //!   TICKS=1 cargo test --test `dump_state_for_diff` -- --ignored
 //!
-//! Writes to `reports/rust-tick<N>.txt` directly (no shell redirect or
-//! sed filtering — same reason as the JS counterpart in
-//! `prototypes/09b-sparse-world-3d/dump-state.js`). `TICKS` defaults to
-//! 5. Pair with the JS dump and `diff reports/9b-tick<N>.txt
-//! reports/rust-tick<N>.txt`.
+//! Writes per-cell state to `reports/rust-tick<N>.txt` for diffing
+//! against an external reference dump. `TICKS` defaults to 5.
 //!
-//! Expected: identical output line-for-line, given that the Rust core
-//! always runs in 9-B parity (xorshift32, tick-1 RNG keying, f64
-//! stochastic-floor, wrapping port, opcode set capped at 0x13) and
-//! the JS hash is on `Math.imul`.
+//! **Status: archival.** This harness was the cell-by-cell comparison
+//! point against JS laboratory prototype 9-B during the Rust core port.
+//! Bit-parity with that prototype was a working contract through
+//! 2026-05-12 (`docs/plan-isotropie.md`); after the Largest-Remainder
+//! shuffle landed in commit `3737536` and the `apply_outflow` rope
+//! merge landed in `26d7d53`, the Rust core's per-cell stream is no
+//! longer expected to match the JS dump exactly. The test stays as
+//! `#[ignore]` (never in CI) for forensic value: if a future
+//! divergence ever surprises us, comparing against an old `reports/
+//! 9b-tick<N>.txt` may still narrow the hunt to a specific
+//! `(coord, tick)` first divergence.
 //!
-//! When they diverge: the first differing line tells us which
-//! `(coord, tick)` first sees a different `stochastic_floor` outcome,
-//! `intrusion_depth`, or memory layout — narrowing the hunt drastically.
-//! Bisect by running `TICKS=1`, then `TICKS=2`, etc., until you find
-//! the first tick where the diff appears.
+//! Frozen RNG / hash invariants — the load-bearing parts of stream
+//! stability — live in `tests/rng.rs` and `tests/apply_outflow_bit_
+//! parity.rs`. This file is not where to look for those.
 
 use std::env;
 use std::fs;

@@ -3,16 +3,19 @@
 //! Three layers of guarantees:
 //!
 //! 1. **Determinism** — a generator built from the same inputs always
-//!    produces the same stream. This is the contract the bit-identity
-//!    harness against JS prototype 9-B rests on.
+//!    produces the same stream. Stable across hosts and Rust compiler
+//!    revisions; load-bearing for every other invariant the simulation
+//!    asserts on top of it.
 //! 2. **Independence** — generators built from different inputs produce
 //!    *visibly* different streams. Not cryptographic separation, just
 //!    confidence that two adjacent seeds, ticks, or coordinates don't
 //!    alias.
-//! 3. **Bit-identity snapshots** — concrete `u32` outputs locked in for
-//!    fixed inputs, so any structural change to the xorshift mixer or
-//!    the `cell_seed` / `cell_tick_seed` hash chains breaks at least
-//!    one assertion. Change-detector tests by design.
+//! 3. **Frozen reference stream** — concrete `u32` outputs locked in
+//!    for fixed inputs, so any structural change to the xorshift mixer
+//!    or the `cell_seed` / `cell_tick_seed` hash chains breaks at least
+//!    one assertion. Change-detector tests by design — bumping the
+//!    algorithm requires bumping the seed namespace and regenerating
+//!    these arrays, not a silent edit.
 
 use aenternis_core::rng::{cell_seed, cell_tick_seed};
 use aenternis_core::{Coord, Rng};
@@ -235,13 +238,16 @@ fn stochastic_floor_uses_subtraction_for_fractional_part() {
     assert_eq!(r.stochastic_floor(2.5), 2);
 }
 
-// ----- bit-identity snapshots ------------------------------------------------
+// ----- frozen reference stream ----------------------------------------------
 
 #[test]
-fn xorshift32_matches_js_reference_stream() {
-    // Reference stream from JS prototype 9-B's `makeRng(1)`, verified by
-    // tracing the three xorshift phases (^=<<13, ^=>>17, ^=<<5) by hand.
-    // Any drift in shift counts or operation order breaks this.
+fn xorshift32_seed_1_reference_stream() {
+    // Frozen reference stream for `Rng::new(1)`, verified by tracing the
+    // three xorshift phases (^=<<13, ^=>>17, ^=<<5) by hand. Any drift
+    // in shift counts or operation order breaks this. The constants
+    // originated as a port of the lineage prototype's `makeRng(1)`
+    // output and are now the Aenternis reference — bumping requires a
+    // seed namespace bump, not a silent edit.
     let mut r = Rng::new(1);
     let expected = [270_369u32, 67_634_689, 2_647_435_461];
     for (i, &want) in expected.iter().enumerate() {
@@ -265,8 +271,8 @@ fn xorshift32_seed_42_reference_stream() {
 fn for_cell_at_tick_reference_stream_for_nonzero_inputs() {
     // Uses world_seed, tick, and all coord components non-zero so the
     // `cell_tick_seed` hash mix has every input slot active. `domain
-    // == 0` is the pre-domain reference path, so this snapshot remains
-    // a stability anchor for the JS-9B-parity stream.
+    // == 0` is the pre-domain reference path; this snapshot is its
+    // frozen stability anchor.
     let mut r = Rng::for_cell_at_tick(0xDEAD_BEEF, 5, Coord::new(3, -7, 11), 0);
     let expected = [
         2_677_452_818_u32,
@@ -280,11 +286,12 @@ fn for_cell_at_tick_reference_stream_for_nonzero_inputs() {
 }
 
 #[test]
-fn cell_seed_matches_js_math_imul_at_origin() {
-    // JS prototype 9-B with the `Math.imul` checkbox enabled — i.e. the
-    // hash with f64 precision loss removed — gives `cellSeed(1234, 0, 0, 0)
-    // === 535601943`. The Rust port uses `wrapping_mul` (exact u32 mod
-    // 2^32), which is semantically what `Math.imul(a, b) >>> 0` computes.
+fn cell_seed_origin_frozen_value() {
+    // `cellSeed(1234, 0, 0, 0) == 535_601_943` is the frozen reference
+    // anchor for the origin cell's per-cell hash. The Rust port uses
+    // `wrapping_mul` (exact u32 mod 2^32) for the multiply-mix passes;
+    // this assertion locks in the resulting constant so any structural
+    // change to the hash chain shows up as a test failure.
     assert_eq!(cell_seed(1234, Coord::new(0, 0, 0)), 535_601_943);
 }
 

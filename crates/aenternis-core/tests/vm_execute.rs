@@ -331,9 +331,10 @@ fn direction_operand_wraps_modulo_six() {
 
 #[test]
 fn port_uses_wrapping_add_on_active_outflow() {
-    // JS prototype 9-B's `(activeOutflow + arg1) >>> 0` is a 32-bit
-    // wrap; the VM matches that. Pre-load active_outflow[Xp] near the
-    // top of u32 so a `port` adding a small value wraps.
+    // `port` uses `wrapping_add` on `active_outflow` — the 32-bit wrap
+    // is intentional, so a rogue program can't crash the VM by driving
+    // a face's outflow past `u32::MAX`. Pre-load `active_outflow[Xp]`
+    // near the top of `u32` so a small `port` increment wraps.
     let mut c = cell_with(&[op(Opcode::Port), 0, 100, 0]);
     c.active_outflow[Direction::Xp.index()] = u32::MAX - 50;
     execute_instruction(&mut c, &VOID);

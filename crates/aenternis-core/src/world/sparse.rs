@@ -41,11 +41,11 @@ use crate::{Cell, Coord, Direction, Rng};
 
 /// Sparse world container.
 ///
-/// All JS prototype 9-B parity behaviours are now hardcoded — the
-/// world used to expose `rng_kind`, `legacy_tick_offset`,
-/// `legacy_full_precision`, `legacy_port_wrap`, and `legacy_opcode_set`
-/// as diagnostic toggles, but the comparison work is done and the
-/// always-on path is the only one that runs.
+/// All formerly-toggleable simulation behaviours (`rng_kind`,
+/// `legacy_tick_offset`, `legacy_full_precision`, `legacy_port_wrap`,
+/// `legacy_opcode_set`) are now hardcoded — the comparison work that
+/// motivated those switches is done and the always-on path is the only
+/// one that runs.
 #[derive(Debug, Clone)]
 pub struct SparseWorld {
     /// Cells indexed by coordinate. Iteration order is the
@@ -162,11 +162,11 @@ impl SparseWorld {
     /// Build a world initialized as a big bang — one cell at [`Coord::ORIGIN`]
     /// holding the entire energy budget.
     ///
-    /// Matches JS prototype 9-B's `bigBang` semantics bit-for-bit:
-    /// `origin_tag = cellSeed(world_seed, ORIGIN)` (the seed value
-    /// itself), and the memory slots are the `xorshift32(cellSeed)` stream.
-    /// Same seed and same energy produce the same initial state on every
-    /// run, bit-identical across host platforms.
+    /// `origin_tag = cell_seed(world_seed, ORIGIN)` (the seed value
+    /// itself, not the first RNG draw); the memory slots are the
+    /// `xorshift32(cell_seed)` stream. Same seed and same energy
+    /// produce the same initial state on every run, bit-identical
+    /// across host platforms.
     ///
     /// `energy == 0` produces an empty world (no cell at the origin), since
     /// a cell with zero energy does not exist by the world invariant.
@@ -180,11 +180,11 @@ impl SparseWorld {
     /// taken verbatim from `program`; the remaining slots (if `energy >
     /// program.len()`) are filled from the per-cell-at-tick RNG stream.
     ///
-    /// Matches prototype 9-B's `bigBang(eTotal, programSlots)` semantics:
-    /// the RNG is **not** advanced for slots covered by the program, so
-    /// for a fixed seed, `big_bang_with_program(seed, n, &[a, b, c])` and
-    /// `big_bang_with_program(seed, n, &[d, e, f])` produce identical
-    /// memory at indices 3..n.
+    /// The RNG is **not** advanced for slots covered by the program, so
+    /// for a fixed seed, `big_bang_with_program(seed, n, &[a, b, c])`
+    /// and `big_bang_with_program(seed, n, &[d, e, f])` produce
+    /// identical memory at indices `3..n` — the program prefix replaces,
+    /// it doesn't consume entropy.
     ///
     /// `program.len() > energy` truncates: extra slots are discarded.
     /// An empty `program` is exactly equivalent to [`SparseWorld::big_bang`].
@@ -195,10 +195,10 @@ impl SparseWorld {
             return world;
         }
 
-        // JS prototype 9-B: `originTag = cellSeed(seed, x, y, z)` (the
-        // seed value itself), and `cell.rng = makeRng(seed)` is a
-        // separate xorshift32 stream from that same seed — the tag is
-        // *not* the first draw, it's the seed value.
+        // `origin_tag = cell_seed(seed, x, y, z)` (the seed value
+        // itself), and `cell.rng = Rng::new(seed)` is a separate
+        // xorshift32 stream from that same seed — the tag is *not* the
+        // first draw, it's the seed value.
         let origin_tag = cell_seed(world_seed, Coord::ORIGIN);
         let mut noise_rng = Rng::new(origin_tag);
 
@@ -461,9 +461,8 @@ impl SparseWorld {
 /// `(world_seed, coord)`. Used by [`SparseWorld::get_or_alloc`] for the
 /// alloc-on-write path during inflow.
 ///
-/// `origin_tag` is `cell_seed(world_seed, coord)` — the JS prototype
-/// 9-B convention, where the tag is the seed value itself rather than
-/// the first RNG draw.
+/// `origin_tag` is `cell_seed(world_seed, coord)` — the seed value
+/// itself, *not* the first draw from a freshly-seeded RNG.
 const fn fresh_cell(world_seed: u64, coord: Coord) -> Cell {
     let origin_tag = cell_seed(world_seed, coord);
     let mut cell = Cell::new();

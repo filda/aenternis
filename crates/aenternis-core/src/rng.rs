@@ -1,11 +1,10 @@
 //! Deterministic random number generator for the simulation.
 //!
-//! Aenternis uses **`xorshift32`** with the per-cell seed hash ported
-//! from JS prototype 9-B. This produces a bit-for-bit reproducible
-//! per-cell stream so the Rust core stays in lockstep with the JS
-//! prototype's output, and it sidesteps the precision quirks that come
-//! with the more conventional PCG generator (32-bit state, integer-only
-//! state advance, no modular `splitmix64` chain).
+//! Aenternis uses **`xorshift32`** with a per-cell seed hash. This
+//! produces a bit-for-bit reproducible per-cell stream across hosts and
+//! Rust compiler revisions, and it sidesteps the precision quirks that
+//! come with the more conventional PCG generator (32-bit state, integer-
+//! only state advance, no modular `splitmix64` chain).
 //!
 //! Two layers of API:
 //!
@@ -21,16 +20,21 @@
 //!   `domain == 0` is the default and is bit-identical to the
 //!   pre-domain hash output.
 //!
-//! Reference: the JS port of cellSeed/cellTickSeed lives in
-//! `prototypes/09-sparse-world/world.js`. Output bytes match.
+//! ## Frozen reference stream
 //!
-//! ## Why xorshift32
+//! The xorshift32 outputs (and the per-cell hash they sit on) are
+//! treated as a **frozen reference stream**: any change to the mixer
+//! or to `cell_tick_seed`'s constants reseeds every existing world.
+//! Bumping the algorithm therefore requires a new seed namespace, not
+//! a silent change. `tests/rng.rs` pins the first few outputs against
+//! a recorded reference array; that test is the load-bearing invariant.
 //!
-//! Earlier revisions kept a PCG-XSH-RR-64/32 backend alongside this one
-//! so the Aenternis-native and JS-9B-compat paths could be compared
-//! head-to-head; the comparison work is done and we always run in 9-B
-//! parity now, so PCG was deleted along with its `splitmix64` keying
-//! chain.
+//! The lineage trail: the algorithm originated as a port of the JS
+//! laboratory prototype 9-B's `makeRng` / `cellSeed` (see
+//! `prototypes/09-sparse-world/world.js`). Bit-parity with that JS
+//! reference was a working contract during the port and is now
+//! released — the Rust core may diverge as future work demands. The
+//! frozen-reference clause above is what keeps streams stable now.
 
 use crate::Coord;
 
@@ -45,9 +49,8 @@ pub struct Rng {
 }
 
 impl Rng {
-    /// Build a new generator from a 32-bit seed. Matches JS `makeRng(seed)`
-    /// from prototype 9-B's `world.js`. `seed == 0` is forced to `1` because
-    /// xorshift cannot leave the all-zeros state.
+    /// Build a new generator from a 32-bit seed. `seed == 0` is forced
+    /// to `1` because xorshift cannot leave the all-zeros state.
     #[must_use]
     pub const fn new(seed: u32) -> Self {
         let state = if seed == 0 { 1 } else { seed };
@@ -77,8 +80,9 @@ impl Rng {
 
     /// Advance state and return the next 32-bit pseudo-random integer.
     pub const fn next_u32(&mut self) -> u32 {
-        // Match JS prototype 9-B's xorshift32 exactly: state is updated
-        // in place and the new state is returned.
+        // Classic Marsaglia xorshift32 (`13, 17, 5` shift triple): state
+        // is updated in place and the new state is returned. Frozen
+        // reference stream — see module docs.
         let mut s = self.state;
         s ^= s << 13;
         s ^= s >> 17;
@@ -90,8 +94,7 @@ impl Rng {
     /// Pseudo-random `f64` in `[0, 1)` using all 32 bits of one
     /// `next_u32` output divided by `2^32`. Both bits and divisor are
     /// exactly representable in `f64`, so the result preserves full RNG
-    /// entropy without any rounding loss — matches JS prototype 9-B's
-    /// `rngFloat = rng() / 0x100000000` to bit precision.
+    /// entropy without any rounding loss.
     pub fn next_f64(&mut self) -> f64 {
         f64::from(self.next_u32()) / 4_294_967_296.0
     }
@@ -104,8 +107,8 @@ impl Rng {
     /// Returns 0 for non-positive or NaN input. The integer part is
     /// bounded by world energy (well under `2^24`) in any realistic
     /// simulation, so the trailing `as u32` cast is lossless. The
-    /// comparison runs in `f64` end-to-end to match JS prototype 9-B's
-    /// `Number`-native arithmetic.
+    /// comparison runs in `f64` end-to-end — frozen choice that keeps
+    /// the per-cell stochastic rounding stream stable across hosts.
     pub fn stochastic_floor(&mut self, value: f64) -> u32 {
         if !value.is_finite() || value <= 0.0 {
             return 0;
@@ -119,12 +122,15 @@ impl Rng {
     }
 }
 
-/// JS `cellSeed(worldSeed, x, y, z)` ported verbatim. Used to produce
-/// a per-cell `u32` seed deterministic in `(world_seed, coord)`. Output
-/// matches the JS stream exactly.
+/// Per-cell `u32` seed deterministic in `(world_seed, coord)`.
 ///
-/// `world_seed` is truncated to its low 32 bits before hashing (the JS
-/// implementation only ever sees 32 bits — it casts via `>>>` everywhere).
+/// Three rounds of multiply-xor mixing over the coordinate axes; the
+/// multipliers are large primes lifted from the lineage prototype
+/// (`world.js`) and kept frozen to preserve stream stability across
+/// hosts and revisions.
+///
+/// `world_seed` is truncated to its low 32 bits before hashing — the
+/// frozen hash only ever consumes 32 bits of entropy from the seed.
 #[must_use]
 pub const fn cell_seed(world_seed: u64, coord: Coord) -> u32 {
     let mut h = (world_seed as u32) ^ 0x9E37_79B9;
@@ -141,19 +147,19 @@ pub const fn cell_seed(world_seed: u64, coord: Coord) -> u32 {
     }
 }
 
-/// JS `cellTickSeed` ported verbatim — `(world_seed, coord, tick) → u32`,
-/// with an extra `domain` salt for separating independent per-cell
-/// stochastic operations within one tick.
+/// Per-cell-per-tick `u32` seed: `(world_seed, coord, tick, domain) → u32`,
+/// with `domain` salting independent per-cell stochastic operations
+/// within one tick.
 ///
 /// Combines the per-cell seed with the tick number through one more
 /// multiply-mix pass; the output is the seed handed to xorshift32 for
 /// the per-cell-tick stream.
 ///
-/// `domain == 0` skips the salt mix entirely, so the output is
-/// bit-equal to the pre-domain hash — that path is the JS-9B reference
-/// stream and must not shift. Non-zero `domain` runs an extra
-/// multiply-xor pass that diffuses the salt across all 32 bits of the
-/// seed so that two domains' streams are well separated.
+/// `domain == 0` skips the salt mix entirely, so the output is bit-
+/// equal to the pre-domain hash — that path is the frozen reference
+/// stream and must not shift. Non-zero `domain` runs an extra multiply-
+/// xor pass that diffuses the salt across all 32 bits of the seed so
+/// that two domains' streams are well separated.
 #[must_use]
 pub const fn cell_tick_seed(world_seed: u64, tick: u64, coord: Coord, domain: u32) -> u32 {
     let base = cell_seed(world_seed, coord);

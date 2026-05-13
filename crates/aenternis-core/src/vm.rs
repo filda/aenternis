@@ -185,8 +185,9 @@ impl Opcode {
 ///
 /// All addresses are taken modulo `memory.len()` (modular addressing,
 /// never out of bounds). All arithmetic is wrapping. The `port` opcode
-/// uses `wrapping_add` to accumulate into `active_outflow`, matching
-/// JS prototype 9-B's `(activeOutflow + arg1) >>> 0`.
+/// uses `wrapping_add` to accumulate into `active_outflow` — the wrap
+/// is intentional, not undefined behavior; rogue programs that drive a
+/// face's outflow past `u32::MAX` just wrap around.
 #[allow(clippy::too_many_lines)] // 20 opcodes per match; splitting hurts more than it helps
 pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction::COUNT]) {
     let mem_size = cell.memory.len();

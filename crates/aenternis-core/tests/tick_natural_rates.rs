@@ -24,8 +24,9 @@ fn empty_world_is_a_noop() {
 // ----- rng tick keying -------------------------------------------------------
 //
 // `compute_natural_rates` keys the per-cell RNG with `tick - 1` (saturating
-// at zero) — the JS prototype 9-B convention where layouts for step #N are
-// computed at the end of step #(N-1), before the tick counter advances.
+// at zero) — the layout for step #N is computed at the end of step #(N-1),
+// before the tick counter advances. Frozen convention; bumping it requires
+// regenerating every RNG-derived baseline.
 
 #[test]
 fn rng_tick_keying_uses_tick_minus_one_at_tick_n() {
