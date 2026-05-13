@@ -30,6 +30,22 @@
 use aenternis_core::{tick, SparseWorld};
 use wasm_bindgen::prelude::*;
 
+// When the `wasm-threads` feature is on (and we're building for
+// wasm32), re-export `init_thread_pool` from `wasm-bindgen-rayon` so
+// JS can call it via the generated bindings. JS must `await` this once
+// after `await init()` and before any `step()` call, e.g.
+//
+//     await init();
+//     await initThreadPool(navigator.hardwareConcurrency);
+//
+// The pool stays alive for the lifetime of the page. On targets /
+// configurations without the feature this re-export is absent and JS
+// must not call it (and doesn't need to — the bundle is single-
+// threaded). See `scripts/build-wasm.sh` for the threaded build, and
+// `docs/plan-wasm-zerocopy-threads.md` § 3B for the JS-side setup.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 /// Aenternis simulation world handle.
 ///
 /// Constructed with [`World::new`], stepped with [`World::step`],

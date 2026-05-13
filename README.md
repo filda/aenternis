@@ -76,6 +76,28 @@ wasm-pack build crates/aenternis-wasm --target web
 
 The output lands in `crates/aenternis-wasm/pkg/` and is picked up automatically by Vite.
 
+#### Multi-threaded WASM (optional)
+
+For large worlds (≥ 100 k cells), the single-threaded WASM bundle becomes the frame-rate bottleneck. The `wasm-threads` feature flag enables a multi-threaded bundle via `wasm-bindgen-rayon`, which spawns a pthread-over-Web-Workers pool and parallelizes the tick step.
+
+This path requires a **pinned nightly Rust toolchain** because `-Z build-std` (rebuilding `std` with the wasm32 atomics target-feature enabled) is nightly-only. The pinned date lives in `scripts/build-wasm.sh`.
+
+One-time setup:
+
+```sh
+rustup toolchain install nightly-2026-04-15 \
+    --component rust-src \
+    --target wasm32-unknown-unknown
+```
+
+Build:
+
+```sh
+bash scripts/build-wasm.sh
+```
+
+The output overwrites `crates/aenternis-wasm/pkg/` with the threaded bundle. JS callers must `await initThreadPool(navigator.hardwareConcurrency)` after `await init()` to actually spawn the worker pool. The host page must be `crossOriginIsolated`; `web/coi-serviceworker.js` installs a Service Worker that adds the COOP / COEP response headers via fetch interception, which works on hosts that can't set them natively (GitHub Pages, the Vite dev server before its config is taught about them).
+
 ### Node.js
 
 Node.js **20+** is required for the dev server, prototypes, and JavaScript tests. Install it from <https://nodejs.org/> or via a version manager such as [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm).
