@@ -458,6 +458,25 @@
   </div>
 
   <!--
+    coi-serviceworker shim. On hosts that can't set COOP/COEP headers
+    natively (notably GitHub Pages), this Service Worker registers
+    itself on first load, then intercepts subsequent fetches and
+    rewrites them with `Cross-Origin-Opener-Policy: same-origin` +
+    `Cross-Origin-Embedder-Policy: require-corp`. After the SW
+    activates the script reloads the page once, and from that point
+    on `window.crossOriginIsolated` is true — which is what
+    `wasm-bindgen-rayon` needs to enable `SharedArrayBuffer` and
+    spawn the worker pool.
+
+    Must precede the main module: the page reload it triggers has to
+    happen before the WASM bootstrap runs. On hosts that *do* set the
+    headers (Vite dev server below, Cloudflare Pages, etc.), the
+    script becomes a no-op — `crossOriginIsolated` is already true,
+    `shouldRegister()` returns false, the SW never installs.
+  -->
+  <script src="./coi-serviceworker.js"></script>
+
+  <!--
     Production-deployed `main.js` is the tsc emit of `main.ts`. In Vite
     dev mode the bundler resolves `./main.js` to `./main.ts` source
     automatically, so the same script tag works in both contexts.
