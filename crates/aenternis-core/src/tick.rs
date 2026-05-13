@@ -37,10 +37,12 @@ use crate::cell::proportional_clamp;
 use crate::parallel::par_or_seq_iter_mut;
 use crate::{Cell, Coord, Direction, Rng, SparseWorld};
 
-// Rayon prelude is pulled in at module scope (native only) so the
-// `par_or_seq_iter_mut!` expansions at each callsite resolve
-// `par_iter_mut` without re-importing on every macro invocation.
-#[cfg(not(target_arch = "wasm32"))]
+// Rayon prelude is pulled in at module scope on every target where the
+// `par_or_seq_iter_mut!` macro can route through `par_iter_mut` — native
+// unconditionally, plus wasm32 with the `wasm-threads` feature (via
+// `wasm-bindgen-rayon`). The default wasm32 build skips this import; the
+// macro on that target lowers to a plain `iter_mut` loop.
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 use rayon::prelude::*;
 
 /// Compute natural per-direction rates for every cell in the world.

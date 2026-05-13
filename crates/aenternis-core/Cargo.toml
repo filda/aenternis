@@ -13,13 +13,25 @@ rustc-hash = { workspace = true }
 
 # Rayon is the data-parallelism runtime used by the per-tick phases
 # (`compute_natural_rates`, `lay_out_pointers`, `collect_outflow`).
-# It only ships on native targets — `wasm32` builds (the production
-# `aenternis-wasm` cdylib path) fall back to sequential iteration via
-# `cfg(target_arch = "wasm32")` gates inside the crate. Browser-side
-# parallelism would require `wasm-bindgen-rayon` plus COOP/COEP headers,
-# which is a separate piece of infrastructure to wire up.
+# On native targets it ships unconditionally. On `wasm32` it's optional
+# and pulled in only when the `wasm-threads` feature is on — that path
+# routes through `wasm-bindgen-rayon`, which needs COOP/COEP headers
+# (or a `coi-serviceworker` shim) in the host page and a nightly Rust
+# toolchain with `-Z build-std` for atomics-enabled `std`. See
+# `docs/plan-wasm-zerocopy-threads.md` § 3B for the full setup.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rayon = { workspace = true, optional = true }
+wasm-bindgen-rayon = { version = "1.2", optional = true }
+
+[features]
+# Default off. Enables multi-threaded WASM via `wasm-bindgen-rayon` +
+# pthread-over-Web-Workers + SharedArrayBuffer. Required toolchain side
+# is nightly + `rust-src` (see `scripts/build-wasm.sh`); host page must
+# be `crossOriginIsolated` (COOP / COEP headers or a SW shim).
+wasm-threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }

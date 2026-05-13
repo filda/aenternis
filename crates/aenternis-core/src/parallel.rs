@@ -55,20 +55,38 @@
 /// improve, `tick_step/dense_grid/*` should stay flat). Tunable only
 /// at compile time — a runtime branch inside the per-cell loop is the
 /// thing we are removing.
+///
+/// Gated to "rayon is available" targets: native unconditionally, and
+/// `wasm32 + feature = "wasm-threads"` via `wasm-bindgen-rayon`. The
+/// default wasm32 build (no feature) skips parallelism entirely and
+/// leaves this constant unreferenced — without the cfg gate that would
+/// trip `dead_code`.
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 pub(crate) const PAR_THRESHOLD: usize = 8_192;
 
 /// Walk `$map: &mut FxHashMap<K, V>` with closure `$body: Fn(&K, &mut V)`.
 ///
-/// Dispatches to `rayon::par_iter_mut().for_each` once
-/// `$map.len() >= PAR_THRESHOLD` on native; below the threshold (and
-/// unconditionally on WASM) falls back to a plain `iter_mut` loop.
+/// Dispatch is `cfg`-driven, three paths:
 ///
-/// `$body` must satisfy `Fn(&K, &mut V) + Send + Sync` on native; the
-/// existing per-tick closures in [`crate::tick`] do because their
-/// captures are either `Copy` scalars or `&`-borrows of `Sync` types.
+/// - **Native** (`not(target_arch = "wasm32")`) — rayon unconditional,
+///   `par_iter_mut().for_each` above [`PAR_THRESHOLD`], sequential
+///   below. Rayon ships in `[dependencies]`, no feature gate.
+/// - **WASM + `wasm-threads`** — same threshold dispatch as native, but
+///   `par_iter_mut` routes through `wasm-bindgen-rayon`'s pthread-over-
+///   Web-Workers bridge. Requires `init_thread_pool` called from JS at
+///   startup, plus host page in `crossOriginIsolated` mode (COOP/COEP
+///   headers or `coi-serviceworker` shim).
+/// - **WASM no feature** — plain `iter_mut`, no rayon footprint. The
+///   default wasm-pack build; runs single-threaded in any browser, no
+///   `SharedArrayBuffer` requirement.
+///
+/// `$body` must satisfy `Fn(&K, &mut V) + Send + Sync` on either rayon
+/// path; the existing per-tick closures in [`crate::tick`] do because
+/// their captures are either `Copy` scalars or `&`-borrows of `Sync`
+/// types.
 macro_rules! par_or_seq_iter_mut {
     ($map:expr, $body:ident $(,)?) => {{
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
         if ($map).len() < $crate::parallel::PAR_THRESHOLD {
             for (k, v) in ($map).iter_mut() {
                 $body(k, v);
@@ -76,7 +94,7 @@ macro_rules! par_or_seq_iter_mut {
         } else {
             ($map).par_iter_mut().for_each(|(k, v)| $body(k, v));
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
         for (k, v) in ($map).iter_mut() {
             $body(k, v);
         }
@@ -85,7 +103,10 @@ macro_rules! par_or_seq_iter_mut {
 
 pub(crate) use par_or_seq_iter_mut;
 
-#[cfg(test)]
+// Tests exercise the parallel branch; gated to "rayon is available"
+// targets along with `PAR_THRESHOLD` so the no-feature wasm32 build
+// doesn't trip on a missing constant.
+#[cfg(all(test, any(not(target_arch = "wasm32"), feature = "wasm-threads")))]
 mod tests {
     use super::PAR_THRESHOLD;
     use rustc_hash::FxHashMap;

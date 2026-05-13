@@ -17,5 +17,17 @@ crate-type = ["cdylib", "rlib"]
 aenternis-core = { path = "../aenternis-core" }
 wasm-bindgen = "0.2"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Re-exported through the `wasm-threads` feature for JS to call
+# `init_thread_pool` via `wasm-bindgen`. Inactive when the feature is
+# off — single-threaded WASM bundle has no rayon footprint.
+wasm-bindgen-rayon = { version = "1.2", optional = true }
+
+[features]
+# Forwards to `aenternis-core`'s `wasm-threads` feature, which pulls in
+# rayon + the wasm-bindgen pthread bridge. See
+# `docs/plan-wasm-zerocopy-threads.md` § 3B.
+wasm-threads = ["aenternis-core/wasm-threads", "dep:wasm-bindgen-rayon"]
+
 [lints]
 workspace = true
