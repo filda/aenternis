@@ -25,8 +25,32 @@
 
 use std::hash::{Hash, Hasher};
 
-use aenternis_core::{tick, SparseWorld};
+use aenternis_core::{tick, Cell, Coord, Rng, SparseWorld};
 use rustc_hash::FxHasher;
+
+/// Build a cubic dense grid of `side^3` cells with `cell_energy` slots
+/// of RNG-derived memory each. The bit-parity baseline tests use this
+/// to construct worlds that immediately exceed the
+/// [`crate::parallel::par_or_seq_iter_mut!`] threshold (8 192 cells),
+/// so the rayon parallel branch fires from tick 0. Mirrors the helper
+/// of the same shape in `benches/tick.rs`.
+fn dense_grid_world(seed: u64, side: i32, cell_energy: u32) -> SparseWorld {
+    let half = side / 2;
+    let mut world = SparseWorld::new(seed);
+    let mut rng = Rng::new(seed as u32);
+    for x in -half..(side - half) {
+        for y in -half..(side - half) {
+            for z in -half..(side - half) {
+                let mut memory = Vec::with_capacity(cell_energy as usize);
+                for _ in 0..cell_energy {
+                    memory.push(rng.next_u32());
+                }
+                world.insert(Coord::new(x, y, z), Cell::with_memory(memory));
+            }
+        }
+    }
+    world
+}
 
 /// Hash every observable field of every cell, in coordinate-sorted
 /// order. Captures everything `apply_outflow` can affect: memory
@@ -250,4 +274,40 @@ fn bit_parity_with_injected_program() {
         0xbb31c62273420ecc,
     ];
     run_scenario(&mut w, 0.15, 1, 30, expected);
+}
+
+/// Rayon parallel-path coverage. Builds a 22³ = 10 648 dense grid of
+/// cells, which immediately exceeds the
+/// [`crate::parallel::par_or_seq_iter_mut!`] threshold (8 192 cells),
+/// so every per-tick phase runs through `par_iter_mut().for_each(...)`
+/// rather than the sequential fallback from tick 0. Pinning hashes
+/// here guards multi-thread determinism: if a future refactor
+/// accidentally introduces a read/write race across cells under rayon
+/// work-stealing, this drifts deterministically across runs.
+///
+/// Native rayon and the `wasm-threads` WASM bundle share the same
+/// per-cell-independent body, so passing here also covers the browser
+/// threaded path by inheritance — the determinism argument doesn't
+/// depend on which backend dispatches the threads.
+#[test]
+fn bit_parity_rayon_parallel_path() {
+    let mut w = dense_grid_world(7, 22, 32);
+    assert!(
+        w.len() >= 8_192,
+        "test setup must exceed par_or_seq_iter_mut threshold to exercise the rayon parallel path; got {} cells",
+        w.len(),
+    );
+    let expected: &[u64] = &[
+        0x6012682b0dc3752d,
+        0xe3662713753ba1a5,
+        0x6d46b76b7ebe7e08,
+        0x24368835073efed4,
+        0x7fb2af5576b89afc,
+        0x64ca1f0c62e83aba,
+        0xac4dcb6384129105,
+        0x37b56b6f4c1d9aeb,
+        0x8904a45e111a7b48,
+        0x96f3141c20103eb5,
+    ];
+    run_scenario(&mut w, 0.20, 1, 10, expected);
 }
