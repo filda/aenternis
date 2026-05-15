@@ -293,6 +293,14 @@ jobs:
           cp dist/src/*.js _site/src/
           mkdir -p _site/crates/aenternis-wasm
           cp -r crates/aenternis-wasm/pkg _site/crates/aenternis-wasm/pkg
+          # `.nojekyll` tells GitHub Pages to skip Jekyll preprocessing
+          # and serve the artifact verbatim. Jekyll's default include /
+          # exclude rules silently drop some files under `pkg/snippets/
+          # wasm-bindgen-rayon-*/src/` (`workerHelpers.js` returns 404),
+          # which breaks `init_thread_pool` at runtime even though the
+          # file is in the build output. We're a static deploy, no
+          # Jekyll features used — disable it entirely.
+          touch _site/.nojekyll
           sed -i 's|href="/|href="|g' _site/index.html
 
       # Stamp the deployed pages with package version, short commit
