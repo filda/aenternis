@@ -59,31 +59,11 @@ export interface WorkerHandler {
   readonly handleMessage: (msg: MainToWorkerMsg) => void;
 }
 
-/** Rolling-window size for the per-tick profile log emitted to the
- *  worker's console. Every `PROFILE_WINDOW` ticks the handler prints a
- *  one-line summary of step / snapshot timing — read from the browser
- *  DevTools console to decide whether `plan-wasm-zerocopy-threads`
- *  parts A (zero-copy `Uint32Array::view`) or B (multi-threaded WASM)
- *  are worth implementing. Throw-away instrumentation; remove once the
- *  measurement is done and the decision is committed. */
-const PROFILE_WINDOW = 100;
-
 export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
   let world: WorldHandle | null = null;
   let running = false;
   let state: WorkerSimState = DEFAULT_STATE;
   let lastMsPerTick = 0;
-  let lastSnapshotMs = 0;
-
-  // Profile-window accumulators. Reset every `PROFILE_WINDOW` ticks
-  // after a console log fires. Sums are over the window; counts are
-  // the number of contributing ticks (always `PROFILE_WINDOW` once
-  // armed, but kept explicit so a partial window on shutdown is still
-  // averaged correctly).
-  let profileTicks = 0;
-  let profileStepMsSum = 0;
-  let profileSnapshotMsSum = 0;
-  let profileSnapshotBytesLast = 0;
 
   function applyStateToWorld(w: WorldHandle, s: WorkerSimState): void {
     w.setMoveThreshold(s.moveThreshold);
@@ -96,10 +76,7 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
   // otherwise leak as a surviving mutant.
 
   function sendSnapshot(w: WorldHandle): void {
-    const tSnap = deps.now();
     const snap = w.cellsSnapshot();
-    lastSnapshotMs = deps.now() - tSnap;
-    profileSnapshotBytesLast = snap.byteLength;
     const bbox = w.boundingBox();
     const msg: SnapshotMsg = {
       type: 'snapshot',
@@ -136,29 +113,6 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     w.step(state.coeff, state.k);
     lastMsPerTick = deps.now() - t0;
     sendSnapshot(w);
-
-    // Profile-window accumulation. `sendSnapshot` set `lastSnapshotMs`
-    // and `profileSnapshotBytesLast` as side-effects above.
-    profileStepMsSum += lastMsPerTick;
-    profileSnapshotMsSum += lastSnapshotMs;
-    profileTicks += 1;
-    if (profileTicks >= PROFILE_WINDOW) {
-      const stepAvg = profileStepMsSum / profileTicks;
-      const snapAvg = profileSnapshotMsSum / profileTicks;
-      const cells = w.cellCount();
-      const snapKB = profileSnapshotBytesLast / 1024;
-      // eslint-disable-next-line no-console -- throwaway profile log
-      console.log(
-        `[profile] tick=${w.tick()} cells=${cells} ` +
-          `step=${stepAvg.toFixed(2)}ms snap=${snapAvg.toFixed(2)}ms ` +
-          `snap_bytes=${snapKB.toFixed(0)}KB ` +
-          `frame_budget=${(stepAvg + snapAvg).toFixed(2)}ms ` +
-          `(${(((stepAvg + snapAvg) / 16.67) * 100).toFixed(0)}% of 60Hz)`,
-      );
-      profileTicks = 0;
-      profileStepMsSum = 0;
-      profileSnapshotMsSum = 0;
-    }
   }
 
   function loop(): void {

@@ -204,9 +204,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Rust toolchain
+      - name: Set up Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          targets: wasm32-unknown-unknown
+
+      # Pinned nightly for the threaded WASM build. Must match
+      # `scripts/_wasm-threaded-toolchain.sh`'s `WASM_THREADED_TOOLCHAIN`
+      # — `scripts/build-wasm.sh` reads it via `RUSTUP_TOOLCHAIN` env to
+      # override the workspace's stable pin for just that one invocation.
+      # `rust-src` is required by `-Z build-std` (which rebuilds `std`
+      # with the wasm32 atomics target-feature enabled).
+      - name: Set up Rust nightly toolchain (threaded WASM)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-15
+          components: rust-src
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry + target
@@ -216,7 +229,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-deploy-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: cargo-${{ runner.os }}-deploy-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml', 'scripts/_wasm-threaded-toolchain.sh') }}
           restore-keys: |
             cargo-${{ runner.os }}-deploy-
             cargo-${{ runner.os }}-
@@ -226,8 +239,16 @@ jobs:
         with:
           tool: wasm-pack
 
-      - name: Build WASM bundle
-        run: wasm-pack build crates/aenternis-wasm --target web --release
+      # The threaded build produces a `pkg/` bundle with
+      # `wasm-bindgen-rayon`'s `init_thread_pool` export and a shared-
+      # memory `WebAssembly.Memory`. Runtime requires the host page to
+      # be `crossOriginIsolated` — handled by `web/coi-serviceworker.js`
+      # on GitHub Pages (which can't set COOP/COEP headers natively).
+      # If the threaded build ever needs to be disabled (e.g. nightly
+      # toolchain regression), swap this back to
+      # `wasm-pack build crates/aenternis-wasm --target web --release`.
+      - name: Build threaded WASM bundle
+        run: bash scripts/build-wasm.sh
 
       - name: Set up Node
         uses: actions/setup-node@v6
