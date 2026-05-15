@@ -462,11 +462,21 @@
     natively (notably GitHub Pages), this Service Worker registers
     itself on first load, then intercepts subsequent fetches and
     rewrites them with `Cross-Origin-Opener-Policy: same-origin` +
-    `Cross-Origin-Embedder-Policy: require-corp`. After the SW
+    `Cross-Origin-Embedder-Policy: credentialless`. After the SW
     activates the script reloads the page once, and from that point
     on `window.crossOriginIsolated` is true — which is what
     `wasm-bindgen-rayon` needs to enable `SharedArrayBuffer` and
     spawn the worker pool.
+
+    Loaded from the project root (one level above `web/`) on purpose
+    — the SW's default scope is the directory of its script URL, so
+    a root-level script gets scope `/` (dev) or `/aenternis/`
+    (Pages). That breadth matters: the threaded WASM bundle loads
+    `crates/aenternis-wasm/pkg/snippets/wasm-bindgen-rayon-*/src/
+    workerHelpers.js` from a sibling subtree to `web/`, which a
+    `web/`-scoped SW would not intercept — the rayon worker fetch
+    would then hit GitHub Pages' default headers and the browser
+    would block it because the page is `crossOriginIsolated`.
 
     Must precede the main module: the page reload it triggers has to
     happen before the WASM bootstrap runs. On hosts that *do* set the
@@ -474,7 +484,7 @@
     script becomes a no-op — `crossOriginIsolated` is already true,
     `shouldRegister()` returns false, the SW never installs.
   -->
-  <script src="./coi-serviceworker.js"></script>
+  <script src="../coi-serviceworker.js"></script>
 
   <!--
     Production-deployed `main.js` is the tsc emit of `main.ts`. In Vite

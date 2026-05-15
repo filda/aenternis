@@ -284,12 +284,13 @@ jobs:
           cp -r docs _site/
           cp web/index.html _site/web/index.html
           cp dist/web/*.js _site/web/
-          # Plain-JS static assets in web/ that tsc doesn't compile (it
-          # only touches `.ts` sources). Without this, the threaded
-          # WASM bundle can't init on GitHub Pages: the SW shim is the
-          # only path that makes `crossOriginIsolated` true on a host
-          # that can't set COOP/COEP headers natively.
-          cp web/coi-serviceworker.js _site/web/
+          # coi-serviceworker.js lives at the repo root so its default
+          # SW scope is `/aenternis/` on Pages (not `/aenternis/web/`),
+          # which is required to intercept fetches from `crates/
+          # aenternis-wasm/pkg/snippets/wasm-bindgen-rayon-*/`. Without
+          # this scope breadth, the rayon worker bootstrap can't load
+          # its helper scripts under a `crossOriginIsolated` page.
+          cp coi-serviceworker.js _site/
           cp dist/src/*.js _site/src/
           mkdir -p _site/crates/aenternis-wasm
           cp -r crates/aenternis-wasm/pkg _site/crates/aenternis-wasm/pkg
