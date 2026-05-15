@@ -46,6 +46,19 @@ use wasm_bindgen::prelude::*;
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
+/// Runs once when the WASM module is instantiated. Installs the
+/// `console_error_panic_hook` so any subsequent Rust panic surfaces in
+/// the browser DevTools console as a real error message instead of an
+/// opaque `RuntimeError: unreachable`. `set_once()` is idempotent and
+/// thread-local-aware, so it also covers every worker thread that
+/// `wasm-bindgen-rayon` spawns (each one re-instantiates the module
+/// and re-runs the start function on its own context).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn __aenternis_wasm_start() {
+    console_error_panic_hook::set_once();
+}
+
 /// Aenternis simulation world handle.
 ///
 /// Constructed with [`World::new`], stepped with [`World::step`],

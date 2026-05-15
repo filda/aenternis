@@ -16,6 +16,13 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 aenternis-core = { path = "../aenternis-core" }
 wasm-bindgen = "0.2"
+# Rust panics on `wasm32-unknown-unknown` abort via the `unreachable`
+# instruction by default, with no diagnostic message — JS sees only
+# `RuntimeError: unreachable`. This crate installs a panic hook that
+# pipes the panic payload + Rust source location to `console.error`,
+# turning every panic into something actually debuggable. Tiny crate
+# (~few KB), no runtime cost unless a panic actually fires.
+console_error_panic_hook = "0.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Re-exported through the `wasm-threads` feature for JS to call
