@@ -38,7 +38,11 @@
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-#[cfg(not(target_arch = "wasm32"))]
+// Rayon prelude is needed on every target where `par_iter_mut` is
+// callable — native unconditionally, plus wasm32 with `wasm-threads`
+// (via `wasm-bindgen-rayon`). Keep the cfg in lockstep with
+// `par_iter_mut`'s own gate below.
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 use rayon::prelude::*;
 
 use crate::{Cell, Coord};
@@ -213,7 +217,14 @@ impl Cells {
     /// Mirrors the old `FxHashMap::par_iter_mut` semantics — order
     /// is unspecified but iteration is bit-parity-safe because the
     /// per-cell closures are order-independent.
-    #[cfg(not(target_arch = "wasm32"))]
+    ///
+    /// Available on every target where rayon ships: native targets
+    /// unconditionally, plus wasm32 with the `wasm-threads` feature
+    /// (via `wasm-bindgen-rayon`). The macro callsite in
+    /// [`crate::parallel::par_or_seq_iter_mut!`] is gated to the same
+    /// cfg, so callers never reach this method on a target that
+    /// doesn't have it.
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
     pub(crate) fn par_iter_mut(
         &mut self,
     ) -> impl ParallelIterator<Item = (&Coord, &mut Cell)> + '_ {

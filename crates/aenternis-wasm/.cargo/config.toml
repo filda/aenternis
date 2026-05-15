@@ -1,0 +1,24 @@
+# Project-scoped cargo configuration for the WASM threaded build.
+#
+# `unstable.build-std` rebuilds `std` and `panic_abort` from source.
+# Required by `wasm-bindgen-rayon` because the prebuilt
+# `wasm32-unknown-unknown` `std` is not compiled with the
+# `+atomics,+bulk-memory,+mutable-globals` target-features that
+# pthread support depends on — without a local std rebuild they're
+# enabled at the user-crate level but absent in std's compiled
+# objects, which mismatches at link time. The matching `RUSTFLAGS`
+# come from `scripts/build-wasm.sh`.
+#
+# `-Z build-std` is nightly-only; on stable the whole `[unstable]`
+# section is silently ignored. The workspace's `rust-toolchain.toml`
+# pins stable for everyday work — only `scripts/build-wasm.sh`
+# overrides to a pinned nightly (via `RUSTUP_TOOLCHAIN` env), so the
+# `cargo +stable` default workflow never triggers the std rebuild.
+#
+# We tried passing `-Z build-std=...` through `wasm-pack build ... --
+# -Z build-std=...` first, but the current `wasm-pack` binary rejects
+# the `-Z` argument (clap-style "unexpected argument"). The config-
+# file route bypasses that parsing entirely.
+
+[unstable]
+build-std = ["panic_abort", "std"]

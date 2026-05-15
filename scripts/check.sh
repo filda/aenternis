@@ -30,6 +30,13 @@ LOG="${REPORT_DIR}/rust-check.log"
 mkdir -p "${REPORT_DIR}"
 : > "${LOG}"
 
+# Pinned nightly + predicate, shared with scripts/build-wasm.sh. We use
+# the predicate below to pick between threaded and default wasm-pack
+# builds, so the gate's wasm step leaves `pkg/` matching whichever
+# bundle the dev's runtime is going to want.
+# shellcheck source=_wasm-threaded-toolchain.sh
+source "$(dirname "$0")/_wasm-threaded-toolchain.sh"
+
 # Cross-platform ISO-8601 timestamp. GNU `date -Iseconds` is fine on Linux
 # but BusyBox/MinGW date may not support it; fall back to plain UTC format.
 timestamp() {
@@ -77,12 +84,37 @@ step "tests"   "${CARGO[@]}" test --workspace                                   
 # step "tests"   "${CARGO[@]}" install cargo-llvm-cov                              || OVERALL=1
 # step "tests"   "${CARGO[@]}" llvm-cov --workspace --html                         || OVERALL=1
 
-# Optional WASM bundle build. Skipped if wasm-pack isn't on PATH so the
-# script keeps working before the toolchain is set up. When present, the
-# step verifies the aenternis-wasm crate compiles to WebAssembly and
-# wasm-bindgen produces a usable JS bundle.
+# Optional WASM bundle build. Skipped if wasm-pack isn't on PATH so
+# the script keeps working before the toolchain is set up.
+#
+# Dispatch: when the pinned nightly toolchain (`rust-src` included) is
+# installed, build with the `wasm-threads` feature. That way the
+# gate's wasm step leaves `pkg/` containing a threaded bundle —
+# matching what `web/worker.ts` initializes at runtime when the host
+# page is `crossOriginIsolated`. Without this dispatch the gate would
+# silently overwrite `pkg/` with the single-threaded bundle every run,
+# breaking threading on the next dev session until `build-wasm.sh` is
+# manually re-run.
+#
+# Fallback path (no nightly available) builds the default single-
+# threaded bundle, same as before. Both paths exercise wasm-bindgen +
+# wasm-opt, so the gate's "the crate compiles to wasm and packages"
+# guarantee is preserved either way.
 if command -v wasm-pack >/dev/null 2>&1; then
-    step "wasm-pack" wasm-pack build crates/aenternis-wasm --target web   || OVERALL=1
+    if wasm_threaded_build_available; then
+        # Same `RUSTFLAGS` + config.toml + nightly setup as
+        # scripts/build-wasm.sh; kept inline rather than delegated so
+        # output lands in this single log file. See build-wasm.sh's
+        # RUSTFLAGS comment for what each flag does and why it's
+        # required.
+        RUSTUP_TOOLCHAIN="${WASM_THREADED_TOOLCHAIN}" \
+        RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
+        step "wasm-pack (threaded)" \
+            wasm-pack build crates/aenternis-wasm --target web --features wasm-threads \
+            || OVERALL=1
+    else
+        step "wasm-pack" wasm-pack build crates/aenternis-wasm --target web   || OVERALL=1
+    fi
 else
     {
         echo

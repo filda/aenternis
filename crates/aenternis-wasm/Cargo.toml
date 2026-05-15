@@ -29,5 +29,20 @@ wasm-bindgen-rayon = { version = "1.2", optional = true }
 # `docs/plan-wasm-zerocopy-threads.md` § 3B.
 wasm-threads = ["aenternis-core/wasm-threads", "dep:wasm-bindgen-rayon"]
 
+# wasm-pack runs `wasm-opt` after wasm-bindgen by default. The default
+# invocation strips the shared-memory and atomics declarations from
+# the binary because wasm-opt's WASM-MVP baseline doesn't include
+# them — which silently turns a threaded build into a single-threaded
+# one at runtime (`postMessage` then fails with `DataCloneError:
+# #<Memory> could not be cloned` because non-shared memory isn't
+# structured-cloneable). The explicit `--enable-*` flags below tell
+# wasm-opt to preserve those features.
+#
+# Applies equally to the default single-threaded build — the flags
+# are no-ops on a binary that doesn't use atomics, so we keep them
+# unconditional rather than feature-gated.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-O', '--enable-threads', '--enable-bulk-memory', '--enable-mutable-globals']
+
 [lints]
 workspace = true
