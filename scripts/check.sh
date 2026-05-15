@@ -112,6 +112,13 @@ if command -v wasm-pack >/dev/null 2>&1; then
         step "wasm-pack (threaded)" \
             wasm-pack build crates/aenternis-wasm --target web --features wasm-threads \
             || OVERALL=1
+        # Mirror build-wasm.sh's post-build patch — see the function
+        # header in `_wasm-threaded-toolchain.sh` for why.
+        patch_wasm_bindgen_rayon_worker_helpers
+        # Same gate as build-wasm.sh — catches build-flag regressions
+        # and missed patches before the bundle ships.
+        step "verify-threaded-wasm" bash scripts/verify-threaded-wasm.sh \
+            || OVERALL=1
     else
         step "wasm-pack" wasm-pack build crates/aenternis-wasm --target web   || OVERALL=1
     fi

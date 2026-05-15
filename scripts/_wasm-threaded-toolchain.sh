@@ -35,3 +35,23 @@ wasm_threaded_build_available() {
         || return 1
     return 0
 }
+
+# Post-build patch on `wasm-bindgen-rayon`'s worker bootstrap. The
+# generated `workerHelpers.js` contains `await import('../../..')`,
+# which resolves a *directory* (`pkg/`) to its main module via
+# `package.json`. That works under bundlers (Vite, Webpack, Rollup
+# — they follow package.json at build time), but native ES modules
+# in a plain browser don't read `package.json` and just fetch the
+# bare directory URL — which a static host like GitHub Pages
+# returns as 404, and the rayon worker pool fails to bootstrap.
+#
+# Patch the directory import to an explicit file reference so the
+# pkg/ bundle works under both bundler-driven dev (Vite) and
+# bundlerless production (GitHub Pages). The replacement points
+# to `aenternis_wasm.js` directly — same target the package.json
+# resolution would have picked anyway.
+patch_wasm_bindgen_rayon_worker_helpers() {
+    find crates/aenternis-wasm/pkg/snippets -name 'workerHelpers.js' -print0 \
+        | xargs -0 --no-run-if-empty \
+            sed -i "s|import('../../..')|import('../../../aenternis_wasm.js')|g"
+}

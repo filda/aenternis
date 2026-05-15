@@ -96,6 +96,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # `tests/web/wasm-bundle.smoke.test.ts` needs the wasm-pack
+      # output to exist; without it the smoke `describe` block skips
+      # and we lose CI coverage for the single-thread bundle path.
+      # Single-threaded build is enough here (only ~10 s once cached)
+      # — the smoke test doesn't call `initThreadPool` because
+      # happy-dom can't host the rayon worker pool. Threaded-build
+      # smoke runs in the `deploy` job's verifier step instead.
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-test-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-test-
+            cargo-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build WASM bundle (single-threaded, for smoke tests)
+        run: wasm-pack build crates/aenternis-wasm --target web --release
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
@@ -303,6 +335,42 @@ jobs:
           # Jekyll features used — disable it entirely.
           touch _site/.nojekyll
           sed -i 's|href="/|href="|g' _site/index.html
+
+      # Tier-2 verification: assert that the assembled `_site/` has
+      # every artifact the threaded WASM bundle needs at runtime. The
+      # per-pkg verifier (`scripts/verify-threaded-wasm.sh`) already
+      # ran inside the build step on `crates/aenternis-wasm/pkg/`;
+      # this catches the *deploy*-specific regressions — the copy
+      # commands above missing a file, GitHub Pages' Jekyll filter
+      # silently dropping a path, the SW shim landing in the wrong
+      # directory. Each check names the bug class it catches so a
+      # failure tells the next dev exactly where to look.
+      - name: Verify deploy site has every threaded-WASM artifact
+        run: |
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+
+          # `.nojekyll` at site root — without it GitHub Pages runs
+          # Jekyll which silently drops files under `pkg/snippets/`.
+          [ -f _site/.nojekyll ] \
+            || fail ".nojekyll missing — Jekyll will eat pkg/snippets/*"
+
+          # coi-serviceworker at site root — its SW scope is the
+          # directory it's served from, and we need scope `/aenternis/`
+          # to intercept fetches for `pkg/snippets/.../workerHelpers.js`.
+          # If the file is only in `_site/web/`, scope is too narrow.
+          [ -f _site/coi-serviceworker.js ] \
+            || fail "coi-serviceworker.js not at site root — SW scope will be too narrow to cover crates/, threading will fail under crossOriginIsolated"
+
+          # workerHelpers.js must have made it through cp -r and the
+          # post-build patch must still be in place.
+          helpers="$(find _site/crates/aenternis-wasm/pkg/snippets \
+                          -name workerHelpers.js 2>/dev/null | head -1 || true)"
+          [ -n "$helpers" ] \
+            || fail "workerHelpers.js missing from _site/ — threading bootstrap will fail"
+          grep -q "import('../../../aenternis_wasm.js')" "$helpers" \
+            || fail "$helpers has unpatched import('../../..') — production deploy will 404 on pkg/"
+
+          echo "OK: _site has every threaded-WASM artifact in the right place"
 
       # Stamp the deployed pages with package version, short commit
       # SHA, and build date so a viewer can tell which release they're

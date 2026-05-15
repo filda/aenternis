@@ -202,6 +202,19 @@ step "wasm-pack" wasm-pack build crates/aenternis-wasm \
     --features wasm-threads \
     || OVERALL=1
 
+# Post-build: rewrite `import('../../..')` in wasm-bindgen-rayon's
+# worker bootstrap to an explicit file URL. See the function's
+# header for why this is necessary on a bundlerless production
+# host like GitHub Pages.
+patch_wasm_bindgen_rayon_worker_helpers
+
+# Final gate before declaring the build OK: run the artifact-shape
+# verifier on the freshly built `pkg/`. Each check there names the
+# class of regression it catches; if anything fires, the error
+# message points straight at the misbehaving step.
+step "verify-threaded-wasm" bash scripts/verify-threaded-wasm.sh \
+    || OVERALL=1
+
 {
     echo
     echo "==================================================================="
