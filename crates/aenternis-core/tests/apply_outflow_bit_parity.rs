@@ -1,7 +1,7 @@
 //! Reference state hashes — bit-parity baseline for refactors that
-//! must preserve `apply_outflow` semantics (e.g.
-//! `docs/plan-apply-outflow-splice.md`, which replaces the per-insert
-//! `Vec::splice` with a rope-based merge).
+//! must preserve `apply_outflow` semantics (e.g. the rope-based merge
+//! that replaced the per-insert `Vec::splice`; see
+//! `docs/optimalizace-2026-05.md`).
 //!
 //! Each scenario runs a deterministic `SparseWorld` for a fixed number
 //! of ticks. After each tick the full per-cell state is hashed with

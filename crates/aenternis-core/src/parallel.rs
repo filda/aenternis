@@ -20,7 +20,7 @@
 //! `#[inline(always)]`) and a `macro_rules!` form were benched against
 //! open-coded `par_iter_mut` on the parallel path
 //! (`tick_step/dense_grid/side_32`, 32 768 cells, see
-//! `docs/plan-par-or-seq.md` § 6). Both showed a ~40 % regression vs.
+//! `docs/optimalizace-2026-05.md`). Both showed a ~40 % regression vs.
 //! the original code despite producing structurally similar IR. The
 //! macro is chosen because it carries the size-threshold dispatch
 //! and the `#[cfg]` fan-out without the function-call layer, and
@@ -50,7 +50,7 @@
 /// Below this many entries the per-tick walks stay on the sequential
 /// path. At or above it, rayon's `par_iter_mut` takes over.
 ///
-/// First-guess value from `docs/plan-par-or-seq.md` § 3. Calibrate
+/// First-guess value, see `docs/optimalizace-2026-05.md`. Calibrate
 /// against `cargo bench --bench tick` (`tick_step/cold/*` should
 /// improve, `tick_step/dense_grid/*` should stay flat). Tunable only
 /// at compile time — a runtime branch inside the per-cell loop is the

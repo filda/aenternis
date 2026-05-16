@@ -11,7 +11,7 @@
 //! these, a future refactor could break per-tick isotropy at a level
 //! that the function-level contracts can't see, and the bug would only
 //! show up visually after thousands of ticks (the pattern that
-//! originally motivated `plan-isotropie.md`).
+//! originally motivated the isotropy work in `docs/optimalizace-2026-05.md`).
 //!
 //! Two angles:
 //!

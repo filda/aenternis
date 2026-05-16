@@ -14,8 +14,7 @@
 // context — that either deadlocks on `Atomics.wait` or fakes
 // concurrency in a way that doesn't exercise the real race-sensitive
 // code path. Bugs that only manifest under true threading need a
-// headless-browser smoke (see `docs/plan-wasm-zerocopy-threads.md` §
-// 6 "Bit-parita native vs WASM").
+// headless-browser smoke (see `docs/optimalizace-2026-05.md`).
 //
 // **Conditionally skipped** when `crates/aenternis-wasm/pkg/` is
 // missing. The vitest job in CI doesn't currently run `wasm-pack

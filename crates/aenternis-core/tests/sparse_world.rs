@@ -472,7 +472,7 @@ fn coords_yields_just_inserted_keys() {
     assert!(keys.contains(&Coord::new(5, 0, 0)));
 }
 
-// ----- sorted index + bbox cache (plan-sorted-index-bbox.md) -----
+// ----- sorted index + bbox cache (see docs/optimalizace-2026-05.md) -----
 
 #[test]
 fn big_bang_initializes_cache() {

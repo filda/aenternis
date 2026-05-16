@@ -18,7 +18,7 @@ rustc-hash = { workspace = true }
 # routes through `wasm-bindgen-rayon`, which needs COOP/COEP headers
 # (or a `coi-serviceworker` shim) in the host page and a nightly Rust
 # toolchain with `-Z build-std` for atomics-enabled `std`. See
-# `docs/plan-wasm-zerocopy-threads.md` § 3B for the full setup.
+# `docs/optimalizace-2026-05.md` for the full setup.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 

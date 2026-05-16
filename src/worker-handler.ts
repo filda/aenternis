@@ -29,7 +29,7 @@ import {
  *  that **alias WASM linear memory** — callers must copy the data
  *  (e.g. `new Uint32Array(view)`) before any further WASM call. The
  *  view's `.buffer` is the WASM memory itself; never transfer it via
- *  `postMessage`. See `docs/plan-wasm-zerocopy-threads.md` § 2A. */
+ *  `postMessage`. See `docs/optimalizace-2026-05.md`. */
 export interface WorldHandle {
   free(): void;
   setMoveThreshold(t: number): void;

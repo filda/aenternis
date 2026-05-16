@@ -8,8 +8,9 @@
 //! **Status: archival.** This harness was the cell-by-cell comparison
 //! point against JS laboratory prototype 9-B during the Rust core port.
 //! Bit-parity with that prototype was a working contract through
-//! 2026-05-12 (`docs/plan-isotropie.md`); after the Largest-Remainder
-//! shuffle landed in commit `3737536` and the `apply_outflow` rope
+//! 2026-05-12 (see `docs/optimalizace-2026-05.md`); after the
+//! Largest-Remainder shuffle landed in commit `3737536` and the
+//! `apply_outflow` rope
 //! merge landed in `26d7d53`, the Rust core's per-cell stream is no
 //! longer expected to match the JS dump exactly. The test stays as
 //! `#[ignore]` (never in CI) for forensic value: if a future

@@ -37,7 +37,7 @@ js-sys = "0.3"
 [features]
 # Forwards to `aenternis-core`'s `wasm-threads` feature, which pulls in
 # rayon + the wasm-bindgen pthread bridge. See
-# `docs/plan-wasm-zerocopy-threads.md` § 3B.
+# `docs/optimalizace-2026-05.md`.
 wasm-threads = ["aenternis-core/wasm-threads", "dep:wasm-bindgen-rayon"]
 
 # wasm-pack runs `wasm-opt` after wasm-bindgen by default. The default

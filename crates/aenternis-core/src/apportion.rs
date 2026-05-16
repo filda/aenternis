@@ -4,8 +4,8 @@
 //! [`crate::cell::proportional_clamp`]. Both functions previously held
 //! an open-coded copy of the same Hamilton/Hare distribution + Fisher-
 //! Yates tie-break; this module centralizes the implementation so a
-//! future algorithmic fix (e.g. the deterministic-round work tracked in
-//! `docs/plan-deterministicky-round.md`) touches one place, not two.
+//! future algorithmic fix (e.g. the deterministic-round work, see
+//! `docs/optimalizace-2026-05.md`) touches one place, not two.
 //!
 //! ## Algorithm
 //!

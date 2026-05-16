@@ -35,7 +35,7 @@
 // file, each with a SAFETY comment naming the JS-side contract (copy
 // before any further WASM call). Workspace-wide `unsafe_code = "deny"`
 // is overridden here, not at the workspace level, so every other crate
-// stays unsafe-free. See `docs/plan-wasm-zerocopy-threads.md` § 2A.
+// stays unsafe-free. See `docs/optimalizace-2026-05.md`.
 #![allow(unsafe_code)]
 
 use aenternis_core::{tick, SparseWorld};
@@ -55,7 +55,7 @@ use wasm_bindgen::prelude::*;
 // configurations without the feature this re-export is absent and JS
 // must not call it (and doesn't need to — the bundle is single-
 // threaded). See `scripts/build-wasm.sh` for the threaded build, and
-// `docs/plan-wasm-zerocopy-threads.md` § 3B for the JS-side setup.
+// `docs/optimalizace-2026-05.md` for the JS-side setup.
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
@@ -273,7 +273,7 @@ impl World {
         // `new Uint32Array(view)` or `.slice()`) before any further
         // call into WASM, and must not `postMessage`-transfer the
         // underlying buffer. Both invariants are documented above and
-        // in `docs/plan-wasm-zerocopy-threads.md` § 4.
+        // in `docs/optimalizace-2026-05.md`.
         unsafe { Uint32Array::view(&self.snapshot_buf[..]) }
     }
 
