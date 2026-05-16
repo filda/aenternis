@@ -29,6 +29,10 @@ console_error_panic_hook = "0.1"
 # `init_thread_pool` via `wasm-bindgen`. Inactive when the feature is
 # off — single-threaded WASM bundle has no rayon footprint.
 wasm-bindgen-rayon = { version = "1.2", optional = true }
+# `js_sys::Uint32Array::view` backs the zero-copy snapshot path
+# (`cells_snapshot_view` / `cell_inspect_view`). Pulled in only on the
+# wasm32 target — on the host these methods don't compile.
+js-sys = "0.3"
 
 [features]
 # Forwards to `aenternis-core`'s `wasm-threads` feature, which pulls in

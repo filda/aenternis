@@ -37,4 +37,28 @@ exclude_re = [
     #
     # Both are truly observation-equivalent.
     "tick\\.rs:.*replace > with >= in compute_natural_rates",
+
+    # wasm32-only entry points in `aenternis-wasm/src/lib.rs`.
+    # `cells_snapshot_view`, `cell_inspect_view`, and the
+    # `__aenternis_wasm_start` panic-hook init are all gated to
+    # `#[cfg(target_arch = "wasm32")]`. cargo-mutants runs against the
+    # host target, where these functions are absent from compilation —
+    # any mutation is unreachable by construction. The wasm32-only
+    # surface is verified end-to-end by `tests/web/wasm-bundle.smoke
+    # .test.ts` against the built `pkg/` bundle and by the manual
+    # browser flow on the WASM viewer.
+    "aenternis-wasm/src/lib\\.rs:.*replace __aenternis_wasm_start",
+    "aenternis-wasm/src/lib\\.rs:.*replace World::cells_snapshot_view",
+    "aenternis-wasm/src/lib\\.rs:.*replace World::cell_inspect_view",
+
+    # `Vec::reserve(n)` arithmetic in the `fill_*_buf` helpers. Reserve
+    # is a capacity hint; the subsequent push/extend loop writes the
+    # exact same bytes regardless of `n`. Mutating `len() * STRIDE` to
+    # `len() + STRIDE` (or `... / ...`, or `prefix + memlen` to
+    # `prefix * memlen`) only changes the number of internal Vec
+    # reallocations during fill — not observable through any public
+    # output. The content equality is pinned by every snapshot/inspect
+    # test in `crates/aenternis-wasm/tests/world.rs`.
+    "aenternis-wasm/src/lib\\.rs:.*replace \\* with [+/] in World::fill_snapshot_buf",
+    "aenternis-wasm/src/lib\\.rs:.*replace \\+ with \\* in World::fill_inspect_buf",
 ]

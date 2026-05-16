@@ -18,7 +18,7 @@ fn new_constructs_world_with_initial_energy() {
 
 #[test]
 fn new_with_program_writes_prefix() {
-    let w = World::new_with_program(7, 16, &[0xCAFE, 0xBABE]);
+    let mut w = World::new_with_program(7, 16, &[0xCAFE, 0xBABE]);
     assert_eq!(w.cell_count(), 1);
     assert_eq!(w.total_energy(), 16);
     let dump = w.cell_inspect(0, 0, 0);
@@ -29,8 +29,8 @@ fn new_with_program_writes_prefix() {
 
 #[test]
 fn new_with_empty_program_matches_new() {
-    let a = World::new(42, 32);
-    let b = World::new_with_program(42, 32, &[]);
+    let mut a = World::new(42, 32);
+    let mut b = World::new_with_program(42, 32, &[]);
     let dump_a = a.cell_inspect(0, 0, 0);
     let dump_b = b.cell_inspect(0, 0, 0);
     assert_eq!(dump_a, dump_b);
@@ -218,7 +218,7 @@ fn snapshot_stride_getter_returns_six() {
 
 #[test]
 fn inspect_returns_empty_for_missing_cell() {
-    let w = World::new(0, 0);
+    let mut w = World::new(0, 0);
     assert!(w.cell_inspect(0, 0, 0).is_empty());
 }
 
@@ -230,7 +230,7 @@ fn inspect_prefix_getter_returns_28() {
 
 #[test]
 fn inspect_layout_after_big_bang() {
-    let w = World::new(7, 16);
+    let mut w = World::new(7, 16);
     let dump = w.cell_inspect(0, 0, 0);
     assert_eq!(dump.len(), 28 + 16);
     // pc starts at 0
@@ -263,9 +263,35 @@ fn inspect_for_origin_after_step_reflects_state() {
 
 #[test]
 fn inspect_returns_empty_for_void_neighbor() {
-    let w = World::new(7, 100);
+    let mut w = World::new(7, 100);
     // The big-bang cell sits at origin; (5, 5, 5) is void.
     assert!(w.cell_inspect(5, 5, 5).is_empty());
+}
+
+#[test]
+fn cell_inspect_reuse_buffer_back_to_back() {
+    // Two inspects of the same cell, no intervening mutation, must
+    // return identical content — the persistent `inspect_buf`'s
+    // clear-and-refill semantics must not leak stale bytes.
+    let mut w = World::new(0xCAFE, 50);
+    let first = w.cell_inspect(0, 0, 0);
+    let second = w.cell_inspect(0, 0, 0);
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 28 + 50);
+}
+
+#[test]
+fn cell_inspect_reuse_buffer_across_different_coords() {
+    // Inspect a populated cell, then a void coord — the second call
+    // must yield an empty result, not the leftover bytes of the first.
+    let mut w = World::new(0xCAFE, 50);
+    let populated = w.cell_inspect(0, 0, 0);
+    assert!(!populated.is_empty());
+    let void = w.cell_inspect(99, 99, 99);
+    assert!(
+        void.is_empty(),
+        "void cell must return empty, got {populated:?}"
+    );
 }
 
 // ----- bounding_box ----------------------------------------------------------

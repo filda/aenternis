@@ -21,7 +21,12 @@ authors = ["Filip Subr"]
 repository = "https://github.com/filipsubr/aenternis"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` (not `forbid`) so that a single, justified `#![allow(unsafe_code)]`
+# can land where the WASM boundary needs it — `aenternis-wasm/src/lib.rs`
+# wraps `js_sys::Uint32Array::view`, which is the wasm-bindgen idiom for
+# zero-copy snapshot views. Every other crate stays unsafe-free; any new
+# `unsafe` in core / server is still a hard error.
+unsafe_code = "deny"
 missing_docs = "warn"
 unreachable_pub = "warn"
 

@@ -23,17 +23,23 @@ import {
 /** Minimal subset of the `wasm-bindgen`-generated `World` API that the
  *  handler depends on. The real `World` from
  *  `crates/aenternis-wasm/pkg/aenternis_wasm.js` is structurally
- *  compatible. */
+ *  compatible.
+ *
+ *  `cellsSnapshotView` and `cellInspectView` return `Uint32Array`s
+ *  that **alias WASM linear memory** — callers must copy the data
+ *  (e.g. `new Uint32Array(view)`) before any further WASM call. The
+ *  view's `.buffer` is the WASM memory itself; never transfer it via
+ *  `postMessage`. See `docs/plan-wasm-zerocopy-threads.md` § 2A. */
 export interface WorldHandle {
   free(): void;
   setMoveThreshold(t: number): void;
   step(coeff: number, k: number): void;
-  cellsSnapshot(): Uint32Array;
+  cellsSnapshotView(): Uint32Array;
   boundingBox(): Int32Array;
   tick(): number;
   cellCount(): number;
   totalEnergy(): number;
-  cellInspect(x: number, y: number, z: number): Uint32Array;
+  cellInspectView(x: number, y: number, z: number): Uint32Array;
   readonly snapshotStride: number;
   readonly inspectPrefix: number;
 }
@@ -76,7 +82,13 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
   // otherwise leak as a surviving mutant.
 
   function sendSnapshot(w: WorldHandle): void {
-    const snap = w.cellsSnapshot();
+    // `cellsSnapshotView` aliases WASM linear memory; copy out into an
+    // owned `Uint32Array` *before* any further WASM call (the next call
+    // may grow memory or reallocate the underlying `Vec`, invalidating
+    // the view) and *before* the `postMessage` transfer (the view's
+    // `.buffer` is the WASM memory — transferring it would detach it).
+    const view = w.cellsSnapshotView();
+    const snap = new Uint32Array(view);
     const bbox = w.boundingBox();
     const msg: SnapshotMsg = {
       type: 'snapshot',
@@ -92,7 +104,10 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
   }
 
   function sendCellDetail(w: WorldHandle, x: number, y: number, z: number): void {
-    const data = w.cellInspect(x, y, z);
+    // Same WASM-memory-aliasing contract as `sendSnapshot` — copy
+    // before any further WASM call or the postMessage transfer.
+    const view = w.cellInspectView(x, y, z);
+    const data = new Uint32Array(view);
     const msg: CellDetailMsg = {
       type: 'cellDetail',
       x,

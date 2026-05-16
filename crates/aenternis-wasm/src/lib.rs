@@ -27,7 +27,20 @@
 //! single-`u32` seed gives `2^32` distinct simulations — plenty for a
 //! prototype, and easy to upgrade to `u64`/`BigInt` later if needed.
 
+// `js_sys::Uint32Array::view` backs the zero-copy snapshot path
+// (`cells_snapshot_view`, `cell_inspect_view`) and is `unsafe` because
+// the returned view aliases WASM linear memory: a subsequent call into
+// WASM that grows memory or reallocates the underlying `Vec` would
+// invalidate it. The unsafety is contained to two callsites in this
+// file, each with a SAFETY comment naming the JS-side contract (copy
+// before any further WASM call). Workspace-wide `unsafe_code = "deny"`
+// is overridden here, not at the workspace level, so every other crate
+// stays unsafe-free. See `docs/plan-wasm-zerocopy-threads.md` § 2A.
+#![allow(unsafe_code)]
+
 use aenternis_core::{tick, SparseWorld};
+#[cfg(target_arch = "wasm32")]
+use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
 
 // When the `wasm-threads` feature is on (and we're building for
@@ -68,11 +81,19 @@ pub fn __aenternis_wasm_start() {
 #[wasm_bindgen]
 pub struct World {
     inner: SparseWorld,
-    /// Persistent scratch buffer for [`World::cells_snapshot`].
-    /// Reused across ticks so the steady-state cost is a `clear` +
-    /// fill rather than a fresh allocation per snapshot; capacity
-    /// grows monotonically to peak cell count.
+    /// Persistent scratch buffer for [`World::cells_snapshot`] and
+    /// [`World::cells_snapshot_view`]. Reused across ticks so the
+    /// steady-state cost is a `clear` + fill rather than a fresh
+    /// allocation per snapshot; capacity grows monotonically to peak
+    /// cell count. The view variant returns a `Uint32Array` that
+    /// aliases this buffer's WASM-memory storage directly.
     snapshot_buf: Vec<u32>,
+    /// Persistent scratch buffer for [`World::cell_inspect`] and
+    /// [`World::cell_inspect_view`]. Smaller than `snapshot_buf` (one
+    /// cell's worth of memory, not the whole world), but the same
+    /// reuse rationale: avoid a per-call allocation, and own the
+    /// backing storage for the zero-copy view path.
+    inspect_buf: Vec<u32>,
 }
 
 #[wasm_bindgen]
@@ -89,6 +110,7 @@ impl World {
         Self {
             inner: SparseWorld::big_bang(u64::from(seed), energy),
             snapshot_buf: Vec::new(),
+            inspect_buf: Vec::new(),
         }
     }
 
@@ -107,6 +129,7 @@ impl World {
         Self {
             inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
             snapshot_buf: Vec::new(),
+            inspect_buf: Vec::new(),
         }
     }
 
@@ -217,24 +240,41 @@ impl World {
     /// the working buffer's capacity is retained across calls and
     /// the steady-state per-tick allocation cost vanishes after the
     /// first peak-sized world.
+    ///
+    /// For the zero-copy variant that skips the Rust-side clone, see
+    /// [`World::cells_snapshot_view`].
     #[must_use]
     #[wasm_bindgen(js_name = cellsSnapshot)]
     pub fn cells_snapshot(&mut self) -> Vec<u32> {
-        self.snapshot_buf.clear();
-        self.snapshot_buf
-            .reserve(self.inner.len() * Self::SNAPSHOT_STRIDE);
-        // sorted_iter walks cells in `(x, y, z)` lex order — the snapshot's
-        // documented contract. The world's internal FxHashMap iterates in
-        // hash order, which is deterministic but not lex.
-        for (coord, cell) in self.inner.sorted_iter() {
-            self.snapshot_buf.push(coord.x as u32);
-            self.snapshot_buf.push(coord.y as u32);
-            self.snapshot_buf.push(coord.z as u32);
-            self.snapshot_buf.push(cell.energy());
-            self.snapshot_buf.push(cell.origin_tag);
-            self.snapshot_buf.push(cell.appearance);
-        }
+        self.fill_snapshot_buf();
         self.snapshot_buf.clone()
+    }
+
+    /// Zero-copy variant of [`World::cells_snapshot`]: fills the same
+    /// persistent buffer, then returns a `Uint32Array` that aliases it
+    /// directly in WASM linear memory. JS must copy the data out
+    /// (e.g. `new Uint32Array(world.cellsSnapshotView())`) **before**
+    /// the next call into WASM — a subsequent `step()` or another
+    /// snapshot call may reallocate the underlying buffer or grow the
+    /// linear memory, which invalidates the view. Likewise, the view's
+    /// `.buffer` is the WASM memory itself; never `postMessage`-transfer
+    /// it directly — transferring it would detach WASM memory.
+    ///
+    /// Saves one ~24 MB memcpy per snapshot on a million-cell world by
+    /// avoiding the Rust-side `Vec` clone that the safe variant needs
+    /// to satisfy `wasm-bindgen`'s `Vec<u32>` ABI.
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    #[wasm_bindgen(js_name = cellsSnapshotView)]
+    pub fn cells_snapshot_view(&mut self) -> Uint32Array {
+        self.fill_snapshot_buf();
+        // SAFETY: The returned view aliases `self.snapshot_buf`'s
+        // storage in WASM linear memory. JS callers must copy out (via
+        // `new Uint32Array(view)` or `.slice()`) before any further
+        // call into WASM, and must not `postMessage`-transfer the
+        // underlying buffer. Both invariants are documented above and
+        // in `docs/plan-wasm-zerocopy-threads.md` § 4.
+        unsafe { Uint32Array::view(&self.snapshot_buf[..]) }
     }
 
     /// Number of `u32` fields per cell in [`World::cells_snapshot`].
@@ -275,24 +315,33 @@ impl World {
     ///
     /// Direction order in the six-element arrays matches the
     /// canonical `[xp, xn, yp, yn, zp, zn]` used everywhere else.
+    ///
+    /// Internally fills the persistent `inspect_buf` and clones it
+    /// out, mirroring [`World::cells_snapshot`]. For the zero-copy
+    /// variant, see [`World::cell_inspect_view`].
     #[must_use]
     #[wasm_bindgen(js_name = cellInspect)]
-    pub fn cell_inspect(&self, x: i32, y: i32, z: i32) -> Vec<u32> {
-        let coord = aenternis_core::Coord::new(x, y, z);
-        let Some(cell) = self.inner.get(coord) else {
-            return Vec::new();
-        };
-        let mut out = Vec::with_capacity(Self::INSPECT_PREFIX + cell.memory.len());
-        out.push(cell.pc);
-        out.push(cell.energy());
-        out.push(cell.origin_tag);
-        out.push(cell.appearance);
-        out.extend_from_slice(&cell.pointers);
-        out.extend_from_slice(&cell.rates);
-        out.extend_from_slice(&cell.active_outflow);
-        out.extend_from_slice(&cell.inflow);
-        out.extend_from_slice(&cell.memory);
-        out
+    pub fn cell_inspect(&mut self, x: i32, y: i32, z: i32) -> Vec<u32> {
+        self.fill_inspect_buf(x, y, z);
+        self.inspect_buf.clone()
+    }
+
+    /// Zero-copy variant of [`World::cell_inspect`]: fills the same
+    /// persistent buffer, then returns a `Uint32Array` aliasing it in
+    /// WASM linear memory. Same JS-side contract as
+    /// [`World::cells_snapshot_view`] — copy before any further WASM
+    /// call, never transfer the buffer.
+    ///
+    /// Returns an empty `Uint32Array` if no cell exists at `(x, y, z)`.
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    #[wasm_bindgen(js_name = cellInspectView)]
+    pub fn cell_inspect_view(&mut self, x: i32, y: i32, z: i32) -> Uint32Array {
+        self.fill_inspect_buf(x, y, z);
+        // SAFETY: See `cells_snapshot_view`. Same invariants — view
+        // aliases WASM linear memory backing `self.inspect_buf`; JS
+        // must copy out before the next WASM call.
+        unsafe { Uint32Array::view(&self.inspect_buf[..]) }
     }
 
     /// Number of `u32` fields in the fixed-width prefix of
@@ -315,4 +364,47 @@ impl World {
     /// [`World::cell_inspect`] before the variable-length memory
     /// region starts (4 scalars + 4 × 6 directional arrays = 28).
     pub const INSPECT_PREFIX: usize = 28;
+
+    /// Refresh `snapshot_buf` with the current world state in lex
+    /// order. Shared between [`World::cells_snapshot`] (clones the
+    /// buffer out) and [`World::cells_snapshot_view`] (returns a view
+    /// over it). Capacity is retained across calls.
+    fn fill_snapshot_buf(&mut self) {
+        self.snapshot_buf.clear();
+        self.snapshot_buf
+            .reserve(self.inner.len() * Self::SNAPSHOT_STRIDE);
+        // sorted_iter walks cells in `(x, y, z)` lex order — the snapshot's
+        // documented contract. The world's internal FxHashMap iterates in
+        // hash order, which is deterministic but not lex.
+        for (coord, cell) in self.inner.sorted_iter() {
+            self.snapshot_buf.push(coord.x as u32);
+            self.snapshot_buf.push(coord.y as u32);
+            self.snapshot_buf.push(coord.z as u32);
+            self.snapshot_buf.push(cell.energy());
+            self.snapshot_buf.push(cell.origin_tag);
+            self.snapshot_buf.push(cell.appearance);
+        }
+    }
+
+    /// Refresh `inspect_buf` with the cell at `(x, y, z)`, or leave
+    /// it empty if no such cell exists. Shared between
+    /// [`World::cell_inspect`] and [`World::cell_inspect_view`].
+    fn fill_inspect_buf(&mut self, x: i32, y: i32, z: i32) {
+        self.inspect_buf.clear();
+        let coord = aenternis_core::Coord::new(x, y, z);
+        let Some(cell) = self.inner.get(coord) else {
+            return;
+        };
+        self.inspect_buf
+            .reserve(Self::INSPECT_PREFIX + cell.memory.len());
+        self.inspect_buf.push(cell.pc);
+        self.inspect_buf.push(cell.energy());
+        self.inspect_buf.push(cell.origin_tag);
+        self.inspect_buf.push(cell.appearance);
+        self.inspect_buf.extend_from_slice(&cell.pointers);
+        self.inspect_buf.extend_from_slice(&cell.rates);
+        self.inspect_buf.extend_from_slice(&cell.active_outflow);
+        self.inspect_buf.extend_from_slice(&cell.inflow);
+        self.inspect_buf.extend_from_slice(&cell.memory);
+    }
 }

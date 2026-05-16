@@ -19,12 +19,12 @@ function makeMockWorld(): WorldHandle {
     free: vi.fn(),
     setMoveThreshold: vi.fn(),
     step: vi.fn(),
-    cellsSnapshot: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
+    cellsSnapshotView: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
     boundingBox: vi.fn(() => new Int32Array([0, 0, 0, 1, 1, 1])),
     tick: vi.fn(() => 42),
     cellCount: vi.fn(() => 5),
     totalEnergy: vi.fn(() => 10_000),
-    cellInspect: vi.fn(() => new Uint32Array([0xCAFE, 0xBABE])),
+    cellInspectView: vi.fn(() => new Uint32Array([0xCAFE, 0xBABE])),
     snapshotStride: 4,
     inspectPrefix: 8,
   };
@@ -327,7 +327,7 @@ describe('createWorkerHandler — inspect', () => {
     const inspect: InspectMsg = { type: 'inspect', x: 1, y: 2, z: 3 };
     h.handler.handleMessage(inspect);
 
-    expect(h.world.cellInspect).toHaveBeenCalledWith(1, 2, 3);
+    expect(h.world.cellInspectView).toHaveBeenCalledWith(1, 2, 3);
     const [msg, transfer] = h.deps.postMessage.mock.calls[0]!;
     expect(msg).toMatchObject({
       type: 'cellDetail',
