@@ -150,9 +150,15 @@ fi
 #    `shared`. Without this, `postMessage` can't structured-clone
 #    `WebAssembly.Memory` to worker threads → runtime
 #    `DataCloneError: #<Memory> could not be cloned`.
-# 3. `link-arg=--max-memory=1073741824` — required by the WASM spec
-#    when memory is shared (1 GiB chosen to match the recipe; the
-#    actual heap grows on demand, this is just the upper bound).
+# 3. `link-arg=--max-memory=4294967296` — required by the WASM spec
+#    when memory is shared. 4 GiB = wasm32 maximum; the actual heap
+#    grows on demand, this is just the upper bound the spec demands.
+#    We started at the wasm-bindgen-rayon recipe's 1 GiB but hit
+#    deterministic alloc-failure aborts at tick 456 of a 1 M-energy
+#    world (heap working set climbs above 1 GiB once cell count
+#    reaches ~400 k). Bumping to the spec maximum eliminates that
+#    ceiling without changing semantics — the host browser only
+#    actually reserves what the WASM module grows into.
 # 4. `link-arg=--import-memory` — emit memory as an import rather
 #    than a definition. wasm-bindgen's threading transform asserts
 #    `mem.import.is_some()` and panics otherwise; wasm-bindgen-rayon
@@ -189,7 +195,7 @@ export RUSTUP_TOOLCHAIN="${NIGHTLY_TOOLCHAIN}"
 export RUSTFLAGS="\
 -C target-feature=+atomics,+bulk-memory \
 -C link-arg=--shared-memory \
--C link-arg=--max-memory=1073741824 \
+-C link-arg=--max-memory=4294967296 \
 -C link-arg=--import-memory \
 -C link-arg=--export=__wasm_init_tls \
 -C link-arg=--export=__tls_size \

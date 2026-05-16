@@ -108,7 +108,7 @@ if command -v wasm-pack >/dev/null 2>&1; then
         # RUSTFLAGS comment for what each flag does and why it's
         # required.
         RUSTUP_TOOLCHAIN="${WASM_THREADED_TOOLCHAIN}" \
-        RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
+        RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--max-memory=4294967296 -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
         step "wasm-pack (threaded)" \
             wasm-pack build crates/aenternis-wasm --target web --features wasm-threads \
             || OVERALL=1
