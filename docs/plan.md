@@ -44,7 +44,7 @@ See `questions.md`. Notably:
 
 ## Implementation roadmap (Rust + WASM)
 
-The skeleton crate is in place; from here the work proceeds in narrow phases that each end on a passing `bash scripts/check.sh` (= `cargo fmt --check && cargo clippy -D warnings && cargo test`).
+The skeleton crate is in place; from here the work proceeds in narrow phases that each end on a passing `./check` (= TS typecheck + vitest + `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test` + WASM build).
 
 ### Phase 0 — Skeleton ✓
 
@@ -81,7 +81,7 @@ Verified by 57 additional tests (189 total), including:
 
 ### Phase 3 — WASM bindings ✓
 
-`crates/aenternis-wasm/` cdylib wraps the core `SparseWorld` as an owned-handle JS API via `wasm-bindgen`. Build via `wasm-pack build crates/aenternis-wasm --target web` (now also a step in `scripts/check.sh`, so the verification gate enforces a working WASM bundle).
+`crates/aenternis-wasm/` cdylib wraps the core `SparseWorld` as an owned-handle JS API via `wasm-bindgen`. Build via `wasm-pack build crates/aenternis-wasm --target web` (now also a step in `./check`, so the verification gate enforces a working WASM bundle).
 
 API surface:
 
@@ -90,7 +90,7 @@ API surface:
 - `cells_snapshot()` — flat `Uint32Array`, 6 fields per cell `(x, y, z, energy, origin_tag, appearance)`, deterministic canonical iteration order
 - `snapshot_stride` getter (= 6) so JS doesn't hard-code the layout
 
-Animated smoke-test page lives in `web/` (`web/index.html` + `web/main.js`): `requestAnimationFrame` loop, 2D xy projection on a canvas, heat-ramp coloring of cells, HUD with tick / cell count / total energy / FPS, and Pause / Reset / config controls. Run via `npm run dev:wasm` (which opens `/web/` in the browser; the WASM bundle must already be built — `bash scripts/check.sh` rebuilds it as a side effect).
+Animated smoke-test page lives in `web/` (`web/index.html` + `web/main.js`): `requestAnimationFrame` loop, 2D xy projection on a canvas, heat-ramp coloring of cells, HUD with tick / cell count / total energy / FPS, and Pause / Reset / config controls. Run via `npm run dev:wasm` (which opens `/web/` in the browser; the WASM bundle must already be built — `./check` and `./build` both rebuild it as a side effect).
 
 **Done 2026-05-03.**
 

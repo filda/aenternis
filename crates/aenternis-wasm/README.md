@@ -41,7 +41,7 @@ w.free();                        // explicit handle drop
 Host-target tests run via the standard workspace gate:
 
 ```sh
-bash scripts/check.sh
+./check
 ```
 
 These exercise the wrapper's Rust surface (types, conservation

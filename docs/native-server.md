@@ -26,11 +26,20 @@ linux a windows artefakty, viz `AGENTS.local.md`):
 bash scripts/server.sh
 ```
 
-Wrapper je analog `scripts/check.sh` — na Windows (Git Bash /
+Wrapper je analog `./check` — na Windows (Git Bash /
 MSYS2) přidá `+stable-x86_64-pc-windows-msvc`, jinde použije
 default cargo. Bez něj plain `cargo run -p aenternis-server`
 táhne `rust-toolchain.toml` na host triple gnu, který v
 `windows-sys` linkování chce `dlltool.exe`.
+
+Alternativně jednou ranou s Vite dev serverem:
+
+```sh
+./run --server
+```
+
+Spustí oba procesy paralelně ve stejné procesní skupině; Ctrl+C
+zastaví oba najednou.
 
 Argumenty se pass-through na binárku:
 

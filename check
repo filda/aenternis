@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# Aenternis — unified verification gate.
+#
+# Runs every check and test for both the JS/TS and Rust sides:
+#   - TS typecheck (tsc --noEmit)
+#   - Vitest with coverage thresholds
+#   - cargo fmt --check
+#   - cargo clippy -D warnings
+#   - cargo test --workspace
+#   - wasm-pack build (single-threaded stable; CI parity)
+#   - wasm-pack build (threaded nightly) + verifier, if nightly is around
+#
+# With `--mutation`, also runs Stryker (JS mutation) and `cargo mutants`
+# (Rust mutation, when installed). Mutation is opt-in because it takes
+# ~30 min — everyday work uses the fast gate.
+#
+# Steps never short-circuit: a fmt nit doesn't hide a clippy or test
+# failure. Combined log at `reports/check.log`.
+#
+# Usage:
+#
+#     ./check              # fast gate (no mutation)
+#     ./check --mutation   # full gate (adds Stryker + cargo mutants)
+#
+# Exit 0 if everything green, non-zero otherwise.
+
+set -u
+
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "${REPO_ROOT}"
+
+WITH_MUTATION=0
+for arg in "$@"; do
+    case "${arg}" in
+        --mutation|-m) WITH_MUTATION=1 ;;
+        --help|-h)
+            cat <<EOF
+Usage: ./check [--mutation]
+
+  --mutation, -m   Also run mutation testing (Stryker + cargo mutants).
+                   Significantly slower; not required for everyday work.
+EOF
+            exit 0
+            ;;
+        *)
+            echo "unknown arg: ${arg}" >&2
+            echo "see './check --help'" >&2
+            exit 2
+            ;;
+    esac
+done
+
+REPORT_DIR="reports"
+LOG="${REPORT_DIR}/check.log"
+mkdir -p "${REPORT_DIR}"
+: > "${LOG}"
+
+# shellcheck source=scripts/_wasm-threaded-toolchain.sh
+source "scripts/_wasm-threaded-toolchain.sh"
+
+timestamp() { date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+step() {
+    local label="$1"; shift
+    {
+        echo
+        echo "==================================================================="
+        echo " step: ${label}"
+        echo " \$ $*"
+        echo "==================================================================="
+    } | tee -a "${LOG}"
+    "$@" 2>&1 | tee -a "${LOG}"
+    local rc="${PIPESTATUS[0]}"
+    if [ "${rc}" -ne 0 ]; then
+        echo "[step '${label}' failed: rc=${rc}]" | tee -a "${LOG}"
+    fi
+    return "${rc}"
+}
+
+log() { echo "$@" | tee -a "${LOG}"; }
+
+# On Windows (Git Bash / MSYS2) the default gnu toolchain pulls in
+# `windows-sys` via tokio + axum, and linking it requires
+# `dlltool.exe` from mingw-w64 binutils. The MSVC toolchain takes a
+# different path that needs no dlltool, so on Windows we force MSVC
+# via `+toolchain`. `rust-toolchain.toml` stays portable.
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*) CARGO=(cargo "+stable-x86_64-pc-windows-msvc") ;;
+    *)                    CARGO=(cargo) ;;
+esac
+
+{
+    echo "Aenternis check"
+    echo " repo:     ${REPO_ROOT}"
+    echo " mutation: $([ "${WITH_MUTATION}" -eq 1 ] && echo enabled || echo skipped)"
+    echo " started:  $(timestamp)"
+} | tee -a "${LOG}"
+
+OVERALL=0
+
+# --- JS / TS --------------------------------------------------------------
+
+step "tsc typecheck" npm run --silent typecheck        || OVERALL=1
+step "vitest (coverage)" npm run --silent test:cov     || OVERALL=1
+
+# --- Rust -----------------------------------------------------------------
+
+step "rustfmt"    "${CARGO[@]}" fmt --all -- --check                            || OVERALL=1
+step "clippy"     "${CARGO[@]}" clippy --workspace --all-targets -- -D warnings || OVERALL=1
+step "cargo test" "${CARGO[@]}" test --workspace                                || OVERALL=1
+
+# --- WASM (same dual pass as `./build`) -----------------------------------
+#
+# Pass 1 catches stable-only regressions (CI parity); pass 2 restores
+# `pkg/` to the canonical threaded bundle that `web/worker.ts`
+# initializes at runtime. If nightly isn't available, `pkg/` stays
+# single-threaded — same fallback as before.
+
+if command -v wasm-pack >/dev/null 2>&1; then
+    step "wasm-pack (single-threaded, stable; CI parity)" \
+        wasm-pack build crates/aenternis-wasm --target web --release \
+        || OVERALL=1
+
+    if wasm_threaded_build_available; then
+        RUSTUP_TOOLCHAIN="${WASM_THREADED_TOOLCHAIN}" \
+        RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--max-memory=4294967296 -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
+        step "wasm-pack (threaded, nightly)" \
+            wasm-pack build crates/aenternis-wasm \
+                --target web --features wasm-threads \
+            || OVERALL=1
+        patch_wasm_bindgen_rayon_worker_helpers
+        step "verify-threaded-wasm" bash scripts/verify-threaded-wasm.sh \
+            || OVERALL=1
+    fi
+else
+    {
+        echo
+        echo "==================================================================="
+        echo " step: wasm-pack (skipped — wasm-pack not on PATH)"
+        echo "==================================================================="
+    } | tee -a "${LOG}"
+fi
+
+# --- Mutation (opt-in) ----------------------------------------------------
+
+if [ "${WITH_MUTATION}" -eq 1 ]; then
+    step "stryker (JS mutation)" npm run --silent test:mutation || OVERALL=1
+
+    # cargo-mutants is an optional install (`cargo install cargo-mutants`).
+    # Skip with a clear message if missing so `--mutation` works as
+    # much as the host has tools for.
+    if "${CARGO[@]}" mutants --version >/dev/null 2>&1; then
+        step "cargo mutants" "${CARGO[@]}" mutants || OVERALL=1
+    else
+        log "[skip] cargo-mutants not installed (cargo install cargo-mutants)"
+    fi
+fi
+
+{
+    echo
+    echo "==================================================================="
+    if [ "${OVERALL}" -eq 0 ]; then
+        echo " ALL GREEN"
+    else
+        echo " SOMETHING FAILED (overall rc=${OVERALL})"
+    fi
+    echo " finished: $(timestamp)"
+    echo "==================================================================="
+} | tee -a "${LOG}"
+
+# Flush filesystem buffers before exit. Without this, copying the log
+# back to the live mount immediately after script termination can
+# capture a truncated view on Git Bash / Windows.
+sync 2>/dev/null || true
+
+exit "${OVERALL}"

@@ -1,7 +1,8 @@
 name: CI
 
-# Runs the verification gate (`npm run check` = vitest+coverage + Stryker)
-# on every push to main and on every pull request.
+# Runs the verification gate (`./check` = TS typecheck + vitest with
+# coverage + Rust fmt/clippy/test + WASM build, plus Stryker mutation
+# as a separate job) on every push to main and on every pull request.
 #
 # Jobs that run in parallel for fast feedback:
 #   - `typecheck` - tsc --noEmit (TypeScript type errors)
@@ -243,7 +244,7 @@ jobs:
 
       # Pinned nightly for the threaded WASM build. Must match
       # `scripts/_wasm-threaded-toolchain.sh`'s `WASM_THREADED_TOOLCHAIN`
-      # — `scripts/build-wasm.sh` reads it via `RUSTUP_TOOLCHAIN` env to
+      # — `./build` reads it via `RUSTUP_TOOLCHAIN` env to
       # override the workspace's stable pin for just that one invocation.
       # `rust-src` is required by `-Z build-std` (which rebuilds `std`
       # with the wasm32 atomics target-feature enabled).
@@ -271,17 +272,6 @@ jobs:
         with:
           tool: wasm-pack
 
-      # The threaded build produces a `pkg/` bundle with
-      # `wasm-bindgen-rayon`'s `init_thread_pool` export and a shared-
-      # memory `WebAssembly.Memory`. Runtime requires the host page to
-      # be `crossOriginIsolated` — handled by `web/coi-serviceworker.js`
-      # on GitHub Pages (which can't set COOP/COEP headers natively).
-      # If the threaded build ever needs to be disabled (e.g. nightly
-      # toolchain regression), swap this back to
-      # `wasm-pack build crates/aenternis-wasm --target web --release`.
-      - name: Build threaded WASM bundle
-        run: bash scripts/build-wasm.sh
-
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
@@ -291,13 +281,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # tsc emits `dist/src/*.js` and `dist/web/*.js` with `.ts`
-      # extensions on relative imports rewritten to `.js`
+      # `./build` runs the two-pass WASM build (stable single-threaded
+      # for CI parity, then threaded nightly which produces the
+      # canonical `pkg/`) followed by tsc. The threaded bundle exports
+      # `init_thread_pool` and uses a shared `WebAssembly.Memory`;
+      # runtime requires the host page to be `crossOriginIsolated` —
+      # handled by `web/coi-serviceworker.js` on GitHub Pages (which
+      # can't set COOP/COEP headers natively). If the threaded build
+      # ever needs to be disabled (e.g. nightly toolchain regression),
+      # the script falls back to single-threaded with a warning, so a
+      # CI failure points at the underlying issue rather than at
+      # missing artifacts.
+      #
+      # tsc inside `./build` emits `dist/src/*.js` and `dist/web/*.js`
+      # with `.ts` extensions on relative imports rewritten to `.js`
       # (`rewriteRelativeImportExtensions`). Bare imports like `three`
       # are left alone — they get resolved by the importmap inline in
       # `web/index.html`.
-      - name: Build TypeScript
-        run: npm run build
+      - name: Build (WASM + TS)
+        run: ./build
 
       # The site is a flat copy of the static parts of the repo:
       #   index.html, prototypes/, docs/, the wasm-pack pkg/, and the

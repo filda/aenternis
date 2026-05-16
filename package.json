@@ -9,13 +9,14 @@
     "dev:p8": "vite --open /prototypes/08-viewer-3d/",
     "dev:wasm": "vite --open /web/",
     "preview": "vite preview",
+    "build": "bash ./build",
+    "build:ts": "tsc -p tsconfig.build.json",
+    "check": "bash ./check",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
-    "test:mutation": "stryker run",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
-    "check": "npm run typecheck && npm run test:cov && npm run test:mutation"
+    "test:mutation": "stryker run"
   },
   "dependencies": {
     "three": "^0.184.0"

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Aenternis — dev launcher.
+#
+# Default: starts the Vite dev server (same as `npm run dev`).
+# With `--server` (or `-s`): also starts the native Rust backend
+# (`aenternis-server`) alongside Vite, so the viewer can switch
+# between WASM and native backends via the `?backend=` URL flag.
+#
+# Both children share the script's process group, so Ctrl+C (or any
+# signal) propagates and stops them together.
+#
+# Anything after `--` is forwarded to Vite, e.g.:
+#
+#     ./run -- --open /web/
+#     ./run --server -- --host 0.0.0.0
+#
+# Usage:
+#
+#     ./run                # vite only
+#     ./run --server       # vite + aenternis-server
+
+set -u
+
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "${REPO_ROOT}"
+
+WITH_SERVER=0
+VITE_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --server|-s) WITH_SERVER=1; shift ;;
+        --help|-h)
+            cat <<EOF
+Usage: ./run [--server] [-- <vite args>]
+
+  --server, -s   Also start aenternis-server (Rust backend) in
+                 parallel. Without this, only Vite runs.
+
+  Anything after \`--\` is forwarded to vite, e.g.:
+    ./run -- --open /web/
+    ./run --server -- --host 0.0.0.0
+EOF
+            exit 0
+            ;;
+        --) shift; VITE_ARGS+=("$@"); break ;;
+        *) VITE_ARGS+=("$1"); shift ;;
+    esac
+done
+
+if [ "${WITH_SERVER}" -eq 0 ]; then
+    exec npx vite "${VITE_ARGS[@]}"
+fi
+
+# Two-process mode: vite + aenternis-server in the same process group.
+# `kill 0` (which fires on INT/TERM via the trap) targets the whole
+# group, so both children stop together. Without a trap, Ctrl+C in
+# the terminal still reaches them (terminal SIGINTs the group), but
+# the explicit trap keeps cleanup deterministic when the script
+# itself exits — e.g. one child crashes and we propagate.
+echo "[run] starting vite + aenternis-server (Ctrl+C stops both)"
+
+trap 'kill 0 2>/dev/null; exit 0' INT TERM
+
+npx vite "${VITE_ARGS[@]}" &
+bash scripts/server.sh &
+
+# Wait for any child to exit, then take the whole group down so we
+# don't leave an orphan vite running after the server crashes (or
+# vice versa). `wait -n` needs bash 4.3+ — Linux/WSL/MSYS2 all ship
+# newer; macOS's stock /bin/bash 3.2 doesn't, but the project's dev
+# environment isn't macOS-default (see scripts/server.sh).
+wait -n
+RC=$?
+kill 0 2>/dev/null
+wait 2>/dev/null || true
+exit "${RC}"

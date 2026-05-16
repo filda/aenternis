@@ -29,7 +29,7 @@ wasm-bindgen-rayon = { version = "1.2", optional = true }
 [features]
 # Default off. Enables multi-threaded WASM via `wasm-bindgen-rayon` +
 # pthread-over-Web-Workers + SharedArrayBuffer. Required toolchain side
-# is nightly + `rust-src` (see `scripts/build-wasm.sh`); host page must
+# is nightly + `rust-src` (see `./build` and `scripts/_wasm-threaded-toolchain.sh`); host page must
 # be `crossOriginIsolated` (COOP / COEP headers or a SW shim).
 wasm-threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 

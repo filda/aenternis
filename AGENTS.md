@@ -6,7 +6,7 @@
 - Each prototype in `prototypes/` is a **self-contained laboratory experiment**, not a stepping stone toward a single product. Don't generalize across prototypes or refactor shared infra unless explicitly asked. The whole point of the prototype phase is throwaway exploration of one specific question per directory.
 - Before changing a prototype, read its own README (often Czech) — it documents what the prototype is *for* and what is intentionally out of scope.
 - **All production code in `src/` must have tests.** A bugfix is not complete without a test that would fail before the fix and pass after it. New behavior is not complete without a test that exercises it.
-- **The verification gate is `npm run check`** — runs vitest with coverage *and* Stryker mutation testing. Run it after every non-trivial change. Both stages must pass:
+- **The verification gate is `./check`** (fast — TS typecheck + vitest with coverage + Rust fmt/clippy/test + WASM build). After algorithmic changes or before declaring a piece of work done, run **`./check --mutation`** — adds Stryker (JS) and `cargo mutants` (Rust) on top. All stages must pass:
   - Coverage thresholds (vitest): 95% lines / 95% functions / 90% branches / 95% statements over `src/`.
   - Mutation thresholds (Stryker): break at 70%, low at 80%, high at 90%. Aim for 100% — the codebase is small enough.
   - Surviving mutants mean a missing assertion. Add one; do not weaken the threshold.
@@ -40,7 +40,7 @@
 
 After non-trivial work, before declaring done:
 
-1. **`npm run check`** — vitest with coverage + Stryker mutation testing. Both must pass; surviving mutants mean a missing assertion.
+1. **`./check --mutation`** — full gate (TS + Rust + WASM + Stryker + cargo mutants). All stages must pass; surviving mutants mean a missing assertion.
 2. Re-read the diff as if it were someone else's PR. Look for dead code, stale comments, leaked concerns from earlier iterations, TODO leftovers.
 3. Coverage report (`reports/coverage/index.html`) — check the touched area and cover meaningful gaps. Mutation report (`reports/mutation/index.html`) — chase any survivors with a new assertion, do not relax the threshold.
 4. If the implementation revealed duplication or awkward abstractions, address them while context is fresh — but only **inside the prototype you touched** when working in prototypes, or inside the changed module when working in `src/`. Cross-cutting refactors are out of scope unless asked.

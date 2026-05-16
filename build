@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Aenternis — full rebuild: TypeScript + WASM.
+#
+# Two-stage WASM pass (same shape as the old `scripts/check.sh`):
+#   1. Single-threaded stable (CI parity — catches `#![feature(...)]`
+#      attributes that would compile on nightly but break stable CI).
+#   2. Threaded nightly (canonical runtime bundle that `web/worker.ts`
+#      consumes when the host page is `crossOriginIsolated`).
+#
+# The threaded pass is skipped with a warning if the pinned nightly
+# toolchain (`WASM_THREADED_TOOLCHAIN` in
+# `scripts/_wasm-threaded-toolchain.sh`) is missing — devs without
+# nightly still get a working single-threaded `pkg/`, the same
+# fallback the old gate had.
+#
+# Setup (one-time per dev machine, for the threaded pass):
+#
+#     rustup toolchain install nightly-2026-04-15 \
+#         --component rust-src \
+#         --target wasm32-unknown-unknown
+#
+# Usage:
+#
+#     ./build
+#
+# Combined log at `reports/build.log`. Exit 0 if all steps green.
+
+set -u
+
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "${REPO_ROOT}"
+
+REPORT_DIR="reports"
+LOG="${REPORT_DIR}/build.log"
+mkdir -p "${REPORT_DIR}"
+: > "${LOG}"
+
+# shellcheck source=scripts/_wasm-threaded-toolchain.sh
+source "scripts/_wasm-threaded-toolchain.sh"
+
+timestamp() { date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+step() {
+    local label="$1"; shift
+    {
+        echo
+        echo "==================================================================="
+        echo " step: ${label}"
+        echo " \$ $*"
+        echo "==================================================================="
+    } | tee -a "${LOG}"
+    "$@" 2>&1 | tee -a "${LOG}"
+    local rc="${PIPESTATUS[0]}"
+    if [ "${rc}" -ne 0 ]; then
+        echo "[step '${label}' failed: rc=${rc}]" | tee -a "${LOG}"
+    fi
+    return "${rc}"
+}
+
+log() { echo "$@" | tee -a "${LOG}"; }
+
+{
+    echo "Aenternis build"
+    echo " repo:      ${REPO_ROOT}"
+    echo " toolchain: ${WASM_THREADED_TOOLCHAIN} (for threaded pass)"
+    echo " started:   $(timestamp)"
+} | tee -a "${LOG}"
+
+# --- prerequisites --------------------------------------------------------
+
+if ! command -v wasm-pack >/dev/null 2>&1; then
+    log "ERROR: wasm-pack not found on PATH (install: cargo install wasm-pack)."
+    exit 1
+fi
+
+OVERALL=0
+
+# --- TypeScript -----------------------------------------------------------
+
+step "tsc (TypeScript build)" npm run --silent build:ts || OVERALL=1
+
+# --- WASM pass 1: single-threaded stable (CI parity) ----------------------
+#
+# Matches CI's `typecheck` and `test` jobs exactly. Catches stable-only
+# regressions (e.g. accidental `#![feature(...)]` attribute that
+# compiles fine on nightly but fails E0554 on stable).
+
+step "wasm-pack (single-threaded, stable; CI parity)" \
+    wasm-pack build crates/aenternis-wasm --target web --release \
+    || OVERALL=1
+
+# --- WASM pass 2: threaded nightly (canonical bundle) ---------------------
+#
+# Same setup as the old `scripts/build-wasm.sh`. See its inline notes
+# for the rationale behind each RUSTFLAGS entry (atomics, shared
+# memory, TLS bootstrap exports). Order matters: this pass overwrites
+# the stable `pkg/` from pass 1 with the canonical multi-threaded
+# bundle that `web/worker.ts` initializes when the host page is
+# `crossOriginIsolated`.
+
+if wasm_threaded_build_available; then
+    export RUSTUP_TOOLCHAIN="${WASM_THREADED_TOOLCHAIN}"
+    export RUSTFLAGS="\
+-C target-feature=+atomics,+bulk-memory \
+-C link-arg=--shared-memory \
+-C link-arg=--max-memory=4294967296 \
+-C link-arg=--import-memory \
+-C link-arg=--export=__wasm_init_tls \
+-C link-arg=--export=__tls_size \
+-C link-arg=--export=__tls_align \
+-C link-arg=--export=__tls_base"
+
+    step "wasm-pack (threaded, nightly)" \
+        wasm-pack build crates/aenternis-wasm \
+            --target web --features wasm-threads \
+        || OVERALL=1
+
+    # Rewrites `import('../../..')` in wasm-bindgen-rayon's worker
+    # bootstrap to an explicit file URL — required for bundlerless
+    # production hosts (GitHub Pages). See helper's docstring.
+    patch_wasm_bindgen_rayon_worker_helpers
+
+    step "verify-threaded-wasm" bash scripts/verify-threaded-wasm.sh \
+        || OVERALL=1
+
+    unset RUSTUP_TOOLCHAIN RUSTFLAGS
+else
+    {
+        echo
+        echo "WARNING: nightly toolchain '${WASM_THREADED_TOOLCHAIN}' not installed."
+        echo "         pkg/ keeps the stable single-threaded bundle."
+        echo "         To enable the threaded build:"
+        echo "           rustup toolchain install ${WASM_THREADED_TOOLCHAIN} \\"
+        echo "               --component rust-src --target wasm32-unknown-unknown"
+    } | tee -a "${LOG}"
+fi
+
+{
+    echo
+    echo "==================================================================="
+    if [ "${OVERALL}" -eq 0 ]; then
+        echo " BUILD OK"
+        echo " WASM bundle at crates/aenternis-wasm/pkg/"
+        echo " TS bundle at dist/"
+    else
+        echo " BUILD FAILED (rc=${OVERALL})"
+    fi
+    echo " finished: $(timestamp)"
+    echo "==================================================================="
+} | tee -a "${LOG}"
+
+# Flush filesystem buffers before exit — see scripts/check.sh history
+# for why (Git Bash tee on Windows holds stdout in the pipe buffer).
+sync 2>/dev/null || true
+
+exit "${OVERALL}"

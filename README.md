@@ -68,19 +68,23 @@ cargo install wasm-pack
 
 > `wasm-pack` can also be installed without Cargo — see <https://rustwasm.github.io/wasm-pack/installer/> for OS-specific options.
 
-Build the bundle:
+Build everything (TS + WASM):
+
+```sh
+./build
+```
+
+`./build` runs a two-pass WASM build: a stable single-threaded pass (CI parity, catches stable-only regressions) followed by the threaded nightly pass that produces the canonical `crates/aenternis-wasm/pkg/` consumed by `web/worker.ts`. If only a quick single-threaded bundle is needed:
 
 ```sh
 wasm-pack build crates/aenternis-wasm --target web
 ```
 
-The output lands in `crates/aenternis-wasm/pkg/` and is picked up automatically by Vite.
-
 #### Multi-threaded WASM (optional)
 
 For large worlds (≥ 100 k cells), the single-threaded WASM bundle becomes the frame-rate bottleneck. The `wasm-threads` feature flag enables a multi-threaded bundle via `wasm-bindgen-rayon`, which spawns a pthread-over-Web-Workers pool and parallelizes the tick step.
 
-This path requires a **pinned nightly Rust toolchain** because `-Z build-std` (rebuilding `std` with the wasm32 atomics target-feature enabled) is nightly-only. The pinned date lives in `scripts/build-wasm.sh`.
+This path requires a **pinned nightly Rust toolchain** because `-Z build-std` (rebuilding `std` with the wasm32 atomics target-feature enabled) is nightly-only. The pinned date lives in `scripts/_wasm-threaded-toolchain.sh`.
 
 One-time setup:
 
@@ -93,10 +97,10 @@ rustup toolchain install nightly-2026-04-15 \
 Build:
 
 ```sh
-bash scripts/build-wasm.sh
+./build
 ```
 
-The output overwrites `crates/aenternis-wasm/pkg/` with the threaded bundle. JS callers must `await initThreadPool(navigator.hardwareConcurrency)` after `await init()` to actually spawn the worker pool. The host page must be `crossOriginIsolated`; `web/coi-serviceworker.js` installs a Service Worker that adds the COOP / COEP response headers via fetch interception, which works on hosts that can't set them natively (GitHub Pages, the Vite dev server before its config is taught about them).
+The threaded pass runs automatically when the pinned nightly is installed; without it `./build` falls back to the single-threaded bundle and prints a warning. JS callers must `await initThreadPool(navigator.hardwareConcurrency)` after `await init()` to actually spawn the worker pool. The host page must be `crossOriginIsolated`; `web/coi-serviceworker.js` installs a Service Worker that adds the COOP / COEP response headers via fetch interception, which works on hosts that can't set them natively (GitHub Pages, the Vite dev server before its config is taught about them).
 
 ### Node.js
 
@@ -106,8 +110,9 @@ Node.js **20+** is required for the dev server, prototypes, and JavaScript tests
 
 ```
 npm install
-npm run dev          # http://localhost:5173/ — landing page with prototype index
-npm run dev:p8       # opens prototype 8 directly
+./run                # vite dev server at http://localhost:5173/
+./run --server       # vite + aenternis-server (native backend) in parallel
+npm run dev:p8       # vite, opening prototype 8 directly
 ```
 
 The Vite dev server is required for the Web Worker mode in prototype 8 (Chrome blocks workers from `file://` null origin). Each prototype is otherwise a self-contained static page and can also be opened directly via `file://` if you don't need workers.
@@ -132,10 +137,11 @@ npm run test          # vitest, single run
 npm run test:watch    # vitest, watch mode
 npm run test:cov      # vitest with v8 coverage (95% lines / 90% branches)
 npm run test:mutation # Stryker mutation testing (break threshold 70 %)
-npm run check         # test:cov && test:mutation — the verification gate
+./check               # full gate: TS + Rust + WASM (no mutation, ~2 min)
+./check --mutation    # full gate + Stryker + cargo mutants (~30 min)
 ```
 
-`npm run check` is what CI runs on every push and pull request (see `.github/workflows/ci.yml`). Reports land in `reports/coverage/` and `reports/mutation/`.
+`./check` is what CI runs on every push and pull request (see `.github/workflows/ci.yml`). Reports land in `reports/coverage/` and `reports/mutation/`.
 
 ### Rust
 
