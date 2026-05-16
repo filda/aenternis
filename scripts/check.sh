@@ -87,26 +87,43 @@ step "tests"   "${CARGO[@]}" test --workspace                                   
 # Optional WASM bundle build. Skipped if wasm-pack isn't on PATH so
 # the script keeps working before the toolchain is set up.
 #
-# Dispatch: when the pinned nightly toolchain (`rust-src` included) is
-# installed, build with the `wasm-threads` feature. That way the
-# gate's wasm step leaves `pkg/` containing a threaded bundle —
-# matching what `web/worker.ts` initializes at runtime when the host
-# page is `crossOriginIsolated`. Without this dispatch the gate would
-# silently overwrite `pkg/` with the single-threaded bundle every run,
-# breaking threading on the next dev session until `build-wasm.sh` is
-# manually re-run.
+# Two passes, in order:
 #
-# Fallback path (no nightly available) builds the default single-
-# threaded bundle, same as before. Both paths exercise wasm-bindgen +
-# wasm-opt, so the gate's "the crate compiles to wasm and packages"
-# guarantee is preserved either way.
+# 1. **Single-threaded (stable, CI parity).** This is the exact
+#    invocation CI's `typecheck` and `test` jobs run on stable —
+#    `wasm-pack build crates/aenternis-wasm --target web --release`.
+#    Running it locally catches stable-only regressions (the classic
+#    case: an accidental nightly `#![feature(...)]` attribute that
+#    compiles fine on the nightly threaded build but breaks E0554 on
+#    stable). Without this pass, such regressions slip through the
+#    local gate and surface as red CI on every push.
+#
+# 2. **Threaded (nightly, canonical bundle).** Same setup as
+#    `scripts/build-wasm.sh`. Skipped when the pinned nightly isn't
+#    installed — dev keeps a working gate without forcing nightly
+#    setup, but CI's deploy job runs `build-wasm.sh` directly and
+#    requires nightly there.
+#
+# Order matters: the single-threaded pass overwrites `pkg/` with a
+# stable bundle; the threaded pass then restores `pkg/` to the
+# canonical multi-threaded bundle that `web/worker.ts` expects when
+# the host page is `crossOriginIsolated`. If nightly isn't available,
+# `pkg/` stays single-threaded — same fallback as before, and the dev
+# can still run `npm run dev` against the bundle.
 if command -v wasm-pack >/dev/null 2>&1; then
+    # Pass 1: stable single-threaded build. Matches CI flags exactly
+    # so the gate's "compiles on stable" guarantee is real, not an
+    # approximation.
+    step "wasm-pack (single-threaded, stable; CI parity)" \
+        wasm-pack build crates/aenternis-wasm --target web --release \
+        || OVERALL=1
+
+    # Pass 2: threaded build, when nightly is available. Same
+    # `RUSTFLAGS` + config.toml + nightly setup as
+    # `scripts/build-wasm.sh`; kept inline rather than delegated so
+    # output lands in this single log file. See `build-wasm.sh`'s
+    # RUSTFLAGS comment for what each flag does and why it's required.
     if wasm_threaded_build_available; then
-        # Same `RUSTFLAGS` + config.toml + nightly setup as
-        # scripts/build-wasm.sh; kept inline rather than delegated so
-        # output lands in this single log file. See build-wasm.sh's
-        # RUSTFLAGS comment for what each flag does and why it's
-        # required.
         RUSTUP_TOOLCHAIN="${WASM_THREADED_TOOLCHAIN}" \
         RUSTFLAGS="-C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--max-memory=4294967296 -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
         step "wasm-pack (threaded)" \
@@ -119,8 +136,6 @@ if command -v wasm-pack >/dev/null 2>&1; then
         # and missed patches before the bundle ships.
         step "verify-threaded-wasm" bash scripts/verify-threaded-wasm.sh \
             || OVERALL=1
-    else
-        step "wasm-pack" wasm-pack build crates/aenternis-wasm --target web   || OVERALL=1
     fi
 else
     {

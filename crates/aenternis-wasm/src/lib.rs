@@ -40,10 +40,16 @@
 // `std::alloc::set_alloc_error_hook` is on nightly behind the
 // `alloc_error_hook` feature gate. The threaded WASM build already
 // pins nightly (`scripts/build-wasm.sh`), so enabling it here is
-// free for that target. On non-wasm32 (stable host build for tests)
-// the feature attribute is not applied and the only call site is
-// `#[cfg(target_arch = "wasm32")]`-gated, so stable compiles fine.
-#![cfg_attr(target_arch = "wasm32", feature(alloc_error_hook))]
+// free for that target. Gated on both `target_arch = "wasm32"` AND
+// the `wasm-threads` feature so the default single-threaded build
+// (CI's `wasm-pack build --target web --release` with stable
+// toolchain) doesn't see `#![feature(...)]` — stable rejects feature
+// gates with E0554. Host build (rlib via `cargo test --workspace`)
+// also stays unaffected since both gates are false there.
+#![cfg_attr(
+    all(target_arch = "wasm32", feature = "wasm-threads"),
+    feature(alloc_error_hook)
+)]
 
 use aenternis_core::{tick, SparseWorld};
 #[cfg(target_arch = "wasm32")]
@@ -73,7 +79,14 @@ pub use wasm_bindgen_rayon::init_thread_pool;
 /// generated lowering hands the `&str` to JS as a ptr+len pair
 /// without copying into a fresh WASM-side allocation — which matters
 /// because the hook fires *because* WASM allocation just failed.
-#[cfg(target_arch = "wasm32")]
+///
+/// Gated on `wasm-threads` for the same reason as the hook itself:
+/// `set_alloc_error_hook` is nightly-only, so the alloc-diagnostic
+/// path only exists in the threaded (nightly) bundle. The default
+/// single-threaded build keeps the legacy silent-`unreachable`
+/// behaviour on OOM; that bundle is a stable-toolchain fallback,
+/// not the production deploy path.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console, js_name = error)]
@@ -91,7 +104,7 @@ extern "C" {
 /// Deliberately allocation-free: a `panic!` here would format a
 /// `String` and re-enter the allocator that just failed, double-
 /// faulting before the message reaches the console.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 fn aenternis_alloc_error_hook(layout: std::alloc::Layout) {
     let size = u32::try_from(layout.size()).unwrap_or(u32::MAX);
     let align = u32::try_from(layout.align()).unwrap_or(u32::MAX);
@@ -102,16 +115,18 @@ fn aenternis_alloc_error_hook(layout: std::alloc::Layout) {
     );
 }
 
-/// Runs once when the WASM module is instantiated. Installs two
+/// Runs once when the WASM module is instantiated. Installs the
 /// diagnostic hooks so opaque `RuntimeError: unreachable` traps
 /// always come with context in DevTools:
 ///
 /// 1. `console_error_panic_hook` for ordinary Rust panics (formats
 ///    the panic payload + Rust source location into the console).
+///    Active on every wasm32 build.
 /// 2. `aenternis_alloc_error_hook` for `std::alloc` failures (logs
 ///    the failing layout). The default `__rust_alloc_error_handler`
 ///    on wasm32 aborts silently, which is indistinguishable from
-///    a real bug at the JS level.
+///    a real bug at the JS level. Active only on the threaded
+///    bundle, since `set_alloc_error_hook` is nightly-only.
 ///
 /// Both `set_once`-style: idempotent and thread-local-aware, so they
 /// cover every worker thread that `wasm-bindgen-rayon` spawns (each
@@ -121,6 +136,7 @@ fn aenternis_alloc_error_hook(layout: std::alloc::Layout) {
 #[wasm_bindgen(start)]
 pub fn __aenternis_wasm_start() {
     console_error_panic_hook::set_once();
+    #[cfg(feature = "wasm-threads")]
     std::alloc::set_alloc_error_hook(aenternis_alloc_error_hook);
 }
 
