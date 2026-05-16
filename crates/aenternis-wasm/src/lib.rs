@@ -37,6 +37,13 @@
 // is overridden here, not at the workspace level, so every other crate
 // stays unsafe-free. See `docs/optimalizace-2026-05.md`.
 #![allow(unsafe_code)]
+// `std::alloc::set_alloc_error_hook` is on nightly behind the
+// `alloc_error_hook` feature gate. The threaded WASM build already
+// pins nightly (`scripts/build-wasm.sh`), so enabling it here is
+// free for that target. On non-wasm32 (stable host build for tests)
+// the feature attribute is not applied and the only call site is
+// `#[cfg(target_arch = "wasm32")]`-gated, so stable compiles fine.
+#![cfg_attr(target_arch = "wasm32", feature(alloc_error_hook))]
 
 use aenternis_core::{tick, SparseWorld};
 #[cfg(target_arch = "wasm32")]
@@ -59,17 +66,62 @@ use wasm_bindgen::prelude::*;
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
-/// Runs once when the WASM module is instantiated. Installs the
-/// `console_error_panic_hook` so any subsequent Rust panic surfaces in
-/// the browser DevTools console as a real error message instead of an
-/// opaque `RuntimeError: unreachable`. `set_once()` is idempotent and
-/// thread-local-aware, so it also covers every worker thread that
-/// `wasm-bindgen-rayon` spawns (each one re-instantiates the module
-/// and re-runs the start function on its own context).
+/// `console.error` extern used by [`aenternis_alloc_error_hook`].
+/// Calling through a hand-rolled wasm-bindgen extern instead of
+/// pulling in `web_sys` keeps the crate dep graph small (web_sys is
+/// ~3 MB of generated bindings for a one-line diagnostic), and the
+/// generated lowering hands the `&str` to JS as a ptr+len pair
+/// without copying into a fresh WASM-side allocation — which matters
+/// because the hook fires *because* WASM allocation just failed.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error_alloc_fail(msg: &str, size: u32, align: u32);
+}
+
+/// `std::alloc` error hook installed at module start. Default
+/// behaviour on `wasm32-unknown-unknown` is to abort via the
+/// `unreachable` instruction with no diagnostic, so JS sees only
+/// `RuntimeError: unreachable` and can't tell an OOM apart from a
+/// real bug. This hook logs the failing layout (size, align) to
+/// `console.error` first; the default abort still runs after the
+/// hook returns, but DevTools now shows *why*.
+///
+/// Deliberately allocation-free: a `panic!` here would format a
+/// `String` and re-enter the allocator that just failed, double-
+/// faulting before the message reaches the console.
+#[cfg(target_arch = "wasm32")]
+fn aenternis_alloc_error_hook(layout: std::alloc::Layout) {
+    let size = u32::try_from(layout.size()).unwrap_or(u32::MAX);
+    let align = u32::try_from(layout.align()).unwrap_or(u32::MAX);
+    console_error_alloc_fail(
+        "Aenternis WASM allocation failure (out of memory). Following: requested size, align.",
+        size,
+        align,
+    );
+}
+
+/// Runs once when the WASM module is instantiated. Installs two
+/// diagnostic hooks so opaque `RuntimeError: unreachable` traps
+/// always come with context in DevTools:
+///
+/// 1. `console_error_panic_hook` for ordinary Rust panics (formats
+///    the panic payload + Rust source location into the console).
+/// 2. `aenternis_alloc_error_hook` for `std::alloc` failures (logs
+///    the failing layout). The default `__rust_alloc_error_handler`
+///    on wasm32 aborts silently, which is indistinguishable from
+///    a real bug at the JS level.
+///
+/// Both `set_once`-style: idempotent and thread-local-aware, so they
+/// cover every worker thread that `wasm-bindgen-rayon` spawns (each
+/// one re-instantiates the module and re-runs the start function on
+/// its own context).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn __aenternis_wasm_start() {
     console_error_panic_hook::set_once();
+    std::alloc::set_alloc_error_hook(aenternis_alloc_error_hook);
 }
 
 /// Aenternis simulation world handle.
