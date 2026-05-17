@@ -353,7 +353,7 @@ fn build_snapshot_payload_into(out: &mut Vec<u32>, world: &SparseWorld) {
 /// viewer's inspector panel parses both backends with the same
 /// `prefix` constant.
 fn build_inspect_data(cell: &Cell) -> Vec<u32> {
-    let mut out = Vec::with_capacity(28 + cell.memory.len());
+    let mut out = Vec::with_capacity(28 + cell.memory_len());
     out.push(cell.pc);
     out.push(cell.energy());
     out.push(cell.origin_tag);
@@ -362,7 +362,7 @@ fn build_inspect_data(cell: &Cell) -> Vec<u32> {
     out.extend_from_slice(&cell.rates);
     out.extend_from_slice(&cell.active_outflow);
     out.extend_from_slice(&cell.inflow);
-    out.extend_from_slice(&cell.memory);
+    out.extend_from_slice(cell.memory());
     out
 }
 

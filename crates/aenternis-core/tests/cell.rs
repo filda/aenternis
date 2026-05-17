@@ -18,7 +18,7 @@ fn new_returns_empty_cell() {
     let c = Cell::new();
     assert_eq!(c.energy(), 0);
     assert!(c.is_empty());
-    assert_eq!(c.memory, Vec::<u32>::new());
+    assert!(c.memory().is_empty());
     assert_eq!(c.pointers, [0; 6]);
     assert_eq!(c.rates, [0; 6]);
     assert_eq!(c.active_outflow, [0; 6]);
@@ -37,7 +37,7 @@ fn default_matches_new() {
 #[test]
 fn with_memory_sets_only_memory() {
     let c = Cell::with_memory(vec![1, 2, 3, 4, 5]);
-    assert_eq!(c.memory, vec![1, 2, 3, 4, 5]);
+    assert_eq!(c.memory(), &[1, 2, 3, 4, 5][..]);
     assert_eq!(c.energy(), 5);
     assert!(!c.is_empty());
     // Everything else stays at default.
@@ -203,7 +203,7 @@ fn end_of_tick_does_not_touch_persistent_state() {
 
     c.end_of_tick();
 
-    assert_eq!(c.memory, vec![1, 2, 3]);
+    assert_eq!(c.memory(), &[1, 2, 3][..]);
     assert_eq!(c.pointers, [9; 6]);
     assert_eq!(c.rates, [4; 6]);
     assert_eq!(c.pc, 7);
@@ -217,7 +217,7 @@ fn end_of_tick_does_not_touch_persistent_state() {
 fn shrink_from_end_drops_count_slots() {
     let mut c = Cell::with_memory(vec![1, 2, 3, 4, 5]);
     c.shrink_from_end(2);
-    assert_eq!(c.memory, vec![1, 2, 3]);
+    assert_eq!(c.memory(), &[1, 2, 3][..]);
     assert_eq!(c.energy(), 3);
 }
 
@@ -225,14 +225,14 @@ fn shrink_from_end_drops_count_slots() {
 fn shrink_from_end_zero_is_noop() {
     let mut c = Cell::with_memory(vec![1, 2, 3]);
     c.shrink_from_end(0);
-    assert_eq!(c.memory, vec![1, 2, 3]);
+    assert_eq!(c.memory(), &[1, 2, 3][..]);
 }
 
 #[test]
 fn shrink_from_end_saturates_at_full_length() {
     let mut c = Cell::with_memory(vec![1, 2, 3]);
     c.shrink_from_end(99);
-    assert!(c.memory.is_empty());
+    assert!(c.is_empty());
     assert_eq!(c.energy(), 0);
 }
 
@@ -240,7 +240,7 @@ fn shrink_from_end_saturates_at_full_length() {
 fn shrink_from_end_saturates_on_empty() {
     let mut c = Cell::new();
     c.shrink_from_end(5);
-    assert!(c.memory.is_empty());
+    assert!(c.is_empty());
 }
 
 // ----- append_slots -----
@@ -250,7 +250,7 @@ fn append_slots_no_cap_takes_all() {
     let mut c = Cell::with_memory(vec![1, 2]);
     let taken = c.append_slots(&[3, 4, 5], None);
     assert_eq!(taken, 3);
-    assert_eq!(c.memory, vec![1, 2, 3, 4, 5]);
+    assert_eq!(c.memory(), &[1, 2, 3, 4, 5][..]);
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn append_slots_under_cap_takes_all() {
     let mut c = Cell::with_memory(vec![1]);
     let taken = c.append_slots(&[2, 3], Some(10));
     assert_eq!(taken, 2);
-    assert_eq!(c.memory, vec![1, 2, 3]);
+    assert_eq!(c.memory(), &[1, 2, 3][..]);
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn append_slots_truncates_at_cap() {
     let mut c = Cell::with_memory(vec![1, 2, 3]);
     let taken = c.append_slots(&[4, 5, 6, 7], Some(5));
     assert_eq!(taken, 2);
-    assert_eq!(c.memory, vec![1, 2, 3, 4, 5]);
+    assert_eq!(c.memory(), &[1, 2, 3, 4, 5][..]);
 }
 
 #[test]
@@ -274,11 +274,11 @@ fn append_slots_with_cap_at_or_below_current_takes_nothing() {
     let mut c = Cell::with_memory(vec![1, 2, 3]);
     let taken = c.append_slots(&[4, 5], Some(3));
     assert_eq!(taken, 0);
-    assert_eq!(c.memory, vec![1, 2, 3]);
+    assert_eq!(c.memory(), &[1, 2, 3][..]);
 
     let taken = c.append_slots(&[4, 5], Some(2));
     assert_eq!(taken, 0);
-    assert_eq!(c.memory, vec![1, 2, 3]);
+    assert_eq!(c.memory(), &[1, 2, 3][..]);
 }
 
 #[test]
@@ -286,7 +286,7 @@ fn append_slots_empty_input_is_noop() {
     let mut c = Cell::with_memory(vec![1, 2]);
     let taken = c.append_slots(&[], None);
     assert_eq!(taken, 0);
-    assert_eq!(c.memory, vec![1, 2]);
+    assert_eq!(c.memory(), &[1, 2][..]);
 }
 
 // ----- proportional_clamp -----

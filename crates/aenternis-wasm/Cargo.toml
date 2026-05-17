@@ -33,12 +33,37 @@ wasm-bindgen-rayon = { version = "1.2", optional = true }
 # (`cells_snapshot_view` / `cell_inspect_view`). Pulled in only on the
 # wasm32 target — on the host these methods don't compile.
 js-sys = "0.3"
+# Replacement allocator for the threaded WASM bundle. The default
+# `dlmalloc` shipped by `wasm32-unknown-unknown` serializes every
+# alloc/free through a single mutex on the threaded build and
+# coalesces free chunks lazily; after a few thousand ticks with N
+# rayon workers churning per-tick `Vec`s in `collect_outflow_into`
+# / `apply_outflow` the heap fragments enough that a ~5 MB
+# contiguous request fails even with 4 GiB of headroom. `talc`'s
+# `WasmGrowAndClaim` source grows the linear memory via
+# `memory.grow` on demand and uses a spinlock-wrapped allocator
+# with better coalescing — fixes the deterministic 2200-tick OOM
+# at E = 1 M reported 2026-05-16. Gated to `wasm-threads` because
+# (a) only that build actually fragments under contention and
+# (b) the `nightly` feature on `talc` matches the nightly
+# toolchain `wasm-threads` already requires for `+atomics`.
+# Default features (`lock_api`, `allocator`, `nightly_api`) are what
+# we want: `lock_api` enables `talc::sync::TalcLock`, the others are
+# free-form trait impls. The `nightly_api` opt-in is fine because the
+# threaded build already pins nightly for `+atomics` / `-Z build-std`.
+talc = { version = "4", optional = true }
+spinning_top = { version = "0.3", optional = true }
 
 [features]
 # Forwards to `aenternis-core`'s `wasm-threads` feature, which pulls in
 # rayon + the wasm-bindgen pthread bridge. See
 # `docs/optimalizace-2026-05.md`.
-wasm-threads = ["aenternis-core/wasm-threads", "dep:wasm-bindgen-rayon"]
+wasm-threads = [
+    "aenternis-core/wasm-threads",
+    "dep:wasm-bindgen-rayon",
+    "dep:talc",
+    "dep:spinning_top",
+]
 
 # wasm-pack runs `wasm-opt` after wasm-bindgen by default. The default
 # invocation strips the shared-memory and atomics declarations from

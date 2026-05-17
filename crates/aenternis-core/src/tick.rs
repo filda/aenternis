@@ -252,7 +252,7 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
         let Some(cell) = cells.get(coord) else {
             return;
         };
-        let mem_size = cell.memory.len();
+        let mem_size = cell.memory_len();
         if mem_size == 0 {
             return;
         }
@@ -265,6 +265,7 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
             rng_tick,
             *coord,
         );
+        let cell_memory = cell.memory();
         for &d in &Direction::ALL {
             let rate = combined[d.index()] as usize;
             let ptr = cell.pointers[d.index()] as usize;
@@ -276,12 +277,12 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
             );
             let end = ptr.saturating_add(rate);
             if end <= mem_size {
-                buf.extend_from_slice(&cell.memory[ptr..end]);
+                buf.extend_from_slice(&cell_memory[ptr..end]);
             } else {
                 let tail = mem_size - ptr;
-                buf.extend_from_slice(&cell.memory[ptr..mem_size]);
+                buf.extend_from_slice(&cell_memory[ptr..mem_size]);
                 let wrap = rate - tail;
-                buf.extend_from_slice(&cell.memory[..wrap]);
+                buf.extend_from_slice(&cell_memory[..wrap]);
             }
         }
     };
@@ -308,7 +309,7 @@ pub fn lay_out_pointers(world: &mut SparseWorld) {
     let world_seed = world.world_seed;
     let rng_tick = world.tick;
     let body = |coord: &Coord, cell: &mut Cell| {
-        let mem_size = cell.memory.len();
+        let mem_size = cell.memory_len();
         if mem_size == 0 {
             return;
         }
@@ -765,7 +766,7 @@ fn merge_inflows(target: &mut Cell, entries: &[InflowEntry], outflow: &Outflow) 
         }
     }
 
-    let original_len = target.memory.len();
+    let original_len = target.memory_len();
 
     let mut rope = [MergeSegment::Original { start: 0, end: 0 }; MERGE_ROPE_CAP];
     let mut rope_len: usize = if original_len > 0 {
@@ -832,31 +833,37 @@ fn merge_inflows(target: &mut Cell, entries: &[InflowEntry], outflow: &Outflow) 
     MERGE_SCRATCH.with_borrow_mut(|scratch| {
         scratch.clear();
         scratch.reserve(new_len);
-        for seg in &rope[..rope_len] {
-            match *seg {
-                MergeSegment::Original { start, end } => {
-                    scratch.extend_from_slice(&target.memory[start as usize..end as usize]);
-                }
-                MergeSegment::Insert {
-                    entry_idx,
-                    start,
-                    end,
-                } => {
-                    let slots = slot_slices[entry_idx as usize];
-                    scratch.extend_from_slice(&slots[start as usize..end as usize]);
+        {
+            let target_memory = target.memory();
+            for seg in &rope[..rope_len] {
+                match *seg {
+                    MergeSegment::Original { start, end } => {
+                        scratch
+                            .extend_from_slice(&target_memory[start as usize..end as usize]);
+                    }
+                    MergeSegment::Insert {
+                        entry_idx,
+                        start,
+                        end,
+                    } => {
+                        let slots = slot_slices[entry_idx as usize];
+                        scratch.extend_from_slice(&slots[start as usize..end as usize]);
+                    }
                 }
             }
         }
-        std::mem::swap(&mut target.memory, scratch);
+        // Swap the freshly built buffer into `target` and recycle the
+        // old one as the next call's scratch (cleared at the top).
+        *scratch = target.replace_memory(std::mem::take(scratch));
     });
 
     // PC stays numerically the same; bring it back into range if memory
     // ever shrank. (Inflow phase only grows, so this is defensive —
     // relevant only if a future change adds shrink.)
-    if target.memory.is_empty() {
+    if target.memory_len() == 0 {
         target.pc = 0;
     } else {
-        target.pc %= target.memory.len() as u32;
+        target.pc %= target.memory_len() as u32;
     }
 }
 

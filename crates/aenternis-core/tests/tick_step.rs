@@ -69,7 +69,7 @@ fn cpu_phase_each_cell_sees_its_own_neighbors() {
     cpu_phase(&mut w, 5);
 
     let a = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(a.memory[4], 11, "expected B's energy to be observed");
+    assert_eq!(a.memory()[4], 11, "expected B's energy to be observed");
 }
 
 #[test]
@@ -90,12 +90,12 @@ fn cpu_phase_two_cells_each_see_correct_neighbor_energy() {
     cpu_phase(&mut w, 5);
 
     assert_eq!(
-        w.get(Coord::ORIGIN).unwrap().memory[4],
+        w.get(Coord::ORIGIN).unwrap().memory()[4],
         5,
         "A should see B's energy"
     );
     assert_eq!(
-        w.get(Coord::new(1, 0, 0)).unwrap().memory[4],
+        w.get(Coord::new(1, 0, 0)).unwrap().memory()[4],
         5,
         "B should see A's energy"
     );
@@ -121,7 +121,7 @@ fn step_runs_cpu_phase() {
     step(&mut w, 0.0, 5); // k=5 → budget = 1 instruction
 
     let cell = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cell.memory[3], 999);
+    assert_eq!(cell.memory()[3], 999);
 }
 
 #[test]
@@ -154,11 +154,11 @@ fn step_is_deterministic_with_vm_running() {
     }
     let pa: Vec<_> = a
         .iter()
-        .map(|(c, cell)| (*c, cell.memory.clone()))
+        .map(|(c, cell)| (*c, cell.memory().to_vec()))
         .collect();
     let pb: Vec<_> = b
         .iter()
-        .map(|(c, cell)| (*c, cell.memory.clone()))
+        .map(|(c, cell)| (*c, cell.memory().to_vec()))
         .collect();
     assert_eq!(pa, pb);
 }
@@ -176,11 +176,11 @@ fn step_with_huge_k_matches_step_diffusion() {
     }
     let pa: Vec<_> = a
         .iter()
-        .map(|(c, cell)| (*c, cell.memory.clone()))
+        .map(|(c, cell)| (*c, cell.memory().to_vec()))
         .collect();
     let pb: Vec<_> = b
         .iter()
-        .map(|(c, cell)| (*c, cell.memory.clone()))
+        .map(|(c, cell)| (*c, cell.memory().to_vec()))
         .collect();
     assert_eq!(pa, pb);
 }

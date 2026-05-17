@@ -39,7 +39,17 @@ pub const LAYOUT_ORDER: [Direction; Direction::COUNT] = [
 pub struct Cell {
     /// Cell memory. Each entry is a 32-bit slot; one slot also represents
     /// one unit of energy. `memory.len() as u32` is the cell's energy.
-    pub memory: Vec<u32>,
+    ///
+    /// **Access through the [`Cell::memory`] / [`Cell::memory_mut`] /
+    /// [`Cell::extend_memory`] / [`Cell::replace_memory`] methods**, not
+    /// directly. The field is `pub(crate)` so internal modules (vm,
+    /// tick, world::sparse) can still build a `Cell` literal; outside
+    /// the crate the methods are the only entry point. This indirection
+    /// is the seam for migrating storage out of the `Cell` and into a
+    /// world-owned arena (Phase 2 of the arena refactor) — once that
+    /// lands, these methods reroute to `&world.arena[start..start+len]`
+    /// without touching every call site.
+    pub(crate) memory: Vec<u32>,
 
     /// Directional pointers. `pointers[d]` is the start index in
     /// [`memory`](Self::memory) of the slot range that direction `d` will
@@ -115,6 +125,83 @@ impl Cell {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.memory.is_empty()
+    }
+
+    /// Read-only view of the cell's memory slots. Length equals
+    /// [`Cell::energy`].
+    ///
+    /// The seam for the arena refactor: today this returns a `&[u32]`
+    /// over the cell-owned `Vec`; once storage moves to a world-owned
+    /// arena (Phase 2) it'll return a `&[u32]` over the arena range
+    /// `[mem_start .. mem_start + mem_len]`. Callers see the same type
+    /// either way.
+    #[must_use]
+    pub fn memory(&self) -> &[u32] {
+        &self.memory
+    }
+
+    /// Mutable view of the cell's memory slots. Length cannot change
+    /// through this handle — use [`Cell::extend_memory`],
+    /// [`Cell::shrink_from_end`], [`Cell::push_memory_slot`], or
+    /// [`Cell::replace_memory`] for length changes.
+    #[must_use]
+    pub fn memory_mut(&mut self) -> &mut [u32] {
+        &mut self.memory
+    }
+
+    /// Length of the cell's memory in slots. Same value as
+    /// [`Cell::energy`] but `usize`-typed for indexing arithmetic.
+    #[must_use]
+    pub fn memory_len(&self) -> usize {
+        self.memory.len()
+    }
+
+    /// Copy out the slot at `i`. Cheap `u32` read; avoids the borrow
+    /// the slice-indexing form would hold, which matters in VM
+    /// arithmetic opcodes that read several slots then write one.
+    #[must_use]
+    pub fn memory_slot(&self, i: usize) -> u32 {
+        self.memory[i]
+    }
+
+    /// Write the slot at `i`. Pairs with [`Cell::memory_slot`] so VM
+    /// opcodes can do `set_memory_slot(dst, memory_slot(src))` without
+    /// fighting the borrow checker.
+    pub fn set_memory_slot(&mut self, i: usize, v: u32) {
+        self.memory[i] = v;
+    }
+
+    /// Append a single slot to the end of memory, growing energy by 1.
+    pub fn push_memory_slot(&mut self, slot: u32) {
+        self.memory.push(slot);
+    }
+
+    /// Append `slots` to the end of memory, growing energy by
+    /// `slots.len()`. The bulk variant of [`Cell::push_memory_slot`];
+    /// underlying `Vec::extend_from_slice` reserves capacity in one
+    /// shot, which matters for the arena rewrite when a single inflow
+    /// may carry hundreds of slots.
+    pub fn extend_memory(&mut self, slots: &[u32]) {
+        self.memory.extend_from_slice(slots);
+    }
+
+    /// Replace the entire memory buffer, returning the previous one.
+    ///
+    /// Used by the rope-merge in [`crate::tick::apply_outflow`] to
+    /// swap a freshly-rebuilt `Vec<u32>` into place without an extra
+    /// allocation. The returned `Vec` becomes the caller's scratch on
+    /// the next iteration.
+    ///
+    /// **Note for the arena refactor (Phase 2):** this signature will
+    /// change to take a `&[u32]` and write into the arena, since the
+    /// arena-era cell no longer owns its `Vec`. Callers using this
+    /// method today should expect to be touched then; for now the
+    /// behaviour is bit-identical to `mem::swap(&mut cell.memory,
+    /// &mut new)`.
+    #[must_use]
+    pub fn replace_memory(&mut self, mut new_memory: Vec<u32>) -> Vec<u32> {
+        std::mem::swap(&mut self.memory, &mut new_memory);
+        new_memory
     }
 
     /// Sum of [`rates`](Self::rates) across all directions.

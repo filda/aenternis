@@ -36,7 +36,7 @@ fn big_bang_places_single_cell_at_origin() {
     assert!(w.contains(Coord::ORIGIN));
     let cell = w.get(Coord::ORIGIN).expect("origin cell missing");
     assert_eq!(cell.energy(), 16);
-    assert_eq!(cell.memory.len(), 16);
+    assert_eq!(cell.memory_len(), 16);
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn big_bang_is_deterministic() {
     let b = SparseWorld::big_bang(0xDEAD_BEEF, 32);
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
-    assert_eq!(ca.memory, cb.memory);
+    assert_eq!(ca.memory(), cb.memory());
     assert_eq!(ca.origin_tag, cb.origin_tag);
 }
 
@@ -55,7 +55,7 @@ fn big_bang_different_seeds_produce_different_memory() {
     let b = SparseWorld::big_bang(2, 32);
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
-    assert_ne!(ca.memory, cb.memory);
+    assert_ne!(ca.memory(), cb.memory());
 }
 
 #[test]
@@ -63,9 +63,9 @@ fn big_bang_with_program_writes_prefix() {
     let program = [0xCAFE, 0xBABE, 0xDEAD];
     let w = SparseWorld::big_bang_with_program(7, 16, &program);
     let cell = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cell.memory[0], 0xCAFE);
-    assert_eq!(cell.memory[1], 0xBABE);
-    assert_eq!(cell.memory[2], 0xDEAD);
+    assert_eq!(cell.memory()[0], 0xCAFE);
+    assert_eq!(cell.memory()[1], 0xBABE);
+    assert_eq!(cell.memory()[2], 0xDEAD);
 }
 
 #[test]
@@ -146,9 +146,9 @@ fn big_bang_with_program_fills_rest_from_rng() {
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
     // Prefixes differ as supplied.
-    assert_ne!(&ca.memory[..3], &cb.memory[..3]);
+    assert_ne!(&ca.memory()[..3], &cb.memory()[..3]);
     // Suffixes match — RNG advanced identically.
-    assert_eq!(&ca.memory[3..], &cb.memory[3..]);
+    assert_eq!(&ca.memory()[3..], &cb.memory()[3..]);
 }
 
 #[test]
@@ -156,8 +156,8 @@ fn big_bang_with_program_truncates_oversized() {
     let program: Vec<u32> = (0..100).collect();
     let w = SparseWorld::big_bang_with_program(0, 5, &program);
     let cell = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cell.memory.len(), 5);
-    assert_eq!(cell.memory, vec![0, 1, 2, 3, 4]);
+    assert_eq!(cell.memory_len(), 5);
+    assert_eq!(cell.memory(), vec![0, 1, 2, 3, 4]);
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn big_bang_with_empty_program_matches_big_bang() {
     let b = SparseWorld::big_bang_with_program(123, 32, &[]);
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
-    assert_eq!(ca.memory, cb.memory);
+    assert_eq!(ca.memory(), cb.memory());
     assert_eq!(ca.origin_tag, cb.origin_tag);
 }
 
@@ -206,8 +206,8 @@ fn get_mut_allows_modification() {
     let mut w = SparseWorld::new(0);
     let c = Coord::new(0, 0, 0);
     w.insert(c, Cell::with_memory(vec![1, 2, 3]));
-    w.get_mut(c).unwrap().memory.push(4);
-    assert_eq!(w.get(c).unwrap().memory, vec![1, 2, 3, 4]);
+    w.get_mut(c).unwrap().push_memory_slot(4);
+    assert_eq!(w.get(c).unwrap().memory(), vec![1, 2, 3, 4]);
 }
 
 #[test]
@@ -218,8 +218,8 @@ fn insert_returns_previous_cell_on_replace() {
     let prev = w
         .insert(c, Cell::with_memory(vec![9, 9]))
         .expect("expected previous");
-    assert_eq!(prev.memory, vec![1]);
-    assert_eq!(w.get(c).unwrap().memory, vec![9, 9]);
+    assert_eq!(prev.memory(), vec![1]);
+    assert_eq!(w.get(c).unwrap().memory(), vec![9, 9]);
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn neighbor_returns_some_for_existing_neighbor() {
     let n = w
         .neighbor(Coord::ORIGIN, Direction::Xp)
         .expect("neighbor should exist");
-    assert_eq!(n.memory, vec![2, 3]);
+    assert_eq!(n.memory(), vec![2, 3]);
 }
 
 #[test]
@@ -274,7 +274,7 @@ fn neighbor_works_for_all_six_directions() {
         let n = w
             .neighbor(center, d)
             .unwrap_or_else(|| panic!("missing neighbor {d:?}"));
-        assert_eq!(n.memory, vec![d.index() as u32]);
+        assert_eq!(n.memory(), vec![d.index() as u32]);
     }
 }
 
@@ -429,10 +429,10 @@ fn iter_mut_allows_modification() {
     w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
     w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![2]));
 
-    w.iter_mut().for_each(|(_, cell)| cell.memory.push(99));
+    w.iter_mut().for_each(|(_, cell)| cell.push_memory_slot(99));
 
-    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().memory, vec![1, 99]);
-    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().memory, vec![2, 99]);
+    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().memory(), vec![1, 99]);
+    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().memory(), vec![2, 99]);
 }
 
 #[test]
@@ -450,10 +450,10 @@ fn into_iter_for_mut_reference_allows_modification() {
     w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
     w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![2]));
     for (_, cell) in &mut w {
-        cell.memory.push(99);
+        cell.push_memory_slot(99);
     }
-    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().memory, vec![1, 99]);
-    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().memory, vec![2, 99]);
+    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().memory(), vec![1, 99]);
+    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().memory(), vec![2, 99]);
 }
 
 #[test]

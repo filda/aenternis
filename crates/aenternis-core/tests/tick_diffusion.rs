@@ -21,7 +21,7 @@ fn get_or_alloc_returns_existing_cell_unchanged() {
     let original_tag = w.get(c).unwrap().origin_tag;
 
     let cell = w.get_or_alloc(c);
-    assert_eq!(cell.memory, vec![7, 8, 9]);
+    assert_eq!(cell.memory(), vec![7, 8, 9]);
     assert_eq!(cell.origin_tag, original_tag);
 }
 
@@ -30,7 +30,7 @@ fn get_or_alloc_creates_empty_cell_with_origin_tag() {
     let mut w = SparseWorld::new(0xCAFE);
     let c = Coord::new(1, 2, 3);
     let cell = w.get_or_alloc(c);
-    assert!(cell.memory.is_empty());
+    assert!(cell.is_empty());
     // origin_tag was drawn from the per-cell-at-tick stream — the
     // value is deterministic but we only assert it isn't zero.
     // (False-positive risk: 1 / 2^32 that the RNG actually emits 0.)
@@ -137,7 +137,7 @@ fn apply_outflow_shrinks_source_by_total_rate() {
     // Source shrank by 3 (sum of rates).
     let cell = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(cell.energy(), 7);
-    assert_eq!(cell.memory, vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(cell.memory(), vec![1, 2, 3, 4, 5, 6, 7]);
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn apply_outflow_allocates_void_neighbor_with_inflow() {
     let target = w
         .get(Coord::new(1, 0, 0))
         .expect("alloc-on-write should have created the cell");
-    assert_eq!(target.memory, vec![10, 20]);
+    assert_eq!(target.memory(), vec![10, 20]);
     // Strong attacker against an empty target → dominance ≈ 1.0,
     // so the target inherits the attacker's origin tag.
     assert_eq!(target.origin_tag, 0xCAFE);
@@ -177,7 +177,7 @@ fn apply_outflow_appends_into_existing_neighbor() {
 
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
     // Existing memory + appended inflow.
-    assert_eq!(target.memory, vec![99, 99, 10, 20]);
+    assert_eq!(target.memory(), vec![99, 99, 10, 20]);
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn apply_outflow_skips_outflow_for_missing_source() {
     // neighbor at (1, 0, 0).
     assert!(!w.contains(Coord::ORIGIN));
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
-    assert_eq!(target.memory, vec![42]);
+    assert_eq!(target.memory(), vec![42]);
 }
 
 // ----- step_diffusion (end-to-end) -----
@@ -308,11 +308,11 @@ fn step_diffusion_is_deterministic() {
     // BTreeMap order, so a direct iter zip gives byte-identity.
     let pa: Vec<_> = a
         .iter()
-        .map(|(c, cell)| (*c, cell.memory.clone()))
+        .map(|(c, cell)| (*c, cell.memory().to_vec()))
         .collect();
     let pb: Vec<_> = b
         .iter()
-        .map(|(c, cell)| (*c, cell.memory.clone()))
+        .map(|(c, cell)| (*c, cell.memory().to_vec()))
         .collect();
     assert_eq!(pa, pb);
 }

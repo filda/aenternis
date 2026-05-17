@@ -372,10 +372,10 @@ mod tests {
         let coord = Coord::new(3, 3, 3);
         let (was_vacant, cell) = c.get_or_insert_with(coord, || dummy_cell(42));
         assert!(was_vacant);
-        cell.memory.push(100);
+        cell.push_memory_slot(100);
         let (was_vacant_again, cell) = c.get_or_insert_with(coord, || dummy_cell(0));
         assert!(!was_vacant_again);
-        assert!(cell.memory.contains(&100));
+        assert!(cell.memory().contains(&100));
     }
 
     #[test]

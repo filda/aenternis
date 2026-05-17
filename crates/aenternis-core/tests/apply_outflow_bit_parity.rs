@@ -71,7 +71,7 @@ fn hash_world(w: &SparseWorld) -> u64 {
         cell.pc.hash(&mut h);
         cell.origin_tag.hash(&mut h);
         cell.appearance.hash(&mut h);
-        cell.memory.hash(&mut h);
+        cell.memory().hash(&mut h);
         cell.rates.hash(&mut h);
         cell.active_outflow.hash(&mut h);
         cell.pointers.hash(&mut h);

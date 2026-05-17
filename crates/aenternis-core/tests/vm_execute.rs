@@ -29,7 +29,7 @@ const fn op(o: Opcode) -> u32 {
 fn empty_cell_is_a_noop() {
     let mut c = Cell::new();
     execute_instruction(&mut c, &VOID);
-    assert!(c.memory.is_empty());
+    assert!(c.memory().is_empty());
     assert_eq!(c.pc, 0);
 }
 
@@ -40,7 +40,7 @@ fn unknown_opcode_advances_pc_by_one() {
     execute_instruction(&mut c, &VOID);
     assert_eq!(c.pc, 1);
     // Memory untouched.
-    assert_eq!(c.memory, vec![0xFF, 99, 99]);
+    assert_eq!(c.memory(), &[0xFF, 99, 99][..]);
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn pc_wraps_at_memory_boundary() {
     // mem[0] becomes wrapping_add(op(Opcode::Inc), 1) = 0x06.
     execute_instruction(&mut c, &VOID);
     assert_eq!(c.pc, (2 + 2) % 4); // = 0
-    assert_eq!(c.memory[0], op(Opcode::Inc).wrapping_add(1));
+    assert_eq!(c.memory()[0], op(Opcode::Inc).wrapping_add(1));
 }
 
 // ----- nop -----
@@ -67,7 +67,7 @@ fn nop_advances_pc_by_one() {
     let mut c = cell_with(&[op(Opcode::Nop), 0, 0]);
     execute_instruction(&mut c, &VOID);
     assert_eq!(c.pc, 1);
-    assert_eq!(c.memory, vec![op(Opcode::Nop), 0, 0]);
+    assert_eq!(c.memory(), &[op(Opcode::Nop), 0, 0][..]);
 }
 
 // ----- set / copy -----
@@ -76,7 +76,7 @@ fn nop_advances_pc_by_one() {
 fn set_writes_value_to_address() {
     let mut c = cell_with(&[op(Opcode::Set), 4, 0xDEAD_BEEF, 0, 0]); // size 5
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[4], 0xDEAD_BEEF);
+    assert_eq!(c.memory()[4], 0xDEAD_BEEF);
     assert_eq!(c.pc, 3);
 }
 
@@ -85,7 +85,7 @@ fn set_address_is_modular() {
     let mut c = cell_with(&[op(Opcode::Set), 5, 42]); // memory size 3
     execute_instruction(&mut c, &VOID);
     // 5 % 3 = 2.
-    assert_eq!(c.memory[2], 42);
+    assert_eq!(c.memory()[2], 42);
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn copy_moves_value_from_b_to_a() {
     let mut c = cell_with(&[op(Opcode::Copy), 2, 3, 100, 200]);
     execute_instruction(&mut c, &VOID);
     // mem[2] = mem[3] = 100
-    assert_eq!(c.memory[2], 100);
+    assert_eq!(c.memory()[2], 100);
 }
 
 // ----- arithmetic -----
@@ -105,7 +105,7 @@ fn add_wraps_modulo_2_to_32() {
     let mut c = cell_with(&[op(Opcode::Add), 3, 4, u32::MAX, 5]);
     execute_instruction(&mut c, &VOID);
     // mem[3] = mem[3].wrapping_add(mem[4]) = u32::MAX + 5 = 4.
-    assert_eq!(c.memory[3], 4);
+    assert_eq!(c.memory()[3], 4);
 }
 
 #[test]
@@ -113,14 +113,14 @@ fn sub_wraps_modulo_2_to_32() {
     let mut c = cell_with(&[op(Opcode::Sub), 3, 4, 3, 10]);
     execute_instruction(&mut c, &VOID);
     // mem[3] = mem[3].wrapping_sub(mem[4]) = 3 - 10 wraps.
-    assert_eq!(c.memory[3], 3u32.wrapping_sub(10));
+    assert_eq!(c.memory()[3], 3u32.wrapping_sub(10));
 }
 
 #[test]
 fn inc_advances_value_by_one() {
     let mut c = cell_with(&[op(Opcode::Inc), 2, 41]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[2], 42);
+    assert_eq!(c.memory()[2], 42);
     assert_eq!(c.pc, 2);
 }
 
@@ -128,21 +128,21 @@ fn inc_advances_value_by_one() {
 fn inc_wraps_at_u32_max() {
     let mut c = cell_with(&[op(Opcode::Inc), 2, u32::MAX]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[2], 0);
+    assert_eq!(c.memory()[2], 0);
 }
 
 #[test]
 fn dec_decreases_value_by_one() {
     let mut c = cell_with(&[op(Opcode::Dec), 2, 1]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[2], 0);
+    assert_eq!(c.memory()[2], 0);
 }
 
 #[test]
 fn dec_wraps_at_zero() {
     let mut c = cell_with(&[op(Opcode::Dec), 2, 0]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[2], u32::MAX);
+    assert_eq!(c.memory()[2], u32::MAX);
 }
 
 // ----- control flow -----
@@ -222,7 +222,7 @@ fn getp_reads_pointer_into_memory() {
     let mut c = cell_with(&[op(Opcode::Getp), 1, 3, 0]);
     c.pointers[Direction::Xn.index()] = 42;
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[3], 42);
+    assert_eq!(c.memory()[3], 42);
 }
 
 #[test]
@@ -254,14 +254,14 @@ fn senergy_reads_neighbor_energy_into_memory() {
     let mut neighbors = VOID;
     neighbors[Direction::Yp.index()] = 99;
     execute_instruction(&mut c, &neighbors);
-    assert_eq!(c.memory[3], 99);
+    assert_eq!(c.memory()[3], 99);
 }
 
 #[test]
 fn senergy_returns_zero_for_void_neighbor() {
     let mut c = cell_with(&[op(Opcode::Senergy), 0, 3, 0]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[3], 0);
+    assert_eq!(c.memory()[3], 0);
 }
 
 // ----- indirect addressing -----
@@ -271,7 +271,7 @@ fn ldi_loads_indirect_via_runtime_address() {
     // mem[3] = 5. We want mem[2] = mem[mem[3]] = mem[5] = 7.
     let mut c = cell_with(&[op(Opcode::Ldi), 2, 3, 5, 0, 7, 0]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[2], 7);
+    assert_eq!(c.memory()[2], 7);
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn sti_stores_indirect_via_runtime_address() {
     // sti a=3 b=4 → mem[mem[3]] = mem[4] → mem[5] = 99.
     let mut c = cell_with(&[op(Opcode::Sti), 3, 4, 5, 99, 0, 0]);
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[5], 99);
+    assert_eq!(c.memory()[5], 99);
 }
 
 // ----- UI fields -----
@@ -290,7 +290,7 @@ fn sid_writes_origin_tag_into_memory() {
     let mut c = cell_with(&[op(Opcode::Sid), 1, 0]);
     c.origin_tag = 0xCAFE_BABE;
     execute_instruction(&mut c, &VOID);
-    assert_eq!(c.memory[1], 0xCAFE_BABE);
+    assert_eq!(c.memory()[1], 0xCAFE_BABE);
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn senergy_can_only_read_via_neighbor_energies() {
     neighbors[Direction::Zp.index()] = 12345;
     execute_instruction(&mut c, &neighbors);
     // 4 mod 6 = 4 = Zp.index().
-    assert_eq!(c.memory[1], 12345);
+    assert_eq!(c.memory()[1], 12345);
 }
 
 // ----- direction modulo (d mod DIRS) for opcodes with a `d` operand -----
@@ -348,13 +348,13 @@ fn unknown_high_byte_opcode_advances_pc_by_one() {
     // pc += 1. This used to be the `legacy_opcode_set` branch; it's
     // hardcoded now since the VM ships a 9-B-parity opcode table.
     let mut c = cell_with(&[0; 10]);
-    c.memory[5] = 0x14; // would have been Sinflow before the cleanup
-    c.memory[6] = 0;
-    c.memory[7] = 9;
+    c.set_memory_slot(5, 0x14); // would have been Sinflow before the cleanup
+    c.set_memory_slot(6, 0);
+    c.set_memory_slot(7, 9);
     c.pc = 5;
     execute_instruction(&mut c, &VOID);
     assert_eq!(c.pc, 6);
-    assert_eq!(c.memory[9], 0);
+    assert_eq!(c.memory()[9], 0);
 }
 
 #[test]
@@ -362,10 +362,10 @@ fn unknown_opcode_decode_uses_low_byte_only() {
     // Slot 0x0000_0105 decodes to Inc (low byte 0x05) — upper bits
     // never promote a legal opcode into the unknown range.
     let mut c = cell_with(&[0; 10]);
-    c.memory[5] = 0x0000_0105;
-    c.memory[6] = 9;
+    c.set_memory_slot(5, 0x0000_0105);
+    c.set_memory_slot(6, 9);
     c.pc = 5;
     execute_instruction(&mut c, &VOID);
     assert_eq!(c.pc, 7, "Inc has length 2");
-    assert_eq!(c.memory[9], 1);
+    assert_eq!(c.memory()[9], 1);
 }

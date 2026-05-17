@@ -190,12 +190,13 @@ impl Opcode {
 /// face's outflow past `u32::MAX` just wrap around.
 #[allow(clippy::too_many_lines)] // 20 opcodes per match; splitting hurts more than it helps
 pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction::COUNT]) {
-    let mem_size = cell.memory.len();
+    let mem_size = cell.memory_len();
     if mem_size == 0 {
         return;
     }
     let pc_u = cell.pc as usize;
-    let opcode_slot = cell.memory[pc_u % mem_size];
+    let mem = cell.memory();
+    let opcode_slot = mem[pc_u % mem_size];
 
     let Some(op) = Opcode::decode(opcode_slot) else {
         // Unknown opcode → nop, advance by 1.
@@ -206,23 +207,11 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
     let length = op.length() as usize;
 
     // Read up to three operand slots upfront. After this point we no
-    // longer hold an immutable borrow of `cell.memory`, so the match
-    // arms are free to mutate cells.
-    let arg1 = if length >= 2 {
-        cell.memory[(pc_u + 1) % mem_size]
-    } else {
-        0
-    };
-    let arg2 = if length >= 3 {
-        cell.memory[(pc_u + 2) % mem_size]
-    } else {
-        0
-    };
-    let arg3 = if length >= 4 {
-        cell.memory[(pc_u + 3) % mem_size]
-    } else {
-        0
-    };
+    // longer hold an immutable borrow of `cell.memory()`, so the
+    // match arms are free to mutate cells.
+    let arg1 = if length >= 2 { mem[(pc_u + 1) % mem_size] } else { 0 };
+    let arg2 = if length >= 3 { mem[(pc_u + 2) % mem_size] } else { 0 };
+    let arg3 = if length >= 4 { mem[(pc_u + 3) % mem_size] } else { 0 };
 
     // `Some(addr)` overrides the default PC-advance when set by a jump.
     let mut jump_to: Option<usize> = None;
@@ -232,30 +221,32 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
 
         Opcode::Set => {
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = arg2;
+            cell.set_memory_slot(dst, arg2);
         }
         Opcode::Copy => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.memory[src];
+            cell.set_memory_slot(dst, cell.memory_slot(src));
         }
         Opcode::Add => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.memory[dst].wrapping_add(cell.memory[src]);
+            let sum = cell.memory_slot(dst).wrapping_add(cell.memory_slot(src));
+            cell.set_memory_slot(dst, sum);
         }
         Opcode::Sub => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.memory[dst].wrapping_sub(cell.memory[src]);
+            let diff = cell.memory_slot(dst).wrapping_sub(cell.memory_slot(src));
+            cell.set_memory_slot(dst, diff);
         }
         Opcode::Inc => {
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.memory[dst].wrapping_add(1);
+            cell.set_memory_slot(dst, cell.memory_slot(dst).wrapping_add(1));
         }
         Opcode::Dec => {
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.memory[dst].wrapping_sub(1);
+            cell.set_memory_slot(dst, cell.memory_slot(dst).wrapping_sub(1));
         }
 
         Opcode::Jmp => {
@@ -263,20 +254,20 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         }
         Opcode::Jz => {
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory[probe] == 0 {
+            if cell.memory_slot(probe) == 0 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
         Opcode::Jne => {
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory[probe] != 0 {
+            if cell.memory_slot(probe) != 0 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
         Opcode::Je => {
             let a = (arg1 as usize) % mem_size;
             let b = (arg2 as usize) % mem_size;
-            if cell.memory[a] == cell.memory[b] {
+            if cell.memory_slot(a) == cell.memory_slot(b) {
                 jump_to = Some((arg3 as usize) % mem_size);
             }
         }
@@ -289,12 +280,12 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         Opcode::Getp => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let dst = (arg2 as usize) % mem_size;
-            cell.memory[dst] = cell.pointers[dir];
+            cell.set_memory_slot(dst, cell.pointers[dir]);
         }
         Opcode::Setpv => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let src = (arg2 as usize) % mem_size;
-            cell.pointers[dir] = cell.memory[src] % (mem_size as u32);
+            cell.pointers[dir] = cell.memory_slot(src) % (mem_size as u32);
             cell.pointer_override[dir] = true;
         }
 
@@ -305,27 +296,27 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         Opcode::Senergy => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let dst = (arg2 as usize) % mem_size;
-            cell.memory[dst] = neighbor_energies[dir];
+            cell.set_memory_slot(dst, neighbor_energies[dir]);
         }
 
         Opcode::Ldi => {
             let b_addr = (arg2 as usize) % mem_size;
-            let runtime = cell.memory[b_addr] as usize;
+            let runtime = cell.memory_slot(b_addr) as usize;
             let src = runtime % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.memory[src];
+            cell.set_memory_slot(dst, cell.memory_slot(src));
         }
         Opcode::Sti => {
             let a_addr = (arg1 as usize) % mem_size;
             let b_addr = (arg2 as usize) % mem_size;
-            let runtime = cell.memory[a_addr] as usize;
+            let runtime = cell.memory_slot(a_addr) as usize;
             let dst = runtime % mem_size;
-            cell.memory[dst] = cell.memory[b_addr];
+            cell.set_memory_slot(dst, cell.memory_slot(b_addr));
         }
 
         Opcode::Sid => {
             let dst = (arg1 as usize) % mem_size;
-            cell.memory[dst] = cell.origin_tag;
+            cell.set_memory_slot(dst, cell.origin_tag);
         }
         Opcode::Paint => {
             cell.appearance = arg1;
