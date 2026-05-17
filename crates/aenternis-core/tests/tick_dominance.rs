@@ -15,7 +15,7 @@
 //!   like the no-dominance variant.
 
 use aenternis_core::tick::{apply_outflow, collect_outflow, Outflow};
-use aenternis_core::{Cell, Coord, Direction, SparseWorld};
+use aenternis_core::{Coord, Direction, SparseWorld};
 
 // ----- helpers ---------------------------------------------------------------
 
@@ -146,7 +146,10 @@ fn intrusion_at_intermediate_dominance_inserts_in_the_middle() {
     apply_outflow(&mut w, &outflow);
 
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
-    assert_eq!(target.memory(w.arena()), vec![0xB0, 0xB1, 0xB2, 0xA0, 0xB3, 0xB4]);
+    assert_eq!(
+        target.memory(w.arena()),
+        vec![0xB0, 0xB1, 0xB2, 0xA0, 0xB3, 0xB4]
+    );
     // dominance ≥ 0.5 (exactly 0.5), origin_tag inherited from attacker
     // (which is 0 by default since we didn't set it).
     assert_eq!(target.origin_tag, 0);
@@ -227,8 +230,16 @@ fn multiple_inflows_apply_strongest_first() {
     // Weak inflow is at the very end.
     assert_eq!(*target.memory(w.arena()).last().unwrap(), 0xCC);
     // Strong's index < weak's index — the load-bearing property.
-    let strong_idx = target.memory(w.arena()).iter().position(|&v| v == 0xAAAA).unwrap();
-    let weak_idx = target.memory(w.arena()).iter().position(|&v| v == 0xCC).unwrap();
+    let strong_idx = target
+        .memory(w.arena())
+        .iter()
+        .position(|&v| v == 0xAAAA)
+        .unwrap();
+    let weak_idx = target
+        .memory(w.arena())
+        .iter()
+        .position(|&v| v == 0xCC)
+        .unwrap();
     assert!(
         strong_idx < weak_idx,
         "strong should land earlier than weak ({strong_idx} vs {weak_idx})"
@@ -510,7 +521,7 @@ fn raising_move_threshold_raises_dominance() {
             .memory(w.arena())
             .iter()
             .position(|&v| v != 0)
-            .unwrap_or(target.memory_len())
+            .unwrap_or_else(|| target.memory_len())
     }
 
     let pos_low_threshold = position_for_threshold(1.0); // dom 0   → late

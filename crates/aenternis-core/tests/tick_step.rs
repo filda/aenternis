@@ -7,7 +7,7 @@
 //! to `step_diffusion` when the per-cell budget is zero.
 
 use aenternis_core::tick::{cpu_phase, step, step_diffusion};
-use aenternis_core::{Cell, Coord, Opcode, SparseWorld};
+use aenternis_core::{Coord, Opcode, SparseWorld};
 
 const fn op(o: Opcode) -> u32 {
     o as u32
@@ -69,7 +69,11 @@ fn cpu_phase_each_cell_sees_its_own_neighbors() {
     cpu_phase(&mut w, 5);
 
     let a = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(a.memory(w.arena())[4], 11, "expected B's energy to be observed");
+    assert_eq!(
+        a.memory(w.arena())[4],
+        11,
+        "expected B's energy to be observed"
+    );
 }
 
 #[test]

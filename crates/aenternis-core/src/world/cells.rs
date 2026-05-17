@@ -298,10 +298,7 @@ mod tests {
     use crate::world::Arena;
 
     fn dummy_cell(arena: &mut Arena, seed: u32) -> Cell {
-        Cell::with_memory(
-            arena,
-            &[seed, seed.wrapping_mul(2), seed.wrapping_mul(3)],
-        )
+        Cell::with_memory(arena, &[seed, seed.wrapping_mul(2), seed.wrapping_mul(3)])
     }
 
     #[test]

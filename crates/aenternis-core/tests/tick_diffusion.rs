@@ -9,7 +9,7 @@
 use aenternis_core::tick::{
     apply_outflow, collect_outflow, end_of_tick, lay_out_pointers, step_diffusion, Outflow,
 };
-use aenternis_core::{Cell, Coord, Direction, SparseWorld};
+use aenternis_core::{Coord, Direction, SparseWorld};
 
 // ----- get_or_alloc (sparse world helper) -----
 

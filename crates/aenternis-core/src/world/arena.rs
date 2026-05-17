@@ -69,8 +69,7 @@ impl Arena {
     /// free-list stays empty and any `alloc(len > 0)` panics.
     #[must_use]
     pub fn with_capacity(capacity: u32) -> Self {
-        let mut slots = Vec::with_capacity(capacity as usize);
-        slots.resize(capacity as usize, 0);
+        let slots = vec![0u32; capacity as usize];
         let mut free = BTreeMap::new();
         if capacity > 0 {
             free.insert(0, capacity);
@@ -84,7 +83,7 @@ impl Arena {
 
     /// Total slot capacity (= `slots.len()`).
     #[must_use]
-    pub fn capacity(&self) -> u32 {
+    pub const fn capacity(&self) -> u32 {
         self.capacity
     }
 
@@ -167,7 +166,7 @@ impl Arena {
             .checked_mul(2)
             .map(|doubled| doubled - self.capacity)
             .filter(|&d| d >= len)
-            .unwrap_or(len.max(16));
+            .unwrap_or_else(|| len.max(16));
         let new_capacity = self
             .capacity
             .checked_add(added)

@@ -847,8 +847,7 @@ fn merge_inflows(
             for seg in &rope[..rope_len] {
                 match *seg {
                     MergeSegment::Original { start, end } => {
-                        scratch
-                            .extend_from_slice(&target_memory[start as usize..end as usize]);
+                        scratch.extend_from_slice(&target_memory[start as usize..end as usize]);
                     }
                     MergeSegment::Insert {
                         entry_idx,

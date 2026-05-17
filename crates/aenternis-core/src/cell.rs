@@ -270,15 +270,17 @@ impl Cell {
         arena.free(old_start, old_len);
         if new_len > 0 {
             let new_start = arena.alloc(new_len);
-            arena.slice_mut(new_start, new_len).copy_from_slice(new_slots);
+            arena
+                .slice_mut(new_start, new_len)
+                .copy_from_slice(new_slots);
             self.mem_start = new_start;
             self.mem_len = new_len;
         }
     }
 
     /// Free the cell's memory range back to the arena, leaving the
-    /// cell empty (mem_len = 0). Called by world-level removal /
-    /// gc_empty paths before discarding the metadata.
+    /// cell empty (`mem_len` = 0). Called by world-level removal /
+    /// `gc_empty` paths before discarding the metadata.
     pub fn free_memory(&mut self, arena: &mut Arena) {
         arena.free(self.mem_start, self.mem_len);
         self.mem_start = 0;
@@ -290,7 +292,7 @@ impl Cell {
     /// extra method only matters when callers want to assert
     /// content equality (mostly tests).
     #[must_use]
-    pub fn memory_eq_in(&self, other: &Cell, arena: &Arena) -> bool {
+    pub fn memory_eq_in(&self, other: &Self, arena: &Arena) -> bool {
         self.memory(arena) == other.memory(arena)
     }
 
@@ -367,12 +369,7 @@ impl Cell {
     ///
     /// Allocates a new trailing range in the arena; the old range
     /// is freed via [`Arena::realloc`].
-    pub fn append_slots(
-        &mut self,
-        arena: &mut Arena,
-        slots: &[u32],
-        cap: Option<u32>,
-    ) -> usize {
+    pub fn append_slots(&mut self, arena: &mut Arena, slots: &[u32], cap: Option<u32>) -> usize {
         let mut to_take = slots.len();
         if let Some(cap) = cap {
             let cap_usize = cap as usize;

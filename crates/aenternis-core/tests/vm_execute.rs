@@ -48,12 +48,11 @@ fn unknown_opcode_advances_pc_by_one() {
 #[test]
 fn pc_wraps_at_memory_boundary() {
     let mut arena = Arena::with_capacity(64);
-    // 4-slot memory, PC at 3, opcode = inc with arg at PC+1 (wraps to 0).
-    // length=2, after execute PC = (3+2) % 4 = 1.
-    let mut c = cell_with(&mut arena, &[0, op(Opcode::Inc), 99, 99]);
-    c.pc = 3;
-    // mem[3] = 99, but with PC=3 the opcode slot is 99 (low byte 0x63 — undefined).
-    // That makes this test about unknown-opcode wrap, not inc wrap. Rebuild:
+    // 4-slot memory, PC at 3, opcode = Inc with arg at PC+1 (wraps to 0).
+    // (Earlier draft tried `[0, Inc, 99, 99]` with PC=3 — the opcode slot
+    // is then 99, which is unknown and falls back to nop-advance, defeating
+    // the wrap exercise. The layout below puts Inc at PC=2 so the opcode
+    // decodes and arg1 at PC+1=3 reads mem[3]=0, targeting memory[0].)
     let mut c = cell_with(&mut arena, &[op(Opcode::Inc), 1, op(Opcode::Inc), 0]);
     c.pc = 2;
     // PC=2, opcode = Inc, arg1 = mem[3] = 0 (target memory[0]).

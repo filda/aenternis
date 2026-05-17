@@ -367,7 +367,7 @@ impl SparseWorld {
     /// useful in tests and external readers that want both the
     /// metadata and the slot data in independent variables.
     #[must_use]
-    pub fn arena(&self) -> &Arena {
+    pub const fn arena(&self) -> &Arena {
         &self.arena
     }
 
@@ -381,7 +381,7 @@ impl SparseWorld {
     /// the arena. Exposed publicly because the only alternative
     /// (a per-slot helper on `SparseWorld`) is awkward for the
     /// orphan-cell-build-then-insert pattern that tests rely on.
-    pub fn arena_mut(&mut self) -> &mut Arena {
+    pub const fn arena_mut(&mut self) -> &mut Arena {
         &mut self.arena
     }
 
@@ -408,16 +408,13 @@ impl SparseWorld {
     /// out (via [`Cell::memory`]) before calling `insert`.
     pub fn insert(&mut self, coord: Coord, cell: Cell) -> Option<Cell> {
         let prev = self.cells.insert(coord, cell);
-        match prev {
-            Some(mut prev_cell) => {
-                prev_cell.free_memory(&mut self.arena);
-                Some(prev_cell)
-            }
-            None => {
-                self.sorted_dirty = true;
-                self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
-                None
-            }
+        if let Some(mut prev_cell) = prev {
+            prev_cell.free_memory(&mut self.arena);
+            Some(prev_cell)
+        } else {
+            self.sorted_dirty = true;
+            self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
+            None
         }
     }
 

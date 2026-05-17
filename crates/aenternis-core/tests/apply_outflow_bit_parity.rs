@@ -25,7 +25,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use aenternis_core::{tick, Cell, Coord, Rng, SparseWorld};
+use aenternis_core::{tick, Coord, Rng, SparseWorld};
 use rustc_hash::FxHasher;
 
 /// Build a cubic dense grid of `side^3` cells with `cell_energy` slots

@@ -229,9 +229,7 @@ fn insert_returns_previous_cell_on_replace() {
     let mut w = SparseWorld::new(0);
     let c = Coord::new(0, 0, 0);
     w.insert_with_memory(c, &[1]);
-    let prev = w
-        .insert_with_memory(c, &[9, 9])
-        .expect("expected previous");
+    let prev = w.insert_with_memory(c, &[9, 9]).expect("expected previous");
     assert!(prev.is_empty(), "freed prev should report empty memory");
     assert_eq!(w.get(c).unwrap().memory_len(), 2);
     assert_eq!(w.cell_memory(c).unwrap(), &[9, 9]);
@@ -284,10 +282,7 @@ fn neighbor_works_for_all_six_directions() {
     }
     for &d in &Direction::ALL {
         let n_coord = center.neighbor(d);
-        assert!(
-            w.neighbor(center, d).is_some(),
-            "missing neighbor {d:?}",
-        );
+        assert!(w.neighbor(center, d).is_some(), "missing neighbor {d:?}");
         assert_eq!(w.cell_memory(n_coord).unwrap(), &[d.index() as u32]);
     }
 }
