@@ -56,35 +56,18 @@ use aenternis_core::{tick, SparseWorld};
 use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
 
-// Replace the default `dlmalloc` allocator on the threaded WASM
-// build. The default `dlmalloc` shipped with `wasm32-unknown-unknown`
-// serializes every alloc/free through a single mutex when `+atomics`
-// is enabled and coalesces freed chunks lazily; combined with the N
-// rayon-worker churn over per-tick `Vec`s in `collect_outflow_into`
-// / `apply_outflow` / `MERGE_SCRATCH`, that fragments the heap fast
-// enough to fail a ~5 MB contiguous request after a couple thousand
-// ticks at E = 1 M, even though total live memory stays in the low
-// hundreds of MB and `--max-memory=4294967296` leaves 4 GiB of
-// headroom.
-//
-// `talc::WasmHandler` grows the linear memory via `memory.grow` on
-// demand and is what talc's built-in `TalckWasm` is built on. The
-// stock `TalckWasm` wraps the handler in `AssumeUnlockable` and is
-// only sound on single-threaded WASM — assuming-unlockable while
-// rayon workers race the allocator would be UB. We pair the same
-// handler with a real `spinning_top::RawSpinlock` instead. That
-// spinlock implements `lock_api::RawMutex`, so it slots straight
-// into talc's generic `Talck<R, O>` wrapper. Coalescing is much
-// more aggressive than dlmalloc's, which is what closes the
-// fragmentation gap.
-//
-// Single-threaded WASM keeps dlmalloc — it has no contention or
-// fragmentation pressure there, and pulling talc in unconditionally
-// would inflate the stable-toolchain CI parity bundle for no win.
-#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
-#[global_allocator]
-static TALC: talc::Talck<spinning_top::RawSpinlock, talc::WasmHandler> =
-    unsafe { talc::Talc::new(talc::WasmHandler::new()).lock() };
+// Allocator: stock `dlmalloc` on every target. The previous
+// `talc` + `spinning_top` global allocator that the threaded
+// build pulled in (2026-05-16 → 2026-05-17) was a band-aid for
+// the heap fragmentation that came from ~250 k per-cell
+// `Vec<u32>` allocations churning each tick. Phases 1–3 of the
+// arena refactor moved cell memory into a single world-owned
+// `Arena` (with a double-buffer `arena_next` for compact-by-
+// construction writes), so the global allocator now sees one
+// big `Vec<u32>` per arena instead of 250 k small ones —
+// dlmalloc handles that without contention or coalescing
+// pressure even under the rayon worker pool. See
+// `docs/optimalizace-2026-05.md`.
 
 // When the `wasm-threads` feature is on (and we're building for
 // wasm32), re-export `init_thread_pool` from `wasm-bindgen-rayon` so
@@ -207,7 +190,15 @@ impl World {
     pub fn new(seed: u32, energy: u32) -> Self {
         Self {
             inner: SparseWorld::big_bang(u64::from(seed), energy),
-            snapshot_buf: Vec::new(),
+            // Snapshot peaks at `cell_count * STRIDE`, and cell count
+            // is energy-bounded — pre-reserve to that ceiling so the
+            // first snapshot (and every subsequent one up to the peak)
+            // doesn't ask the global allocator for a ~24 MB block at
+            // E = 1 M. Eliminates the very allocation that started the
+            // 2026-05-16 OOM investigation.
+            snapshot_buf: Vec::with_capacity(
+                (energy as usize).saturating_mul(Self::SNAPSHOT_STRIDE),
+            ),
             inspect_buf: Vec::new(),
         }
     }
@@ -226,7 +217,12 @@ impl World {
     pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
         Self {
             inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
-            snapshot_buf: Vec::new(),
+            // See `World::new` for the pre-reservation rationale —
+            // cell-count peak is energy-bounded, snapshot peaks at
+            // `cell_count * STRIDE`.
+            snapshot_buf: Vec::with_capacity(
+                (energy as usize).saturating_mul(Self::SNAPSHOT_STRIDE),
+            ),
             inspect_buf: Vec::new(),
         }
     }

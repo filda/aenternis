@@ -201,17 +201,33 @@ impl SparseWorld {
     /// the simulation's total energy).
     #[must_use]
     pub fn with_capacity(world_seed: u64, capacity: u32) -> Self {
+        // `capacity` is an upper bound on live cells (one slot per
+        // unit of energy, energy is conserved, so cell count never
+        // exceeds total energy). Pre-reserving every cell-keyed
+        // container to that bound means none of them ever rehashes
+        // during `step`, which removes the last per-tick large
+        // contiguous request that could still surprise the allocator
+        // — see Phase 4 of `docs/optimalizace-2026-05.md` for the
+        // "5 MB realloc fails at tick 2200" diagnosis the arena
+        // refactor unwound.
+        let cap_usize = capacity as usize;
         Self {
-            cells: Cells::new(),
+            cells: Cells::with_capacity(cap_usize),
             arena: Arena::with_capacity(capacity),
             arena_next: Arena::with_capacity(capacity),
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
-            scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
-            scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
-            scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
-            sorted_cache: Vec::new(),
+            scratch_neighbor_energies: FxHashMap::with_capacity_and_hasher(
+                cap_usize,
+                FxBuildHasher,
+            ),
+            scratch_outflow: FxHashMap::with_capacity_and_hasher(cap_usize, FxBuildHasher),
+            scratch_inflows_by_target: FxHashMap::with_capacity_and_hasher(
+                cap_usize,
+                FxBuildHasher,
+            ),
+            sorted_cache: Vec::with_capacity(cap_usize),
             sorted_dirty: false,
             bbox_cache: None,
             bbox_dirty: false,
