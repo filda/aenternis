@@ -87,6 +87,22 @@ impl Arena {
         self.capacity
     }
 
+    /// Mark every slot as free. The free-list collapses to a single
+    /// `(0, capacity)` entry; existing `(mem_start, mem_len)` indices
+    /// pointing into this arena become stale (the slot bytes survive,
+    /// but the allocator now considers the range available).
+    ///
+    /// Used by [`crate::tick::apply_outflow`] on the staging arena
+    /// before each tick — the previous tick's metadata is gone after
+    /// the swap, so the free-list can shed all its bookkeeping and
+    /// start fresh as a bump allocator.
+    pub fn clear(&mut self) {
+        self.free.clear();
+        if self.capacity > 0 {
+            self.free.insert(0, self.capacity);
+        }
+    }
+
     /// Read-only view of the full backing slice. Cells use this
     /// via [`Cell::memory`](crate::Cell::memory) plus their own
     /// `(mem_start, mem_len)`; direct callers are tests and the

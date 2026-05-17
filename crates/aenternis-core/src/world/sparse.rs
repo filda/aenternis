@@ -61,22 +61,40 @@ pub struct SparseWorld {
     /// [`SparseWorld::iter_mut`].
     pub(crate) cells: Cells,
 
-    /// Single-buffer arena holding every cell's memory slots.
+    /// Current arena holding every cell's memory slots.
     ///
     /// Cells store `(mem_start, mem_len)` indices into this buffer;
-    /// per-cell `Vec<u32>`s do not exist. The arena is pre-allocated
-    /// at [`SparseWorld::big_bang`] to the world's total energy so
-    /// no growth happens during `step` — see Phase 2 of the arena
-    /// refactor in `docs/optimalizace-2026-05.md`. Test paths that
-    /// go through [`SparseWorld::new`] start with a zero-capacity
-    /// arena that grows on demand (the `Arena::alloc` slow path);
-    /// production paths via `big_bang` never trigger that growth.
+    /// per-cell `Vec<u32>`s do not exist. Pre-allocated at
+    /// [`SparseWorld::big_bang`] to the world's total energy so
+    /// no growth happens during `step`. Test paths that go through
+    /// [`SparseWorld::new`] start with a zero-capacity arena that
+    /// grows on demand (the `Arena::alloc` slow path); production
+    /// paths via `big_bang` never trigger that growth.
+    ///
+    /// Paired with [`SparseWorld::arena_next`]: each
+    /// [`crate::tick::apply_outflow`] reads from this arena and
+    /// writes the next tick's compacted state into `arena_next`,
+    /// then swaps. Bump-only allocation per tick, no in-place
+    /// free-list churn — the structural fragmentation fix of the
+    /// Phase 3 arena refactor (`docs/optimalizace-2026-05.md`).
     ///
     /// Accessed `pub(crate)` so tick-phase split-borrows can pair
     /// `&mut self.cells` with `&self.arena` (immutable phases) or
     /// `&mut self.arena` (sequential phases) without an
     /// intermediate accessor.
     pub(crate) arena: Arena,
+
+    /// Staging arena written by [`crate::tick::apply_outflow`] —
+    /// each tick the post-outflow / post-inflow cell layout is
+    /// computed, prefix-summed for offsets, and copied into here
+    /// before [`std::mem::swap`] makes it the new `arena`.
+    ///
+    /// Held at the same capacity as [`SparseWorld::arena`] so a
+    /// `swap` is a constant-time pointer flip. Pre-allocated by
+    /// `big_bang`; the [`Arena::clear`] call at the top of each
+    /// `apply_outflow` resets it to one big free range so the
+    /// bump allocator inside `apply_outflow` starts from zero.
+    pub(crate) arena_next: Arena,
 
     /// Seed used for any deterministic randomness in this world. Combined
     /// with the current tick and per-cell coords by [`Rng::for_cell_at_tick`]
@@ -132,24 +150,24 @@ pub struct SparseWorld {
     /// advances. Reading [`Self::sorted_iter`] outside that contract
     /// (after a manual mutation, before a tick) requires calling
     /// `rebuild_indices_if_dirty` first — `debug_assert` enforces it.
-    sorted_cache: Vec<Coord>,
+    pub(crate) sorted_cache: Vec<Coord>,
 
     /// `true` if at least one mutation since the last
     /// `rebuild_indices_if_dirty` added or removed a key, so
     /// `sorted_cache` is stale. Pure value replacement (e.g.
     /// [`Self::insert`] over an existing coord) leaves it `false`.
-    sorted_dirty: bool,
+    pub(crate) sorted_dirty: bool,
 
     /// Cached `(x_min, x_max, y_min, y_max, z_min, z_max)` over all
     /// live cells, `None` for the empty world. Maintained eagerly on
     /// insert (incremental extend) and rebuilt lazily on
     /// remove/`gc_empty` (full fold over `sorted_cache`).
-    bbox_cache: Option<(i32, i32, i32, i32, i32, i32)>,
+    pub(crate) bbox_cache: Option<(i32, i32, i32, i32, i32, i32)>,
 
     /// `true` if a removal since the last `rebuild_indices_if_dirty`
     /// may have shrunk the bbox; the next rebuild does a full fold to
     /// recompute. Inserts don't set this — they extend bbox in place.
-    bbox_dirty: bool,
+    pub(crate) bbox_dirty: bool,
 }
 
 impl SparseWorld {
@@ -186,6 +204,7 @@ impl SparseWorld {
         Self {
             cells: Cells::new(),
             arena: Arena::with_capacity(capacity),
+            arena_next: Arena::with_capacity(capacity),
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
@@ -617,7 +636,7 @@ const fn fresh_cell(world_seed: u64, coord: Coord) -> Cell {
 /// each min/max applies to, and the axis-specific bbox tests cover
 /// that.
 #[must_use]
-fn extend_bbox(
+pub(crate) fn extend_bbox(
     bbox: Option<(i32, i32, i32, i32, i32, i32)>,
     coord: Coord,
 ) -> (i32, i32, i32, i32, i32, i32) {

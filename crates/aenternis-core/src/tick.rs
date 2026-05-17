@@ -425,24 +425,28 @@ pub fn combined_clamped(
 /// walk is bit-identical to a sequential one.
 #[allow(clippy::too_many_lines)]
 pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
+    // Reset the staging arena. After this `arena_next` is one big
+    // free range covering its full capacity; per-cell bump allocs
+    // below carve from it sequentially, and the swap at the bottom
+    // promotes it to the new `arena` (the previous `arena` becomes
+    // next tick's staging buffer and is cleared then).
+    world.arena_next.clear();
+
     // -------------------------------------------------------------------
-    // Phase 1: shrink each source by its total outgoing slot count.
+    // Phase 1: cache per-source total outflow.
     // -------------------------------------------------------------------
-    // After this loop, `cell.energy()` for every source equals
-    // `pre - total_outflow` — exactly the post-burn / post-outflow
-    // value the dominance math needs. No separate snapshot map needed.
+    // No in-place shrink anymore — the post-outflow length is just
+    // `old_mem_len - total_outflow`, computed numerically and used
+    // below as the size of the cell's "Original" rope segment that
+    // the merge will copy out of `arena_cur`.
+    let mut per_source_total_outflow: FxHashMap<Coord, u32> = FxHashMap::default();
+    per_source_total_outflow.reserve(outflow.len());
     for (coord, per_dir) in outflow {
         let total: u32 = per_dir
             .iter()
             .map(|v| u32::try_from(v.len()).unwrap_or(u32::MAX))
             .fold(0u32, u32::saturating_add);
-        if total == 0 {
-            continue;
-        }
-        let arena = &mut world.arena;
-        if let Some(cell) = world.cells.get_mut(coord) {
-            cell.shrink_from_end(arena, total);
-        }
+        per_source_total_outflow.insert(*coord, total);
     }
 
     // -------------------------------------------------------------------
@@ -453,23 +457,27 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // per-target `Vec` capacities — `clear()`-reused across ticks —
     // skip the ~200 k `Vec::with_capacity(0)→reserve(N)` cycle the
     // freshly-built `FxHashMap::default()` version was paying.
+    //
+    // Dominance math uses *post-outflow* energies (the values the
+    // pre-double-buffer code arrived at by mutating arena in phase 1);
+    // we just compute them inline.
     let move_threshold = world.move_threshold.max(f32::EPSILON);
     let mut inflows_by_target = std::mem::take(&mut world.scratch_inflows_by_target);
-    // Clear value lengths but keep capacities; the keyset stays as
-    // whatever it was last tick (most coords overlap), and stale
-    // entries are dropped at the end of the apply phase.
     for v in inflows_by_target.values_mut() {
         v.clear();
     }
     inflows_by_target.reserve(outflow.len().saturating_sub(inflows_by_target.len()));
 
     for (source_coord, per_dir) in outflow {
-        // One cell lookup covers both fields we need from the source
-        // (energy and origin tag), instead of two separate `get` calls.
-        let (attacker_post, src_origin_tag) = world
+        let (src_old_mem_len, src_origin_tag) = world
             .cells
             .get(source_coord)
-            .map_or((0u32, 0u32), |c| (c.energy(), c.origin_tag));
+            .map_or((0u32, 0u32), |c| (c.mem_len, c.origin_tag));
+        let src_total_outflow = per_source_total_outflow
+            .get(source_coord)
+            .copied()
+            .unwrap_or(0);
+        let attacker_post = src_old_mem_len.saturating_sub(src_total_outflow);
         let attacker_post_burn = u32::max(1, attacker_post);
 
         for &d in &Direction::ALL {
@@ -478,7 +486,12 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
                 continue;
             }
             let target_coord = source_coord.neighbor(d);
-            let target_e_post = world.cells.get(&target_coord).map_or(0, Cell::energy);
+            let tgt_old_mem_len = world.cells.get(&target_coord).map_or(0, |c| c.mem_len);
+            let tgt_total_outflow = per_source_total_outflow
+                .get(&target_coord)
+                .copied()
+                .unwrap_or(0);
+            let target_e_post = tgt_old_mem_len.saturating_sub(tgt_total_outflow);
 
             let r = u32_to_f32(target_e_post) / u32_to_f32(attacker_post_burn);
             let dom = (1.0 - r / move_threshold).clamp(0.0, 1.0);
@@ -497,14 +510,9 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         }
     }
 
-    // -------------------------------------------------------------------
-    // Phase 3: sort each target's inflows, alloc-on-write any void
-    // targets, then apply intrusion inserts in parallel.
-    // -------------------------------------------------------------------
-    // Sort sequentially so the per-target apply can run from a
-    // read-only `inflows_by_target` reference inside the parallel walk.
-    // Empty `Vec`s (stale entries from previous ticks) are skipped —
-    // their capacity stays reserved for next tick.
+    // Sort each target's inflows (dominance desc, dir asc). Empty
+    // entries (stale from previous tick) are skipped; their `Vec`
+    // capacity is reused without churn.
     for entries in inflows_by_target.values_mut() {
         if entries.len() <= 1 {
             continue;
@@ -516,37 +524,108 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
                 .then_with(|| a.dir_from_target.cmp(&b.dir_from_target))
         });
     }
-    // Alloc-on-write for any target that didn't exist yet, so the
-    // parallel walk over `world.cells` finds every receiver as a
-    // single mutable bucket. Skip stale entries with empty `Vec`s.
+
+    // -------------------------------------------------------------------
+    // Phase 3: alloc-on-write metadata for new targets.
+    // -------------------------------------------------------------------
+    // The actual arena ranges are bump-allocated in `arena_next`
+    // during the write phase; here we only insert the `Cell`
+    // metadata (with the deterministic `origin_tag`) so the write
+    // loop below sees every receiver as a regular `cells.iter_mut`
+    // bucket.
+    let world_seed = world.world_seed;
     for (target_coord, entries) in &inflows_by_target {
-        if !entries.is_empty() {
-            world.get_or_alloc(*target_coord);
-        }
-    }
-
-    // Phase 3: sequential walk over cells because each merge
-    // call needs `&mut world.arena` (alloc + free), and we can't
-    // share a mutable arena borrow across rayon worker threads.
-    // Phase 3 of the arena refactor (double-buffer + compact-by-
-    // construction) brings parallelism back via exclusive prefix-
-    // sum offsets into `arena_next`. For now: simpler, sequential,
-    // bit-identical to the old parallel rope merge.
-    let inflows = &inflows_by_target;
-    let cells = &mut world.cells;
-    let arena = &mut world.arena;
-    for (coord, target) in cells.iter_mut() {
-        target.inflow = [0; Direction::COUNT];
-
-        let Some(entries) = inflows.get(coord) else {
-            continue;
-        };
         if entries.is_empty() {
             continue;
         }
-
-        merge_inflows(target, arena, entries, outflow);
+        if !world.cells.contains_key(target_coord) {
+            let mut cell = Cell::new();
+            cell.origin_tag = crate::rng::cell_seed(world_seed, *target_coord);
+            world.cells.insert(*target_coord, cell);
+            world.sorted_dirty = true;
+            world.bbox_cache = Some(crate::world::sparse::extend_bbox(
+                world.bbox_cache,
+                *target_coord,
+            ));
+        }
     }
+
+    // -------------------------------------------------------------------
+    // Phase 4: write each cell's new memory into `arena_next`.
+    // -------------------------------------------------------------------
+    // Split borrow: `cells.iter_mut` mutates cell metadata in place
+    // (mem_start, mem_len, inflow, pc, origin_tag) while we read
+    // arena_cur (`&world.arena`) and bump-allocate into arena_next
+    // (`&mut world.arena_next`). Sequential — Phase 3 *could* go
+    // parallel via disjoint prefix-sum slices in `arena_next`, but
+    // the sequential path is simpler and the per-cell work is a
+    // memcpy of `new_len` slots either way; parallel parallelism is
+    // a follow-up if measurement shows it matters.
+    {
+        let cells = &mut world.cells;
+        let arena_cur = &world.arena;
+        let arena_next = &mut world.arena_next;
+        let inflows = &inflows_by_target;
+
+        for (coord, cell) in cells.iter_mut() {
+            // Cache pre-write values; we'll overwrite mem_start /
+            // mem_len below and still need the old ones to read from
+            // arena_cur.
+            let old_mem_start = cell.mem_start;
+            let old_mem_len = cell.mem_len;
+            let total_outflow = per_source_total_outflow.get(coord).copied().unwrap_or(0);
+            let post_outflow_len = old_mem_len.saturating_sub(total_outflow);
+            let entries = inflows.get(coord).map_or::<&[InflowEntry], _>(&[], |e| e);
+
+            // Clear last tick's inflow tracking; the inflows below
+            // will accumulate into a fresh array.
+            cell.inflow = [0; Direction::COUNT];
+
+            // Sum inflow slot counts to learn new_len up front (we
+            // need to bump-alloc the destination range before
+            // starting the per-segment copy).
+            let mut total_inflow: u32 = 0;
+            for entry in entries {
+                if let Some(per_dir) = outflow.get(&entry.source_coord) {
+                    let slots = &per_dir[entry.source_dir as usize];
+                    total_inflow =
+                        total_inflow.saturating_add(u32::try_from(slots.len()).unwrap_or(u32::MAX));
+                }
+            }
+            let new_len = post_outflow_len.saturating_add(total_inflow);
+
+            if new_len == 0 {
+                // Cell will be gc'd. Drop its arena reference so the
+                // pre-swap `cell.memory(arena_cur)` in any debug
+                // tooling between here and the swap doesn't index
+                // a stale range.
+                cell.mem_start = 0;
+                cell.mem_len = 0;
+                continue;
+            }
+
+            let new_start = arena_next.alloc(new_len);
+
+            write_cell_into_next_arena(
+                cell,
+                arena_cur,
+                arena_next,
+                new_start,
+                new_len,
+                old_mem_start,
+                post_outflow_len,
+                entries,
+                outflow,
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 5: swap arenas. After this, `arena` holds the new state;
+    // `arena_next` holds stale data that the next tick's `clear()`
+    // will discard.
+    // -------------------------------------------------------------------
+    std::mem::swap(&mut world.arena, &mut world.arena_next);
 
     // Return the pooled inflow map to the world so its per-target
     // `Vec` capacities carry over to the next tick's apply.
@@ -650,17 +729,6 @@ impl MergeSegment {
 /// `16` rounds up for headroom and a power-of-two stack array.
 const MERGE_ROPE_CAP: usize = 16;
 
-std::thread_local! {
-    /// Per-thread scratch buffer for [`merge_inflows`]'s rope flatten.
-    /// Holds the rebuilt memory while we swap it with `target.memory`;
-    /// after the swap, the scratch holds the cell's old memory and is
-    /// `clear()`-ed (capacity preserved) on the next call. This way the
-    /// hot path pays O(new_len) memcpy and amortized-zero allocation,
-    /// matching the old splice path's per-cell allocation pattern.
-    static MERGE_SCRATCH: std::cell::RefCell<Vec<u32>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
 /// Max inflow entries per target — one per face. Mirrors `Direction::COUNT`
 /// but kept as a local constant so [`merge_inflows`]'s stack arrays can
 /// be sized at compile time.
@@ -735,59 +803,69 @@ fn rope_insert(
     }
 }
 
-/// Merge `entries` into `target.memory`, preserving the sequential
-/// splice semantics of the old `apply_outflow` inner loop without per-
-/// insert `Vec::splice` memmoves.
+/// Build the cell's new memory in `arena_next` from the post-outflow
+/// remainder of its old data plus the inflow slots, preserving the
+/// sequential splice semantics of the pre-double-buffer rope merge.
 ///
 /// `entries` must be sorted by `(dominance desc, dir_from_target asc)`
 /// — same contract as the splice-based predecessor. `outflow` is the
-/// read-only per-source slot map.
+/// read-only per-source slot map. Caller has bump-allocated
+/// `(new_start, new_len)` in `arena_next`; this function copies the
+/// new contents in.
 ///
 /// **Semantics, identical to the splice predecessor:**
 ///
+/// - Rope starts with one Original segment covering
+///   `[old_mem_start .. old_mem_start + post_outflow_len)` of
+///   `arena_cur` (i.e. the cell's memory after the conceptual
+///   end-shrink).
 /// - For each entry in order: `intrusion_depth = floor(dominance *
 ///   current_len)`; `write_start = current_len - intrusion_depth`.
 ///   `current_len` grows by `slots.len()` after each insert.
 /// - Origin-tag inheritance: `entries[0]` wins iff its dominance ≥ 0.5.
-/// - `target.inflow[dir_from_target]` accumulates the slot count per
+/// - `cell.inflow[dir_from_target]` accumulates the slot count per
 ///   applied entry (saturating).
 /// - PC stays numerically the same; modulo'd back into range at the end.
 ///
-/// **How it works:** we build a small stack-allocated rope of segments
-/// (sub-ranges of the original memory + sub-slices of the entries'
-/// slots), simulating each splice as a segment insert with an in-place
-/// split if needed. Each insert is `O(rope_len) ≤ O(13)` constant work.
-/// Then we flatten the rope into a fresh `Vec` in one `memcpy`-per-
-/// segment pass — `O(new_len)` total — instead of `O(k * memory_len)`
-/// memmoves under the old splice loop.
-fn merge_inflows(
-    target: &mut Cell,
-    arena: &mut crate::world::arena::Arena,
+/// **How it works:** small stack-allocated rope of segments tracks
+/// where each insert lands. Once built, we flatten by walking the
+/// rope and copying each segment directly into the destination slice
+/// in `arena_next` — no thread-local scratch needed, since the
+/// destination is a single contiguous `&mut [u32]` carved out of
+/// `arena_next` by the caller.
+#[allow(clippy::too_many_arguments)]
+fn write_cell_into_next_arena(
+    cell: &mut Cell,
+    arena_cur: &crate::world::arena::Arena,
+    arena_next: &mut crate::world::arena::Arena,
+    new_start: u32,
+    new_len: u32,
+    old_mem_start: u32,
+    post_outflow_len: u32,
     entries: &[InflowEntry],
     outflow: &Outflow,
 ) {
     // Origin-tag inheritance fires on the highest-dominance entry only,
-    // and only when dominance ≥ 0.5. Caller has already verified
-    // `entries` is non-empty.
+    // and only when dominance ≥ 0.5.
     if let Some(top) = entries.first() {
         if top.dominance >= 0.5 {
-            target.origin_tag = top.src_origin_tag;
+            cell.origin_tag = top.src_origin_tag;
         }
     }
 
-    let original_len = target.memory_len();
+    let post_outflow_len_usize = post_outflow_len as usize;
 
     let mut rope = [MergeSegment::Original { start: 0, end: 0 }; MERGE_ROPE_CAP];
-    let mut rope_len: usize = if original_len > 0 {
+    let mut rope_len: usize = if post_outflow_len > 0 {
         rope[0] = MergeSegment::Original {
             start: 0,
-            end: u32::try_from(original_len).unwrap_or(u32::MAX),
+            end: post_outflow_len,
         };
         1
     } else {
         0
     };
-    let mut current_len = original_len;
+    let mut current_len = post_outflow_len_usize;
 
     // Resolve each entry's slots once so flatten doesn't re-hash.
     let mut slot_slices: [&[u32]; MERGE_MAX_ENTRIES] = [&[]; MERGE_MAX_ENTRIES];
@@ -822,57 +900,61 @@ fn merge_inflows(
         current_len += slots.len();
 
         let dir_idx = entry.dir_from_target as usize;
-        target.inflow[dir_idx] = target.inflow[dir_idx].saturating_add(slots_len_u32);
+        cell.inflow[dir_idx] = cell.inflow[dir_idx].saturating_add(slots_len_u32);
     }
 
-    // No actual inserts (e.g., all entries had empty slots) — leave
-    // memory and pc untouched, since the splice predecessor would have
-    // produced the same no-op.
-    if slot_count == 0 {
-        return;
-    }
+    debug_assert_eq!(
+        current_len, new_len as usize,
+        "rope flatten size must match the bump-allocated new_len"
+    );
 
-    // Flatten the rope into a thread-local scratch buffer, then
-    // hand the slice to `target.replace_memory` which allocates a
-    // fresh range in the arena and copies the contents in. The
-    // scratch's capacity is the per-thread peak rebuilt-cell size
-    // and is reused across calls — the only `Vec<u32>` allocations
-    // in the merge path. The arena holds everything else.
-    let new_len = current_len;
-    MERGE_SCRATCH.with_borrow_mut(|scratch| {
-        scratch.clear();
-        scratch.reserve(new_len);
-        {
-            let target_memory = target.memory(arena);
-            for seg in &rope[..rope_len] {
-                match *seg {
-                    MergeSegment::Original { start, end } => {
-                        scratch.extend_from_slice(&target_memory[start as usize..end as usize]);
-                    }
-                    MergeSegment::Insert {
-                        entry_idx,
-                        start,
-                        end,
-                    } => {
-                        let slots = slot_slices[entry_idx as usize];
-                        scratch.extend_from_slice(&slots[start as usize..end as usize]);
-                    }
+    // Flatten the rope directly into the destination slice. One
+    // memcpy per segment, no intermediate buffer — `arena_next` is
+    // already sized to `new_len` for this cell by the caller.
+    let dest = arena_next.slice_mut(new_start, new_len);
+    let mut pos: usize = 0;
+    for seg in &rope[..rope_len] {
+        match *seg {
+            MergeSegment::Original { start, end } => {
+                let seg_len = (end - start) as usize;
+                if seg_len > 0 {
+                    let src = arena_cur.slice(old_mem_start + start, end - start);
+                    dest[pos..pos + seg_len].copy_from_slice(src);
+                    pos += seg_len;
+                }
+            }
+            MergeSegment::Insert {
+                entry_idx,
+                start,
+                end,
+            } => {
+                let seg_len = (end - start) as usize;
+                if seg_len > 0 {
+                    let slots = slot_slices[entry_idx as usize];
+                    dest[pos..pos + seg_len].copy_from_slice(&slots[start as usize..end as usize]);
+                    pos += seg_len;
                 }
             }
         }
-        // Re-allocate the cell's range in the arena and copy the
-        // freshly-built scratch into it. `replace_memory` frees the
-        // old range, allocs the new, and copies in one step.
-        target.replace_memory(arena, scratch);
-    });
+    }
+    debug_assert_eq!(pos, new_len as usize);
 
-    // PC stays numerically the same; bring it back into range if memory
-    // ever shrank. (Inflow phase only grows, so this is defensive —
-    // relevant only if a future change adds shrink.)
-    if target.memory_len() == 0 {
-        target.pc = 0;
-    } else {
-        target.pc %= target.memory_len() as u32;
+    cell.mem_start = new_start;
+    cell.mem_len = new_len;
+
+    // PC wrap mirrors the pre-double-buffer rope-merge predecessor:
+    // it fired *only* when at least one inflow with non-empty slots
+    // was applied (`slot_count > 0`). Cells with outflow but no
+    // inflow keep their pre-apply pc verbatim — `cpu_phase`'s
+    // `pc_u % mem_size` lazily wraps it on the next tick. Wrapping
+    // eagerly here would change the per-cell `cell.pc` snapshot the
+    // bit-parity baseline hashes after every tick.
+    if slot_count > 0 {
+        if new_len == 0 {
+            cell.pc = 0;
+        } else {
+            cell.pc %= new_len;
+        }
     }
 }
 
