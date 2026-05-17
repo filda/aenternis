@@ -45,7 +45,7 @@ fn dense_grid_world(seed: u64, side: i32, cell_energy: u32) -> SparseWorld {
                 for _ in 0..cell_energy {
                     memory.push(rng.next_u32());
                 }
-                world.insert(Coord::new(x, y, z), Cell::with_memory(memory));
+                world.insert_with_memory(Coord::new(x, y, z), &memory);
             }
         }
     }
@@ -71,7 +71,7 @@ fn hash_world(w: &SparseWorld) -> u64 {
         cell.pc.hash(&mut h);
         cell.origin_tag.hash(&mut h);
         cell.appearance.hash(&mut h);
-        cell.memory().hash(&mut h);
+        cell.memory(w.arena()).hash(&mut h);
         cell.rates.hash(&mut h);
         cell.active_outflow.hash(&mut h);
         cell.pointers.hash(&mut h);

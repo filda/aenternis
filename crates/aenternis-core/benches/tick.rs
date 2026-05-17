@@ -21,7 +21,7 @@
 // the workspace's `missing_docs = "warn"` lint can't see through.
 #![allow(missing_docs)]
 
-use aenternis_core::{tick, Cell, Coord, Rng, SparseWorld};
+use aenternis_core::{tick, Coord, Rng, SparseWorld};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
 /// Diffusion coefficient — typical mid-range value used in the prototypes.
@@ -189,7 +189,7 @@ fn dense_grid_world(seed: u64, side: i32, cell_energy: u32) -> SparseWorld {
                 for _ in 0..cell_energy {
                     memory.push(rng.next_u32());
                 }
-                world.insert(Coord::new(x, y, z), Cell::with_memory(memory));
+                world.insert_with_memory(Coord::new(x, y, z), &memory);
             }
         }
     }

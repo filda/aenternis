@@ -243,6 +243,7 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
     // coord lookup against the immutable `world.cells`, so per-entry
     // tasks are fully independent.
     let cells = &world.cells;
+    let arena = &world.arena;
     let world_seed = world.world_seed;
     let rng_tick = world.tick;
     let body = |coord: &Coord, per_dir: &mut [Vec<u32>; Direction::COUNT]| {
@@ -265,7 +266,7 @@ pub fn collect_outflow_into(world: &SparseWorld, outflow: &mut Outflow) {
             rng_tick,
             *coord,
         );
-        let cell_memory = cell.memory();
+        let cell_memory = cell.memory(arena);
         for &d in &Direction::ALL {
             let rate = combined[d.index()] as usize;
             let ptr = cell.pointers[d.index()] as usize;
@@ -438,8 +439,9 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         if total == 0 {
             continue;
         }
+        let arena = &mut world.arena;
         if let Some(cell) = world.cells.get_mut(coord) {
-            cell.shrink_from_end(total);
+            cell.shrink_from_end(arena, total);
         }
     }
 
@@ -523,26 +525,28 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
         }
     }
 
+    // Phase 3: sequential walk over cells because each merge
+    // call needs `&mut world.arena` (alloc + free), and we can't
+    // share a mutable arena borrow across rayon worker threads.
+    // Phase 3 of the arena refactor (double-buffer + compact-by-
+    // construction) brings parallelism back via exclusive prefix-
+    // sum offsets into `arena_next`. For now: simpler, sequential,
+    // bit-identical to the old parallel rope merge.
     let inflows = &inflows_by_target;
-    let body = |coord: &Coord, target: &mut Cell| {
-        // Phase 0 (clear last tick's inflow tracking) fuses into the
-        // same parallel iter so we don't need a separate full-cells
-        // pass. `sinflow` reads what arrived in the previous tick;
-        // anything left over from before has to go before we
-        // accumulate this tick's arrivals.
+    let cells = &mut world.cells;
+    let arena = &mut world.arena;
+    for (coord, target) in cells.iter_mut() {
         target.inflow = [0; Direction::COUNT];
 
         let Some(entries) = inflows.get(coord) else {
-            return;
+            continue;
         };
         if entries.is_empty() {
-            return;
+            continue;
         }
 
-        merge_inflows(target, entries, outflow);
-    };
-
-    par_or_seq_iter_mut!(&mut world.cells, body);
+        merge_inflows(target, arena, entries, outflow);
+    }
 
     // Return the pooled inflow map to the world so its per-target
     // `Vec` capacities carry over to the next tick's apply.
@@ -756,7 +760,12 @@ fn rope_insert(
 /// Then we flatten the rope into a fresh `Vec` in one `memcpy`-per-
 /// segment pass — `O(new_len)` total — instead of `O(k * memory_len)`
 /// memmoves under the old splice loop.
-fn merge_inflows(target: &mut Cell, entries: &[InflowEntry], outflow: &Outflow) {
+fn merge_inflows(
+    target: &mut Cell,
+    arena: &mut crate::world::arena::Arena,
+    entries: &[InflowEntry],
+    outflow: &Outflow,
+) {
     // Origin-tag inheritance fires on the highest-dominance entry only,
     // and only when dominance ≥ 0.5. Caller has already verified
     // `entries` is non-empty.
@@ -823,18 +832,18 @@ fn merge_inflows(target: &mut Cell, entries: &[InflowEntry], outflow: &Outflow) 
         return;
     }
 
-    // Flatten the rope into a thread-local scratch buffer, then swap
-    // it with `target.memory`. The scratch holds the previous cell's
-    // memory after the swap; next call's `clear()` drops it and reuses
-    // the allocation. This way the rebuild is O(new_len) memcpy +
-    // amortized-zero allocation, instead of one fresh `Vec::with_capacity`
-    // per cell per tick.
+    // Flatten the rope into a thread-local scratch buffer, then
+    // hand the slice to `target.replace_memory` which allocates a
+    // fresh range in the arena and copies the contents in. The
+    // scratch's capacity is the per-thread peak rebuilt-cell size
+    // and is reused across calls — the only `Vec<u32>` allocations
+    // in the merge path. The arena holds everything else.
     let new_len = current_len;
     MERGE_SCRATCH.with_borrow_mut(|scratch| {
         scratch.clear();
         scratch.reserve(new_len);
         {
-            let target_memory = target.memory();
+            let target_memory = target.memory(arena);
             for seg in &rope[..rope_len] {
                 match *seg {
                     MergeSegment::Original { start, end } => {
@@ -852,9 +861,10 @@ fn merge_inflows(target: &mut Cell, entries: &[InflowEntry], outflow: &Outflow) 
                 }
             }
         }
-        // Swap the freshly built buffer into `target` and recycle the
-        // old one as the next call's scratch (cleared at the top).
-        *scratch = target.replace_memory(std::mem::take(scratch));
+        // Re-allocate the cell's range in the arena and copy the
+        // freshly-built scratch into it. `replace_memory` frees the
+        // old range, allocs the new, and copies in one step.
+        target.replace_memory(arena, scratch);
     });
 
     // PC stays numerically the same; bring it back into range if memory
@@ -927,20 +937,25 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     }
 
     let k_safe = k.max(1);
+    // Sequential walk in Phase 2 because each `execute_instruction`
+    // call takes `&mut Arena`, and we can't share a mutable arena
+    // borrow across rayon worker threads. Phase 3 of the arena
+    // refactor re-introduces parallelism via prefix-sum disjoint
+    // ranges into `arena_next`; for now we keep the cell ranges in
+    // a single arena and walk them one at a time.
     let snapshot = &world.scratch_neighbor_energies;
-
-    let body = |coord: &Coord, cell: &mut Cell| {
+    let cells = &mut world.cells;
+    let arena = &mut world.arena;
+    for (coord, cell) in cells.iter_mut() {
         let neighbors = snapshot
             .get(coord)
             .copied()
             .unwrap_or([0; Direction::COUNT]);
         let budget = cell.energy() / k_safe;
         for _ in 0..budget {
-            crate::vm::execute_instruction(cell, &neighbors);
+            crate::vm::execute_instruction(cell, arena, &neighbors);
         }
-    };
-
-    par_or_seq_iter_mut!(&mut world.cells, body);
+    }
 }
 
 /// Run one full simulation tick on the world.

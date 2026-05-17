@@ -27,7 +27,7 @@ fn cpu_phase_runs_floor_energy_div_k_instructions() {
     // 12 nop slots, k=1 → budget = 12. Each nop advances PC by 1, so
     // PC ends at 12 % 12 = 0 (full loop).
     let mut w = SparseWorld::new(0);
-    let cell = Cell::with_memory(vec![0u32; 12]);
+    let cell = w.alloc_cell(&[0u32; 12]);
     w.insert(Coord::ORIGIN, cell);
     cpu_phase(&mut w, 1);
     assert_eq!(w.get(Coord::ORIGIN).unwrap().pc, 0);
@@ -37,7 +37,7 @@ fn cpu_phase_runs_floor_energy_div_k_instructions() {
 fn cpu_phase_with_k_zero_treats_as_k_one() {
     // budget = 5 / max(0, 1) = 5 (treated as k=1).
     let mut w = SparseWorld::new(0);
-    let cell = Cell::with_memory(vec![0u32; 5]);
+    let cell = w.alloc_cell(&[0u32; 5]);
     w.insert(Coord::ORIGIN, cell);
     cpu_phase(&mut w, 0);
     // 5 nops, PC = 5 % 5 = 0.
@@ -48,7 +48,7 @@ fn cpu_phase_with_k_zero_treats_as_k_one() {
 fn cpu_phase_k_too_large_runs_zero_instructions() {
     // budget = 5 / 10 = 0 → no instruction runs, PC unchanged.
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![0u32; 5]);
+    let mut cell = w.alloc_cell(&[0u32; 5]);
     cell.pc = 3;
     w.insert(Coord::ORIGIN, cell);
     cpu_phase(&mut w, 10);
@@ -61,15 +61,15 @@ fn cpu_phase_each_cell_sees_its_own_neighbors() {
     // Program: Senergy d=0 (Xp), a=4 → mem[4] = neighbors[Xp].energy.
     // Energy = 5, k = 5 → budget = 1 instruction.
     let mut w = SparseWorld::new(0);
-    let a = Cell::with_memory(vec![op(Opcode::Senergy), 0, 4, 0, 0]);
+    let a = w.alloc_cell(&[op(Opcode::Senergy), 0, 4, 0, 0]);
     w.insert(Coord::ORIGIN, a);
-    let b = Cell::with_memory(vec![1; 11]); // size 11
+    let b = w.alloc_cell(&[1; 11]); // size 11
     w.insert(Coord::new(1, 0, 0), b);
 
     cpu_phase(&mut w, 5);
 
     let a = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(a.memory()[4], 11, "expected B's energy to be observed");
+    assert_eq!(a.memory(w.arena())[4], 11, "expected B's energy to be observed");
 }
 
 #[test]
@@ -82,20 +82,20 @@ fn cpu_phase_two_cells_each_see_correct_neighbor_energy() {
     //
     // With k = 5 and energy = 5 each, both run exactly 1 instruction.
     let mut w = SparseWorld::new(0);
-    let a = Cell::with_memory(vec![op(Opcode::Senergy), 0, 4, 0, 0]); // size 5
-    let b = Cell::with_memory(vec![op(Opcode::Senergy), 1, 4, 0, 0]); // size 5
+    let a = w.alloc_cell(&[op(Opcode::Senergy), 0, 4, 0, 0]); // size 5
+    let b = w.alloc_cell(&[op(Opcode::Senergy), 1, 4, 0, 0]); // size 5
     w.insert(Coord::ORIGIN, a);
     w.insert(Coord::new(1, 0, 0), b);
 
     cpu_phase(&mut w, 5);
 
     assert_eq!(
-        w.get(Coord::ORIGIN).unwrap().memory()[4],
+        w.get(Coord::ORIGIN).unwrap().memory(w.arena())[4],
         5,
         "A should see B's energy"
     );
     assert_eq!(
-        w.get(Coord::new(1, 0, 0)).unwrap().memory()[4],
+        w.get(Coord::new(1, 0, 0)).unwrap().memory(w.arena())[4],
         5,
         "B should see A's energy"
     );
@@ -115,13 +115,13 @@ fn step_runs_cpu_phase() {
     // Program: Set mem[3] = 999. After 1 instruction: mem[3] = 999.
     // coeff = 0 → no diffusion outflow → memory survives the step.
     let mut w = SparseWorld::new(0);
-    let cell = Cell::with_memory(vec![op(Opcode::Set), 3, 999, 0, 0]); // size 5
+    let cell = w.alloc_cell(&[op(Opcode::Set), 3, 999, 0, 0]); // size 5
     w.insert(Coord::ORIGIN, cell);
 
     step(&mut w, 0.0, 5); // k=5 → budget = 1 instruction
 
     let cell = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cell.memory()[3], 999);
+    assert_eq!(cell.memory(w.arena())[3], 999);
 }
 
 #[test]
@@ -154,11 +154,11 @@ fn step_is_deterministic_with_vm_running() {
     }
     let pa: Vec<_> = a
         .iter()
-        .map(|(c, cell)| (*c, cell.memory().to_vec()))
+        .map(|(c, cell)| (*c, cell.memory(a.arena()).to_vec()))
         .collect();
     let pb: Vec<_> = b
         .iter()
-        .map(|(c, cell)| (*c, cell.memory().to_vec()))
+        .map(|(c, cell)| (*c, cell.memory(b.arena()).to_vec()))
         .collect();
     assert_eq!(pa, pb);
 }
@@ -176,11 +176,11 @@ fn step_with_huge_k_matches_step_diffusion() {
     }
     let pa: Vec<_> = a
         .iter()
-        .map(|(c, cell)| (*c, cell.memory().to_vec()))
+        .map(|(c, cell)| (*c, cell.memory(a.arena()).to_vec()))
         .collect();
     let pb: Vec<_> = b
         .iter()
-        .map(|(c, cell)| (*c, cell.memory().to_vec()))
+        .map(|(c, cell)| (*c, cell.memory(b.arena()).to_vec()))
         .collect();
     assert_eq!(pa, pb);
 }

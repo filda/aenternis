@@ -17,12 +17,12 @@ use aenternis_core::{Cell, Coord, Direction, SparseWorld};
 fn get_or_alloc_returns_existing_cell_unchanged() {
     let mut w = SparseWorld::new(0);
     let c = Coord::new(2, 3, 5);
-    w.insert(c, Cell::with_memory(vec![7, 8, 9]));
+    w.insert_with_memory(c, &[7, 8, 9]);
     let original_tag = w.get(c).unwrap().origin_tag;
 
-    let cell = w.get_or_alloc(c);
-    assert_eq!(cell.memory(), vec![7, 8, 9]);
-    assert_eq!(cell.origin_tag, original_tag);
+    let cell_tag = w.get_or_alloc(c).origin_tag;
+    assert_eq!(w.cell_memory(c).unwrap(), &[7, 8, 9]);
+    assert_eq!(cell_tag, original_tag);
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn get_or_alloc_origin_tag_depends_on_coord() {
 fn end_of_tick_resets_every_cell() {
     let mut w = SparseWorld::new(0);
     for c in [Coord::new(0, 0, 0), Coord::new(1, 0, 0)] {
-        let mut cell = Cell::with_memory(vec![1, 2, 3]);
+        let mut cell = w.alloc_cell(&[1, 2, 3]);
         cell.pointer_override = [true; 6];
         cell.active_outflow = [9; 6];
         w.insert(c, cell);
@@ -78,7 +78,7 @@ fn end_of_tick_resets_every_cell() {
 #[test]
 fn lay_out_pointers_sets_pointers_from_rates() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![0; 21]);
+    let mut cell = w.alloc_cell(&[0; 21]);
     cell.rates = [1, 2, 3, 4, 5, 6];
     w.insert(Coord::ORIGIN, cell);
 
@@ -100,7 +100,7 @@ fn lay_out_pointers_includes_active_outflow() {
     // active_outflow [1, 2, 3, 4, 5, 6], the layout should match
     // the same balanced case as if rates were [1, 2, 3, 4, 5, 6].
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![0; 21]);
+    let mut cell = w.alloc_cell(&[0; 21]);
     cell.rates = [0; 6];
     cell.active_outflow = [1, 2, 3, 4, 5, 6];
     w.insert(Coord::ORIGIN, cell);
@@ -126,7 +126,7 @@ fn apply_outflow_with_empty_outflow_is_noop() {
 #[test]
 fn apply_outflow_shrinks_source_by_total_rate() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    let mut cell = w.alloc_cell(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     cell.rates = [1, 1, 1, 0, 0, 0];
     cell.pointers = [0, 1, 2, 0, 0, 0];
     w.insert(Coord::ORIGIN, cell);
@@ -137,13 +137,13 @@ fn apply_outflow_shrinks_source_by_total_rate() {
     // Source shrank by 3 (sum of rates).
     let cell = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(cell.energy(), 7);
-    assert_eq!(cell.memory(), vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(cell.memory(w.arena()), vec![1, 2, 3, 4, 5, 6, 7]);
 }
 
 #[test]
 fn apply_outflow_allocates_void_neighbor_with_inflow() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40, 50]);
     cell.rates[Direction::Xp.index()] = 2;
     cell.pointers[Direction::Xp.index()] = 0;
     cell.origin_tag = 0xCAFE; // explicit so we can verify inheritance
@@ -157,7 +157,7 @@ fn apply_outflow_allocates_void_neighbor_with_inflow() {
     let target = w
         .get(Coord::new(1, 0, 0))
         .expect("alloc-on-write should have created the cell");
-    assert_eq!(target.memory(), vec![10, 20]);
+    assert_eq!(target.memory(w.arena()), vec![10, 20]);
     // Strong attacker against an empty target → dominance ≈ 1.0,
     // so the target inherits the attacker's origin tag.
     assert_eq!(target.origin_tag, 0xCAFE);
@@ -166,18 +166,18 @@ fn apply_outflow_allocates_void_neighbor_with_inflow() {
 #[test]
 fn apply_outflow_appends_into_existing_neighbor() {
     let mut w = SparseWorld::new(0);
-    let mut source = Cell::with_memory(vec![10, 20, 30]);
+    let mut source = w.alloc_cell(&[10, 20, 30]);
     source.rates[Direction::Xp.index()] = 2;
     source.pointers[Direction::Xp.index()] = 0;
     w.insert(Coord::ORIGIN, source);
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![99, 99]));
+    w.insert_with_memory(Coord::new(1, 0, 0), &[99, 99]);
 
     let outflow = collect_outflow(&w);
     apply_outflow(&mut w, &outflow);
 
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
     // Existing memory + appended inflow.
-    assert_eq!(target.memory(), vec![99, 99, 10, 20]);
+    assert_eq!(target.memory(w.arena()), vec![99, 99, 10, 20]);
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn apply_outflow_conserves_total_slots() {
     // outflow the total slot count across the entire world (source +
     // alloc'd void neighbors) should equal the original memory size.
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    let mut cell = w.alloc_cell(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     cell.rates = [1, 1, 1, 1, 1, 1];
     cell.pointers = [0, 1, 2, 3, 4, 5];
     w.insert(Coord::ORIGIN, cell);
@@ -221,7 +221,7 @@ fn apply_outflow_skips_outflow_for_missing_source() {
     // neighbor at (1, 0, 0).
     assert!(!w.contains(Coord::ORIGIN));
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
-    assert_eq!(target.memory(), vec![42]);
+    assert_eq!(target.memory(w.arena()), vec![42]);
 }
 
 // ----- step_diffusion (end-to-end) -----
@@ -308,11 +308,11 @@ fn step_diffusion_is_deterministic() {
     // BTreeMap order, so a direct iter zip gives byte-identity.
     let pa: Vec<_> = a
         .iter()
-        .map(|(c, cell)| (*c, cell.memory().to_vec()))
+        .map(|(c, cell)| (*c, cell.memory(a.arena()).to_vec()))
         .collect();
     let pb: Vec<_> = b
         .iter()
-        .map(|(c, cell)| (*c, cell.memory().to_vec()))
+        .map(|(c, cell)| (*c, cell.memory(b.arena()).to_vec()))
         .collect();
     assert_eq!(pa, pb);
 }

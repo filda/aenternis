@@ -295,9 +295,13 @@ impl<'a> Iterator for IterMut<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::Arena;
 
-    fn dummy_cell(seed: u32) -> Cell {
-        Cell::with_memory(vec![seed, seed.wrapping_mul(2), seed.wrapping_mul(3)])
+    fn dummy_cell(arena: &mut Arena, seed: u32) -> Cell {
+        Cell::with_memory(
+            arena,
+            &[seed, seed.wrapping_mul(2), seed.wrapping_mul(3)],
+        )
     }
 
     #[test]
@@ -309,9 +313,10 @@ mod tests {
 
     #[test]
     fn insert_and_get_round_trip() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
         let coord = Coord::new(1, 2, 3);
-        let cell = dummy_cell(10);
+        let cell = dummy_cell(&mut arena, 10);
         assert!(c.insert(coord, cell.clone()).is_none());
         assert_eq!(c.get(&coord), Some(&cell));
         assert!(c.contains_key(&coord));
@@ -320,10 +325,11 @@ mod tests {
 
     #[test]
     fn insert_replacement_returns_previous() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
         let coord = Coord::new(0, 0, 0);
-        let a = dummy_cell(1);
-        let b = dummy_cell(2);
+        let a = dummy_cell(&mut arena, 1);
+        let b = dummy_cell(&mut arena, 2);
         c.insert(coord, a.clone());
         let prev = c.insert(coord, b.clone());
         assert_eq!(prev, Some(a));
@@ -333,11 +339,12 @@ mod tests {
 
     #[test]
     fn remove_returns_cell_and_frees_slot() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
         let coord_a = Coord::new(0, 0, 0);
         let coord_b = Coord::new(1, 0, 0);
-        let cell_a = dummy_cell(7);
-        let cell_b = dummy_cell(8);
+        let cell_a = dummy_cell(&mut arena, 7);
+        let cell_b = dummy_cell(&mut arena, 8);
         c.insert(coord_a, cell_a.clone());
         c.insert(coord_b, cell_b.clone());
 
@@ -348,7 +355,7 @@ mod tests {
         assert_eq!(c.len(), 1);
         // Slot 0 (coord_a) is recycled; next insert should land in it.
         let coord_c = Coord::new(2, 0, 0);
-        let cell_c = dummy_cell(9);
+        let cell_c = dummy_cell(&mut arena, 9);
         c.insert(coord_c, cell_c);
         // coord_c reuses slot 0; coord_b is still slot 1.
         // Inspect via the public iter to verify both are present.
@@ -368,22 +375,30 @@ mod tests {
 
     #[test]
     fn get_or_insert_with_creates_then_returns_existing() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
         let coord = Coord::new(3, 3, 3);
-        let (was_vacant, cell) = c.get_or_insert_with(coord, || dummy_cell(42));
+        let (was_vacant, cell) = {
+            let arena_ref = &mut arena;
+            c.get_or_insert_with(coord, || dummy_cell(arena_ref, 42))
+        };
         assert!(was_vacant);
-        cell.push_memory_slot(100);
-        let (was_vacant_again, cell) = c.get_or_insert_with(coord, || dummy_cell(0));
+        cell.push_memory_slot(&mut arena, 100);
+        let (was_vacant_again, cell) = {
+            let arena_ref = &mut arena;
+            c.get_or_insert_with(coord, || dummy_cell(arena_ref, 0))
+        };
         assert!(!was_vacant_again);
-        assert!(cell.memory().contains(&100));
+        assert!(cell.memory(&arena).contains(&100));
     }
 
     #[test]
     fn retain_drops_unwanted_cells() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
-        c.insert(Coord::new(1, 0, 0), dummy_cell(1));
-        c.insert(Coord::new(2, 0, 0), dummy_cell(2));
-        c.insert(Coord::new(3, 0, 0), dummy_cell(3));
+        c.insert(Coord::new(1, 0, 0), dummy_cell(&mut arena, 1));
+        c.insert(Coord::new(2, 0, 0), dummy_cell(&mut arena, 2));
+        c.insert(Coord::new(3, 0, 0), dummy_cell(&mut arena, 3));
         c.retain(|coord, _| coord.x != 2);
         assert_eq!(c.len(), 2);
         assert!(c.contains_key(&Coord::new(1, 0, 0)));
@@ -393,20 +408,22 @@ mod tests {
 
     #[test]
     fn iter_visits_all_live_cells() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
-        c.insert(Coord::new(0, 0, 0), dummy_cell(1));
-        c.insert(Coord::new(1, 0, 0), dummy_cell(2));
-        c.insert(Coord::new(2, 0, 0), dummy_cell(3));
+        c.insert(Coord::new(0, 0, 0), dummy_cell(&mut arena, 1));
+        c.insert(Coord::new(1, 0, 0), dummy_cell(&mut arena, 2));
+        c.insert(Coord::new(2, 0, 0), dummy_cell(&mut arena, 3));
         let count = c.iter().count();
         assert_eq!(count, 3);
     }
 
     #[test]
     fn iter_mut_skips_dead_slots() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
-        c.insert(Coord::new(0, 0, 0), dummy_cell(1));
-        c.insert(Coord::new(1, 0, 0), dummy_cell(2));
-        c.insert(Coord::new(2, 0, 0), dummy_cell(3));
+        c.insert(Coord::new(0, 0, 0), dummy_cell(&mut arena, 1));
+        c.insert(Coord::new(1, 0, 0), dummy_cell(&mut arena, 2));
+        c.insert(Coord::new(2, 0, 0), dummy_cell(&mut arena, 3));
         c.remove(&Coord::new(1, 0, 0));
         let count = c.iter_mut().count();
         assert_eq!(count, 2);
@@ -414,16 +431,17 @@ mod tests {
 
     #[test]
     fn slot_reuse_keeps_storage_dense() {
+        let mut arena = Arena::with_capacity(64);
         let mut c = Cells::new();
         // Insert 5 cells, remove 3 of them, insert 3 more.
         for i in 0..5 {
-            c.insert(Coord::new(i, 0, 0), dummy_cell(i as u32));
+            c.insert(Coord::new(i, 0, 0), dummy_cell(&mut arena, i as u32));
         }
         for i in [1, 2, 3] {
             c.remove(&Coord::new(i, 0, 0));
         }
         for i in 5..8 {
-            c.insert(Coord::new(i, 0, 0), dummy_cell(i as u32));
+            c.insert(Coord::new(i, 0, 0), dummy_cell(&mut arena, i as u32));
         }
         assert_eq!(c.len(), 5);
         // Storage size shouldn't exceed peak live count (5) because

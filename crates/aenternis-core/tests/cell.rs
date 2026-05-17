@@ -11,14 +11,14 @@
 //!    that sums to exactly `min(original_sum, cap)`.
 
 use aenternis_core::cell::{proportional_clamp, LAYOUT_ORDER};
-use aenternis_core::{Cell, Coord, Direction};
+use aenternis_core::{Arena, Cell, Coord, Direction};
 
 #[test]
 fn new_returns_empty_cell() {
     let c = Cell::new();
     assert_eq!(c.energy(), 0);
     assert!(c.is_empty());
-    assert!(c.memory().is_empty());
+    assert_eq!(c.memory_len(), 0);
     assert_eq!(c.pointers, [0; 6]);
     assert_eq!(c.rates, [0; 6]);
     assert_eq!(c.active_outflow, [0; 6]);
@@ -36,8 +36,9 @@ fn default_matches_new() {
 
 #[test]
 fn with_memory_sets_only_memory() {
-    let c = Cell::with_memory(vec![1, 2, 3, 4, 5]);
-    assert_eq!(c.memory(), &[1, 2, 3, 4, 5][..]);
+    let mut arena = Arena::with_capacity(256);
+    let c = Cell::with_memory(&mut arena, &[1, 2, 3, 4, 5]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3, 4, 5][..]);
     assert_eq!(c.energy(), 5);
     assert!(!c.is_empty());
     // Everything else stays at default.
@@ -48,14 +49,16 @@ fn with_memory_sets_only_memory() {
 
 #[test]
 fn energy_tracks_memory_length() {
-    let c = Cell::with_memory(vec![0; 42]);
+    let mut arena = Arena::with_capacity(256);
+    let c = Cell::with_memory(&mut arena, &[0; 42]);
     assert_eq!(c.energy(), 42);
 }
 
 #[test]
 fn is_empty_only_for_zero_memory() {
+    let mut arena = Arena::with_capacity(256);
     assert!(Cell::new().is_empty());
-    assert!(!Cell::with_memory(vec![0]).is_empty());
+    assert!(!Cell::with_memory(&mut arena, &[0]).is_empty());
 }
 
 #[test]
@@ -86,10 +89,11 @@ fn total_active_outflow_is_zero_for_default() {
 
 #[test]
 fn lay_out_balanced_rates_partitions_memory() {
+    let mut arena = Arena::with_capacity(256);
     // rates [1, 2, 3, 4, 5, 6] sum to 21; memory size 21.
     // Walk order from end: zn(6), zp(5), yn(4), yp(3), xn(2), xp(1).
     // cursor: 21 → 15 (zn) → 10 (zp) → 6 (yn) → 3 (yp) → 1 (xn) → 0 (xp).
-    let mut c = Cell::with_memory(vec![0; 21]);
+    let mut c = Cell::with_memory(&mut arena, &[0; 21]);
     let consumption = [1u32, 2, 3, 4, 5, 6];
     c.lay_out_pointers(&consumption);
     assert_eq!(c.pointers[Direction::Xp.index()], 0);
@@ -102,7 +106,8 @@ fn lay_out_balanced_rates_partitions_memory() {
 
 #[test]
 fn lay_out_zero_rates_puts_all_pointers_at_end() {
-    let mut c = Cell::with_memory(vec![0; 16]);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[0; 16]);
     c.lay_out_pointers(&[0; 6]);
     for &d in &Direction::ALL {
         assert_eq!(c.pointers[d.index()], 16);
@@ -118,10 +123,11 @@ fn lay_out_empty_memory_puts_all_pointers_at_zero() {
 
 #[test]
 fn lay_out_skips_overridden_directions() {
+    let mut arena = Arena::with_capacity(256);
     // memory size 21, rates [1, 2, 3, 4, 5, 6], but Yp (index 2) is
     // overridden to point at slot 18. The cursor must skip Yp's
     // consumption budget — Yn / Xn / Xp therefore land further up.
-    let mut c = Cell::with_memory(vec![0; 21]);
+    let mut c = Cell::with_memory(&mut arena, &[0; 21]);
     c.pointer_override[Direction::Yp.index()] = true;
     c.pointers[Direction::Yp.index()] = 18;
 
@@ -139,7 +145,8 @@ fn lay_out_skips_overridden_directions() {
 
 #[test]
 fn lay_out_with_all_directions_overridden_is_a_noop() {
-    let mut c = Cell::with_memory(vec![0; 21]);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[0; 21]);
     c.pointer_override = [true; 6];
     let original = [9u32, 9, 9, 9, 9, 9];
     c.pointers = original;
@@ -149,9 +156,10 @@ fn lay_out_with_all_directions_overridden_is_a_noop() {
 
 #[test]
 fn lay_out_saturates_at_zero_when_consumption_exceeds_energy() {
+    let mut arena = Arena::with_capacity(256);
     // memory size 5, rates summing to 21 → cursor goes negative, must
     // saturate at zero rather than panic / underflow.
-    let mut c = Cell::with_memory(vec![0; 5]);
+    let mut c = Cell::with_memory(&mut arena, &[0; 5]);
     c.lay_out_pointers(&[1, 2, 3, 4, 5, 6]);
     // After saturation every pointer is 0.
     for &d in &Direction::ALL {
@@ -180,7 +188,8 @@ fn layout_order_constant_matches_reverse_canonical() {
 
 #[test]
 fn end_of_tick_resets_overrides_and_active_outflow() {
-    let mut c = Cell::with_memory(vec![1, 2, 3]);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
     c.pointer_override = [true; 6];
     c.active_outflow = [5, 10, 15, 20, 25, 30];
 
@@ -192,7 +201,8 @@ fn end_of_tick_resets_overrides_and_active_outflow() {
 
 #[test]
 fn end_of_tick_does_not_touch_persistent_state() {
-    let mut c = Cell::with_memory(vec![1, 2, 3]);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
     c.pointers = [9; 6];
     c.rates = [4; 6];
     c.pc = 7;
@@ -203,7 +213,7 @@ fn end_of_tick_does_not_touch_persistent_state() {
 
     c.end_of_tick();
 
-    assert_eq!(c.memory(), &[1, 2, 3][..]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
     assert_eq!(c.pointers, [9; 6]);
     assert_eq!(c.rates, [4; 6]);
     assert_eq!(c.pc, 7);
@@ -215,31 +225,35 @@ fn end_of_tick_does_not_touch_persistent_state() {
 
 #[test]
 fn shrink_from_end_drops_count_slots() {
-    let mut c = Cell::with_memory(vec![1, 2, 3, 4, 5]);
-    c.shrink_from_end(2);
-    assert_eq!(c.memory(), &[1, 2, 3][..]);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3, 4, 5]);
+    c.shrink_from_end(&mut arena, 2);
+    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
     assert_eq!(c.energy(), 3);
 }
 
 #[test]
 fn shrink_from_end_zero_is_noop() {
-    let mut c = Cell::with_memory(vec![1, 2, 3]);
-    c.shrink_from_end(0);
-    assert_eq!(c.memory(), &[1, 2, 3][..]);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
+    c.shrink_from_end(&mut arena, 0);
+    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
 }
 
 #[test]
 fn shrink_from_end_saturates_at_full_length() {
-    let mut c = Cell::with_memory(vec![1, 2, 3]);
-    c.shrink_from_end(99);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
+    c.shrink_from_end(&mut arena, 99);
     assert!(c.is_empty());
     assert_eq!(c.energy(), 0);
 }
 
 #[test]
 fn shrink_from_end_saturates_on_empty() {
+    let mut arena = Arena::with_capacity(256);
     let mut c = Cell::new();
-    c.shrink_from_end(5);
+    c.shrink_from_end(&mut arena, 5);
     assert!(c.is_empty());
 }
 
@@ -247,46 +261,51 @@ fn shrink_from_end_saturates_on_empty() {
 
 #[test]
 fn append_slots_no_cap_takes_all() {
-    let mut c = Cell::with_memory(vec![1, 2]);
-    let taken = c.append_slots(&[3, 4, 5], None);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2]);
+    let taken = c.append_slots(&mut arena, &[3, 4, 5], None);
     assert_eq!(taken, 3);
-    assert_eq!(c.memory(), &[1, 2, 3, 4, 5][..]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3, 4, 5][..]);
 }
 
 #[test]
 fn append_slots_under_cap_takes_all() {
-    let mut c = Cell::with_memory(vec![1]);
-    let taken = c.append_slots(&[2, 3], Some(10));
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1]);
+    let taken = c.append_slots(&mut arena, &[2, 3], Some(10));
     assert_eq!(taken, 2);
-    assert_eq!(c.memory(), &[1, 2, 3][..]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
 }
 
 #[test]
 fn append_slots_truncates_at_cap() {
-    let mut c = Cell::with_memory(vec![1, 2, 3]);
-    let taken = c.append_slots(&[4, 5, 6, 7], Some(5));
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
+    let taken = c.append_slots(&mut arena, &[4, 5, 6, 7], Some(5));
     assert_eq!(taken, 2);
-    assert_eq!(c.memory(), &[1, 2, 3, 4, 5][..]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3, 4, 5][..]);
 }
 
 #[test]
 fn append_slots_with_cap_at_or_below_current_takes_nothing() {
-    let mut c = Cell::with_memory(vec![1, 2, 3]);
-    let taken = c.append_slots(&[4, 5], Some(3));
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
+    let taken = c.append_slots(&mut arena, &[4, 5], Some(3));
     assert_eq!(taken, 0);
-    assert_eq!(c.memory(), &[1, 2, 3][..]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
 
-    let taken = c.append_slots(&[4, 5], Some(2));
+    let taken = c.append_slots(&mut arena, &[4, 5], Some(2));
     assert_eq!(taken, 0);
-    assert_eq!(c.memory(), &[1, 2, 3][..]);
+    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
 }
 
 #[test]
 fn append_slots_empty_input_is_noop() {
-    let mut c = Cell::with_memory(vec![1, 2]);
-    let taken = c.append_slots(&[], None);
+    let mut arena = Arena::with_capacity(256);
+    let mut c = Cell::with_memory(&mut arena, &[1, 2]);
+    let taken = c.append_slots(&mut arena, &[], None);
     assert_eq!(taken, 0);
-    assert_eq!(c.memory(), &[1, 2][..]);
+    assert_eq!(c.memory(&arena), &[1, 2][..]);
 }
 
 // ----- proportional_clamp -----

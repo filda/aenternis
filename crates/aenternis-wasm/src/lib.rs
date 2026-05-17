@@ -503,6 +503,13 @@ impl World {
         self.inspect_buf.extend_from_slice(&cell.rates);
         self.inspect_buf.extend_from_slice(&cell.active_outflow);
         self.inspect_buf.extend_from_slice(&cell.inflow);
-        self.inspect_buf.extend_from_slice(cell.memory());
+        // Pull the memory slice through the world-level helper so
+        // we don't have to thread the (crate-private) `Arena` type
+        // into the wasm wrapper. `cell` is already a borrow of
+        // `self.inner`; another shared borrow for the slice
+        // composes fine.
+        if let Some(memory) = self.inner.cell_memory(coord) {
+            self.inspect_buf.extend_from_slice(memory);
+        }
     }
 }

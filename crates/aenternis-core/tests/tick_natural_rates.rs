@@ -114,8 +114,8 @@ fn equal_energy_neighbors_get_zero_rate_between_them() {
     // Rate from A to B = (10 - 10) * coeff = 0. Same in the other
     // direction. Other (void) neighbors still emit normally.
     let mut w = SparseWorld::new(42);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1; 10]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1; 10]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 10]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 10]);
     compute_natural_rates(&mut w, 0.15);
 
     let a = w.get(Coord::new(0, 0, 0)).unwrap();
@@ -132,8 +132,8 @@ fn lower_energy_neighbor_does_not_emit_back() {
     // A is high-energy, B is low-energy. A → B is positive (gradient
     // myE > nE), but B → A is zero (gradient myE < nE).
     let mut w = SparseWorld::new(123);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1; 1000]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1; 10]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 1000]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 10]);
     compute_natural_rates(&mut w, 0.15);
 
     let a = w.get(Coord::new(0, 0, 0)).unwrap();
@@ -197,11 +197,11 @@ fn rates_independent_of_insert_order() {
         let a = Coord::new(0, 0, 0);
         let b = Coord::new(1, 0, 0);
         if insert_b_first {
-            w.insert(b, Cell::with_memory(vec![1; 50]));
-            w.insert(a, Cell::with_memory(vec![1; 100]));
+            w.insert_with_memory(b, &[1; 50]);
+            w.insert_with_memory(a, &[1; 100]);
         } else {
-            w.insert(a, Cell::with_memory(vec![1; 100]));
-            w.insert(b, Cell::with_memory(vec![1; 50]));
+            w.insert_with_memory(a, &[1; 100]);
+            w.insert_with_memory(b, &[1; 50]);
         }
         compute_natural_rates(&mut w, 0.15);
         let a_rates = w.get(a).unwrap().rates;
@@ -222,10 +222,10 @@ fn total_rate_never_exceeds_cell_energy() {
     // A cluster of cells with various energies; check the conservation
     // invariant for every cell after compute_natural_rates.
     let mut w = SparseWorld::new(2024);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1; 10]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1; 5]));
-    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![1; 3]));
-    w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1; 1]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 10]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 5]);
+    w.insert_with_memory(Coord::new(0, 1, 0), &[1; 3]);
+    w.insert_with_memory(Coord::new(0, 0, 1), &[1; 1]);
 
     compute_natural_rates(&mut w, 0.30);
 
@@ -280,9 +280,9 @@ fn rate_uses_subtraction_against_live_neighbor() {
     // `-` → `+` mutation: delta=136, 136*0.0625 = 8.5 → rate=8 or 9 (RNG).
     // `*` → `+` mutation: 64+0.0625 = 64.0625 → rate=64 or 65, way off.
     let mut w = SparseWorld::new(0x00C0_FFEE);
-    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1; 100]));
+    w.insert_with_memory(Coord::ORIGIN, &[1; 100]);
     for &d in &Direction::ALL {
-        w.insert(Coord::ORIGIN.neighbor(d), Cell::with_memory(vec![1; 36]));
+        w.insert_with_memory(Coord::ORIGIN.neighbor(d), &[1; 36]);
     }
     compute_natural_rates(&mut w, 0.0625);
     let a = w.get(Coord::ORIGIN).unwrap();
@@ -296,8 +296,8 @@ fn rate_zero_when_neighbor_has_strictly_more_energy() {
     // as `my - neighbor` for the lower-energy cell, but the `if my > neighbor`
     // guard short-circuits to rate=0. Tests the guard, not the arithmetic.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1; 10]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1; 100]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 10]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 100]);
     compute_natural_rates(&mut w, 0.5);
     let a = w.get(Coord::new(0, 0, 0)).unwrap();
     assert_eq!(a.rates[Direction::Xp.index()], 0);

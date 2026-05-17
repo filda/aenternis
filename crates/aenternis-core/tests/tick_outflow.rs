@@ -34,7 +34,7 @@ fn empty_cell_produces_all_empty_per_direction_vectors() {
 fn cell_with_zero_rates_produces_empty_vectors() {
     let mut w = SparseWorld::new(0);
     // Memory is non-empty, but all rates default to 0 → no slots emitted.
-    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1, 2, 3]));
+    w.insert_with_memory(Coord::ORIGIN, &[1, 2, 3]);
     let outflow = collect_outflow(&w);
     let entry = outflow.get(&Coord::ORIGIN).unwrap();
     for &d in &Direction::ALL {
@@ -45,7 +45,7 @@ fn cell_with_zero_rates_produces_empty_vectors() {
 #[test]
 fn per_direction_length_matches_rate() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50, 60, 70, 80]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40, 50, 60, 70, 80]);
     cell.rates = [1, 2, 1, 0, 0, 0];
     cell.pointers = [0, 1, 3, 4, 5, 6];
     w.insert(Coord::ORIGIN, cell);
@@ -64,7 +64,7 @@ fn per_direction_length_matches_rate() {
 #[test]
 fn slots_come_from_memory_starting_at_pointer() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40, 50]);
     cell.rates[Direction::Xp.index()] = 3;
     cell.pointers[Direction::Xp.index()] = 1; // start at index 1
     w.insert(Coord::ORIGIN, cell);
@@ -77,7 +77,7 @@ fn slots_come_from_memory_starting_at_pointer() {
 #[test]
 fn slots_wrap_modulo_memory_length() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30]);
+    let mut cell = w.alloc_cell(&[10, 20, 30]);
     cell.rates[Direction::Xp.index()] = 3; // exactly mem_size
     cell.pointers[Direction::Xp.index()] = 2; // wraps after 1 slot
     w.insert(Coord::ORIGIN, cell);
@@ -93,7 +93,7 @@ fn slots_wrap_asymmetric_split() {
     // Asymmetric tail/wrap split: tail = 2 (m[6], m[7]), wrap = 3 (m[0..3]).
     // Distinct from `slots_wrap_modulo_memory_length` (tail = 1, wrap = 2).
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50, 60, 70, 80]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40, 50, 60, 70, 80]);
     cell.rates[Direction::Xp.index()] = 5;
     cell.pointers[Direction::Xp.index()] = 6;
     w.insert(Coord::ORIGIN, cell);
@@ -109,7 +109,7 @@ fn slots_with_pointer_at_memory_end_reads_from_zero() {
     // branch with an empty prefix slice — distinct from
     // `slots_wrap_modulo_memory_length` where tail > 0.
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40]);
     cell.rates[Direction::Xp.index()] = 2;
     cell.pointers[Direction::Xp.index()] = 4; // == mem_size
     w.insert(Coord::ORIGIN, cell);
@@ -124,7 +124,7 @@ fn slots_with_end_at_memory_boundary_stays_non_wrap() {
     // Boundary `ptr + rate == mem_size`: non-wrap branch, inclusive upper
     // bound. Catches `<=` → `<` mutations on the branch predicate.
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40]);
     cell.rates[Direction::Xp.index()] = 3;
     cell.pointers[Direction::Xp.index()] = 1;
     w.insert(Coord::ORIGIN, cell);
@@ -137,9 +137,9 @@ fn slots_with_end_at_memory_boundary_stays_non_wrap() {
 #[test]
 fn outflow_includes_all_existing_cells() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(5, 5, 5), Cell::with_memory(vec![2]));
-    w.insert(Coord::new(-3, 1, 4), Cell::with_memory(vec![3]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(5, 5, 5), &[2]);
+    w.insert_with_memory(Coord::new(-3, 1, 4), &[3]);
 
     let outflow = collect_outflow(&w);
     assert_eq!(outflow.len(), 3);
@@ -151,7 +151,7 @@ fn outflow_includes_all_existing_cells() {
 #[test]
 fn outflow_does_not_synthesize_void_targets() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10]);
+    let mut cell = w.alloc_cell(&[10]);
     cell.rates[Direction::Xp.index()] = 1;
     cell.pointers[Direction::Xp.index()] = 0;
     w.insert(Coord::ORIGIN, cell);
@@ -168,7 +168,7 @@ fn outflow_does_not_synthesize_void_targets() {
 fn outflow_is_deterministic() {
     let make_world = || {
         let mut w = SparseWorld::new(7);
-        let mut cell = Cell::with_memory(vec![1, 2, 3, 4, 5]);
+        let mut cell = w.alloc_cell(&[1, 2, 3, 4, 5]);
         cell.rates = [1, 0, 1, 0, 1, 0];
         cell.pointers = [0, 0, 1, 0, 2, 0];
         w.insert(Coord::ORIGIN, cell);
@@ -185,7 +185,7 @@ fn outflow_walks_all_six_directions() {
     // Each direction emits one slot from a distinct memory position,
     // so the resulting per-direction vectors are all distinct.
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![10, 20, 30, 40, 50, 60]);
+    let mut cell = w.alloc_cell(&[10, 20, 30, 40, 50, 60]);
     cell.rates = [1, 1, 1, 1, 1, 1];
     cell.pointers = [0, 1, 2, 3, 4, 5];
     w.insert(Coord::ORIGIN, cell);

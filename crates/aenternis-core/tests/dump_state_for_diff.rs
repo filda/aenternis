@@ -76,9 +76,9 @@ fn dump_state_at_tick_n() {
     let out_path = reports_dir.join(format!("rust-tick{ticks}.txt"));
     let mut f = fs::File::create(&out_path).expect("create output file");
     for (coord, cell) in &cells {
-        let m0 = cell.memory().first().copied().unwrap_or(0);
-        let m1 = cell.memory().get(1).copied().unwrap_or(0);
-        let m2 = cell.memory().get(2).copied().unwrap_or(0);
+        let m0 = cell.memory(w.arena()).first().copied().unwrap_or(0);
+        let m1 = cell.memory(w.arena()).get(1).copied().unwrap_or(0);
+        let m2 = cell.memory(w.arena()).get(2).copied().unwrap_or(0);
         writeln!(
             f,
             "({},{},{}) E={} mem[0..3]=[{},{},{}]",

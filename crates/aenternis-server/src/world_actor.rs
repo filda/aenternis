@@ -306,7 +306,10 @@ impl WorldActor {
         let data = self
             .world
             .get(coord)
-            .map(build_inspect_data)
+            .map(|cell| {
+                let memory = self.world.cell_memory(coord).unwrap_or(&[]);
+                build_inspect_data(cell, memory)
+            })
             .unwrap_or_default();
         let frame = CellDetailFrame {
             x,
@@ -352,8 +355,13 @@ fn build_snapshot_payload_into(out: &mut Vec<u32>, world: &SparseWorld) {
 /// payload. Mirrors `aenternis-wasm::World::cell_inspect` so the
 /// viewer's inspector panel parses both backends with the same
 /// `prefix` constant.
-fn build_inspect_data(cell: &Cell) -> Vec<u32> {
-    let mut out = Vec::with_capacity(28 + cell.memory_len());
+///
+/// Takes `memory` as a separate slice because cell memory lives
+/// in the world-owned arena (Phase 2 of the arena refactor); the
+/// caller has both the cell and the arena, we just need the
+/// already-resolved slice here.
+fn build_inspect_data(cell: &Cell, memory: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(28 + memory.len());
     out.push(cell.pc);
     out.push(cell.energy());
     out.push(cell.origin_tag);
@@ -362,7 +370,7 @@ fn build_inspect_data(cell: &Cell) -> Vec<u32> {
     out.extend_from_slice(&cell.rates);
     out.extend_from_slice(&cell.active_outflow);
     out.extend_from_slice(&cell.inflow);
-    out.extend_from_slice(cell.memory());
+    out.extend_from_slice(memory);
     out
 }
 

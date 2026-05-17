@@ -36,7 +36,7 @@
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::rng::cell_seed;
-use crate::world::Cells;
+use crate::world::{Arena, Cells};
 use crate::{Cell, Coord, Direction, Rng};
 
 /// Sparse world container.
@@ -60,6 +60,23 @@ pub struct SparseWorld {
     /// go through [`SparseWorld::get`] / [`SparseWorld::iter`] /
     /// [`SparseWorld::iter_mut`].
     pub(crate) cells: Cells,
+
+    /// Single-buffer arena holding every cell's memory slots.
+    ///
+    /// Cells store `(mem_start, mem_len)` indices into this buffer;
+    /// per-cell `Vec<u32>`s do not exist. The arena is pre-allocated
+    /// at [`SparseWorld::big_bang`] to the world's total energy so
+    /// no growth happens during `step` — see Phase 2 of the arena
+    /// refactor in `docs/optimalizace-2026-05.md`. Test paths that
+    /// go through [`SparseWorld::new`] start with a zero-capacity
+    /// arena that grows on demand (the `Arena::alloc` slow path);
+    /// production paths via `big_bang` never trigger that growth.
+    ///
+    /// Accessed `pub(crate)` so tick-phase split-borrows can pair
+    /// `&mut self.cells` with `&self.arena` (immutable phases) or
+    /// `&mut self.arena` (sequential phases) without an
+    /// intermediate accessor.
+    pub(crate) arena: Arena,
 
     /// Seed used for any deterministic randomness in this world. Combined
     /// with the current tick and per-cell coords by [`Rng::for_cell_at_tick`]
@@ -142,10 +159,33 @@ impl SparseWorld {
     /// Build an empty world. No cells exist yet; the caller is responsible
     /// for inserting any initial state (typically via [`big_bang`](Self::big_bang)).
     /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
+    ///
+    /// The arena starts at capacity zero — the first
+    /// [`insert_with_memory`](Self::insert_with_memory) or
+    /// [`get_or_alloc`](Self::get_or_alloc) followed by an
+    /// `extend_memory` call will grow it. For predictable behaviour
+    /// (no implicit `Vec::resize` during `step`), prefer
+    /// [`big_bang`](Self::big_bang) which sizes the arena to total
+    /// energy up front.
+    ///
+    /// No longer `const fn` because `Arena::with_capacity` does a
+    /// `Vec::with_capacity` and `Vec::resize`, neither of which are
+    /// const yet.
     #[must_use]
-    pub const fn new(world_seed: u64) -> Self {
+    pub fn new(world_seed: u64) -> Self {
+        Self::with_capacity(world_seed, 0)
+    }
+
+    /// Build an empty world whose arena is pre-allocated to
+    /// `capacity` slots. The arena does not grow during `step` as
+    /// long as total energy stays at or below `capacity` (which is
+    /// guaranteed by energy conservation when the caller passes
+    /// the simulation's total energy).
+    #[must_use]
+    pub fn with_capacity(world_seed: u64, capacity: u32) -> Self {
         Self {
             cells: Cells::new(),
+            arena: Arena::with_capacity(capacity),
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
@@ -190,7 +230,11 @@ impl SparseWorld {
     /// An empty `program` is exactly equivalent to [`SparseWorld::big_bang`].
     #[must_use]
     pub fn big_bang_with_program(world_seed: u64, energy: u32, program: &[u32]) -> Self {
-        let mut world = Self::new(world_seed);
+        // Pre-allocate the arena to exactly the world's energy — by
+        // conservation, total `mem_len` across all cells never
+        // exceeds `energy`, so this is the upper bound and the arena
+        // never has to grow during `step`.
+        let mut world = Self::with_capacity(world_seed, energy);
         if energy == 0 {
             return world;
         }
@@ -202,15 +246,26 @@ impl SparseWorld {
         let origin_tag = cell_seed(world_seed, Coord::ORIGIN);
         let mut noise_rng = Rng::new(origin_tag);
 
+        // Allocate the origin cell's full energy run in the arena
+        // and fill it slot-by-slot: program prefix first, then the
+        // RNG suffix. Doing the fill in place (rather than building
+        // a `Vec<u32>` and copying it in) keeps the construction
+        // cost at `O(energy)` with one allocation total — the
+        // arena's, which we already paid above.
         let energy_usize = energy as usize;
         let n_program = program.len().min(energy_usize);
-        let mut memory = Vec::with_capacity(energy_usize);
-        memory.extend_from_slice(&program[..n_program]);
-        for _ in n_program..energy_usize {
-            memory.push(noise_rng.next_u32());
+        let mem_start = world.arena.alloc(energy);
+        {
+            let slice = world.arena.slice_mut(mem_start, energy);
+            slice[..n_program].copy_from_slice(&program[..n_program]);
+            for slot in slice.iter_mut().skip(n_program) {
+                *slot = noise_rng.next_u32();
+            }
         }
 
-        let mut cell = Cell::with_memory(memory);
+        let mut cell = Cell::new();
+        cell.mem_start = mem_start;
+        cell.mem_len = energy;
         cell.origin_tag = origin_tag;
         world.cells.insert(Coord::ORIGIN, cell);
         // Eager init — by-passing the public `insert` here means we
@@ -219,6 +274,30 @@ impl SparseWorld {
         world.sorted_cache.push(Coord::ORIGIN);
         world.bbox_cache = Some((0, 0, 0, 0, 0, 0));
         world
+    }
+
+    /// Build a cell with the given memory slots, allocating their
+    /// storage in *this world's* arena. The returned cell is owned
+    /// by the caller — usually mutated (e.g. setting `pc`,
+    /// `origin_tag`) and then passed to
+    /// [`SparseWorld::insert`].
+    ///
+    /// Convenience for tests and external callers that want to
+    /// stage a cell with custom field overrides before inserting.
+    /// The hot insert path is
+    /// [`SparseWorld::insert_with_memory`].
+    #[must_use]
+    pub fn alloc_cell(&mut self, slots: &[u32]) -> Cell {
+        Cell::with_memory(&mut self.arena, slots)
+    }
+
+    /// Build a cell with the given memory slots and insert it at
+    /// `coord` in one shot. Equivalent to
+    /// `self.insert(coord, self.alloc_cell(slots))` but avoids the
+    /// intermediate move.
+    pub fn insert_with_memory(&mut self, coord: Coord, slots: &[u32]) -> Option<Cell> {
+        let cell = Cell::with_memory(&mut self.arena, slots);
+        self.insert(coord, cell)
     }
 
     /// Get a mutable reference to the cell at `coord`, allocating an empty
@@ -269,6 +348,43 @@ impl SparseWorld {
         self.cells.get(&coord)
     }
 
+    /// Borrow the cell's memory slice at `coord`, if the cell
+    /// exists. The slice borrows from the world's arena and is
+    /// only valid for the duration of the `&self` borrow.
+    ///
+    /// Cross-crate callers (`aenternis-wasm`,
+    /// `aenternis-server`) should use this instead of touching
+    /// `Cell::memory` directly, since the arena module itself is
+    /// `pub(crate)` and not part of the public surface.
+    #[must_use]
+    pub fn cell_memory(&self, coord: Coord) -> Option<&[u32]> {
+        self.cells.get(&coord).map(|c| c.memory(&self.arena))
+    }
+
+    /// Read-only borrow of the world's memory arena. Pair with
+    /// the `&Cell` returned by [`SparseWorld::get`] /
+    /// [`SparseWorld::iter`] to call `cell.memory(arena)` —
+    /// useful in tests and external readers that want both the
+    /// metadata and the slot data in independent variables.
+    #[must_use]
+    pub fn arena(&self) -> &Arena {
+        &self.arena
+    }
+
+    /// Mutable borrow of the world's memory arena. Used by tests
+    /// that build a cell via [`SparseWorld::alloc_cell`], mutate
+    /// individual slots (e.g. `cell.set_memory_slot(world.arena_mut(),
+    /// i, v)`), then call [`SparseWorld::insert`].
+    ///
+    /// Production code does not call this — the tick phases run
+    /// inside the crate and already have split-borrow access to
+    /// the arena. Exposed publicly because the only alternative
+    /// (a per-slot helper on `SparseWorld`) is awkward for the
+    /// orphan-cell-build-then-insert pattern that tests rely on.
+    pub fn arena_mut(&mut self) -> &mut Arena {
+        &mut self.arena
+    }
+
     /// Mutably borrow the cell at `coord`, if any.
     pub fn get_mut(&mut self, coord: Coord) -> Option<&mut Cell> {
         self.cells.get_mut(&coord)
@@ -280,30 +396,48 @@ impl SparseWorld {
         self.cells.iter().map(|(_, c)| c)
     }
 
-    /// Insert (or replace) a cell at `coord`. Returns the previous cell if
-    /// one existed there, mirroring `BTreeMap::insert`.
+    /// Insert (or replace) a cell at `coord`. Returns the previous
+    /// cell if one existed there, mirroring `BTreeMap::insert`.
+    ///
+    /// **Arena cleanup on replacement.** If a cell is replaced, its
+    /// memory range is freed back to the arena before the previous
+    /// metadata is returned. The returned `Cell` therefore has
+    /// `mem_len = 0` / `mem_start = 0` regardless of what it was
+    /// before — its slot data is no longer addressable through this
+    /// world's arena. Callers that need the content must copy it
+    /// out (via [`Cell::memory`]) before calling `insert`.
     pub fn insert(&mut self, coord: Coord, cell: Cell) -> Option<Cell> {
         let prev = self.cells.insert(coord, cell);
-        if prev.is_none() {
-            // New key — sorted_cache is stale, and bbox needs to
-            // extend. Pure replacement leaves both caches valid.
-            self.sorted_dirty = true;
-            self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
+        match prev {
+            Some(mut prev_cell) => {
+                prev_cell.free_memory(&mut self.arena);
+                Some(prev_cell)
+            }
+            None => {
+                self.sorted_dirty = true;
+                self.bbox_cache = Some(extend_bbox(self.bbox_cache, coord));
+                None
+            }
         }
-        prev
     }
 
     /// Remove the cell at `coord`, returning it if it was there.
+    /// The removed cell's memory range is freed back to the arena
+    /// before return — same contract as [`SparseWorld::insert`]
+    /// when replacing.
     pub fn remove(&mut self, coord: Coord) -> Option<Cell> {
         let removed = self.cells.remove(&coord);
-        if removed.is_some() {
+        if let Some(mut cell) = removed {
+            cell.free_memory(&mut self.arena);
             // Keyset shrank — sorted_cache is stale, and the bbox
             // might need to contract on this axis (we don't know
             // without a full pass; the rebuild handles that lazily).
             self.sorted_dirty = true;
             self.bbox_dirty = true;
+            Some(cell)
+        } else {
+            None
         }
-        removed
     }
 
     /// Borrow the orthogonal neighbor of `coord` in `direction`, if any.
@@ -346,10 +480,15 @@ impl SparseWorld {
         self.bbox_cache
     }
 
-    /// Drop every cell whose memory is empty (energy == 0). This is the
-    /// garbage-collection step in the per-tick cycle described in
-    /// `docs/mechanics.md` — the sparse-world counterpart of "the cell
-    /// stops existing once it holds no energy."
+    /// Drop every cell whose memory is empty (energy == 0). This is
+    /// the garbage-collection step in the per-tick cycle described
+    /// in `docs/mechanics.md` — the sparse-world counterpart of
+    /// "the cell stops existing once it holds no energy."
+    ///
+    /// Empty cells have `mem_len == 0` by invariant (the apply
+    /// phase frees memory back to the arena on shrink-to-zero), so
+    /// no arena housekeeping is needed here — only the metadata
+    /// `Cell` records get dropped.
     pub fn gc_empty(&mut self) {
         let len_before = self.cells.len();
         self.cells.retain(|_, cell| !cell.is_empty());

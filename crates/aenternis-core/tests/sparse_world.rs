@@ -45,7 +45,7 @@ fn big_bang_is_deterministic() {
     let b = SparseWorld::big_bang(0xDEAD_BEEF, 32);
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
-    assert_eq!(ca.memory(), cb.memory());
+    assert_eq!(ca.memory(a.arena()), cb.memory(b.arena()));
     assert_eq!(ca.origin_tag, cb.origin_tag);
 }
 
@@ -55,7 +55,7 @@ fn big_bang_different_seeds_produce_different_memory() {
     let b = SparseWorld::big_bang(2, 32);
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
-    assert_ne!(ca.memory(), cb.memory());
+    assert_ne!(ca.memory(a.arena()), cb.memory(b.arena()));
 }
 
 #[test]
@@ -63,9 +63,9 @@ fn big_bang_with_program_writes_prefix() {
     let program = [0xCAFE, 0xBABE, 0xDEAD];
     let w = SparseWorld::big_bang_with_program(7, 16, &program);
     let cell = w.get(Coord::ORIGIN).unwrap();
-    assert_eq!(cell.memory()[0], 0xCAFE);
-    assert_eq!(cell.memory()[1], 0xBABE);
-    assert_eq!(cell.memory()[2], 0xDEAD);
+    assert_eq!(cell.memory(w.arena())[0], 0xCAFE);
+    assert_eq!(cell.memory(w.arena())[1], 0xBABE);
+    assert_eq!(cell.memory(w.arena())[2], 0xDEAD);
 }
 
 #[test]
@@ -93,9 +93,9 @@ fn bounding_box_for_single_cell_at_origin() {
 #[test]
 fn bounding_box_spans_inserted_cells() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(-3, 5, 7), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(2, -1, 7), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(0, 5, -4), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(-3, 5, 7), &[1]);
+    w.insert_with_memory(Coord::new(2, -1, 7), &[1]);
+    w.insert_with_memory(Coord::new(0, 5, -4), &[1]);
     // x: -3..2, y: -1..5, z: -4..7
     assert_eq!(w.bounding_box(), Some((-3, 2, -1, 5, -4, 7)));
 }
@@ -107,8 +107,8 @@ fn bounding_box_y_max_extends_when_later_cell_has_larger_y() {
     // first cell's y (and whose x is greater so it iterates *after* the
     // first) to verify the `>` comparison actually fires for y_max.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![1])); // first
-    w.insert(Coord::new(1, 9, 0), Cell::with_memory(vec![1])); // y bumps
+    w.insert_with_memory(Coord::new(0, 1, 0), &[1]); // first
+    w.insert_with_memory(Coord::new(1, 9, 0), &[1]); // y bumps
     let bb = w.bounding_box().unwrap();
     assert_eq!(bb.3, 9, "expected y_max = 9, got {bb:?}");
 }
@@ -120,8 +120,8 @@ fn bounding_box_z_max_extends_when_later_cell_has_larger_z() {
     // strictly greater nor equal), and the test never observes the
     // comparison.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1])); // first
-    w.insert(Coord::new(1, 0, 9), Cell::with_memory(vec![1])); // z bumps
+    w.insert_with_memory(Coord::new(0, 0, 1), &[1]); // first
+    w.insert_with_memory(Coord::new(1, 0, 9), &[1]); // z bumps
     let bb = w.bounding_box().unwrap();
     assert_eq!(bb.5, 9, "expected z_max = 9, got {bb:?}");
 }
@@ -131,7 +131,7 @@ fn is_empty_returns_false_when_world_has_cells() {
     // A world with at least one cell must not report empty. Pins down the
     // truthful return value so an `is_empty -> true` mutation is caught.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::ORIGIN, &[1]);
     assert!(!w.is_empty());
 }
 
@@ -146,9 +146,9 @@ fn big_bang_with_program_fills_rest_from_rng() {
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
     // Prefixes differ as supplied.
-    assert_ne!(&ca.memory()[..3], &cb.memory()[..3]);
+    assert_ne!(&ca.memory(a.arena())[..3], &cb.memory(b.arena())[..3]);
     // Suffixes match — RNG advanced identically.
-    assert_eq!(&ca.memory()[3..], &cb.memory()[3..]);
+    assert_eq!(&ca.memory(a.arena())[3..], &cb.memory(b.arena())[3..]);
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn big_bang_with_program_truncates_oversized() {
     let w = SparseWorld::big_bang_with_program(0, 5, &program);
     let cell = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(cell.memory_len(), 5);
-    assert_eq!(cell.memory(), vec![0, 1, 2, 3, 4]);
+    assert_eq!(cell.memory(w.arena()), vec![0, 1, 2, 3, 4]);
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn big_bang_with_empty_program_matches_big_bang() {
     let b = SparseWorld::big_bang_with_program(123, 32, &[]);
     let ca = a.get(Coord::ORIGIN).unwrap();
     let cb = b.get(Coord::ORIGIN).unwrap();
-    assert_eq!(ca.memory(), cb.memory());
+    assert_eq!(ca.memory(a.arena()), cb.memory(b.arena()));
     assert_eq!(ca.origin_tag, cb.origin_tag);
 }
 
@@ -188,7 +188,7 @@ fn contains_reflects_insert_and_remove() {
     let mut w = SparseWorld::new(0);
     let c = Coord::new(1, 2, 3);
     assert!(!w.contains(c));
-    w.insert(c, Cell::with_memory(vec![1]));
+    w.insert_with_memory(c, &[1]);
     assert!(w.contains(c));
     let removed = w.remove(c);
     assert!(removed.is_some());
@@ -203,23 +203,38 @@ fn get_returns_none_for_missing() {
 
 #[test]
 fn get_mut_allows_modification() {
+    // After the arena refactor, slot-resize ops on a cell require
+    // `&mut arena` too — which `w.get_mut(c)` doesn't give the
+    // caller (it holds `&mut w.cells`). What `get_mut` still does
+    // is hand back `&mut Cell` for fixed-size field changes; verify
+    // that path with a scalar mutation (`pc`) rather than memory
+    // growth. Memory growth from outside the tick path uses
+    // `w.alloc_cell` / `w.insert_with_memory` instead.
     let mut w = SparseWorld::new(0);
     let c = Coord::new(0, 0, 0);
-    w.insert(c, Cell::with_memory(vec![1, 2, 3]));
-    w.get_mut(c).unwrap().push_memory_slot(4);
-    assert_eq!(w.get(c).unwrap().memory(), vec![1, 2, 3, 4]);
+    w.insert_with_memory(c, &[1, 2, 3]);
+    w.get_mut(c).unwrap().pc = 7;
+    assert_eq!(w.get(c).unwrap().pc, 7);
+    assert_eq!(w.get(c).unwrap().memory(w.arena()), vec![1, 2, 3]);
 }
 
 #[test]
 fn insert_returns_previous_cell_on_replace() {
+    // After the arena refactor (Phase 2), `insert` frees the replaced
+    // cell's arena range before returning the metadata — so `prev`
+    // comes back with `mem_len = 0` and the slot data is no longer
+    // addressable through the world. What the test still guarantees:
+    // *some* metadata is returned (not `None`), and the new cell is
+    // installed at the coord with the expected contents.
     let mut w = SparseWorld::new(0);
     let c = Coord::new(0, 0, 0);
-    w.insert(c, Cell::with_memory(vec![1]));
+    w.insert_with_memory(c, &[1]);
     let prev = w
-        .insert(c, Cell::with_memory(vec![9, 9]))
+        .insert_with_memory(c, &[9, 9])
         .expect("expected previous");
-    assert_eq!(prev.memory(), vec![1]);
-    assert_eq!(w.get(c).unwrap().memory(), vec![9, 9]);
+    assert!(prev.is_empty(), "freed prev should report empty memory");
+    assert_eq!(w.get(c).unwrap().memory_len(), 2);
+    assert_eq!(w.cell_memory(c).unwrap(), &[9, 9]);
 }
 
 #[test]
@@ -232,9 +247,9 @@ fn remove_returns_none_for_missing() {
 fn len_tracks_inserts_and_removes() {
     let mut w = SparseWorld::new(0);
     assert_eq!(w.len(), 0);
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(3, 0, 0), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(2, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(3, 0, 0), &[1]);
     assert_eq!(w.len(), 3);
     w.remove(Coord::new(2, 0, 0));
     assert_eq!(w.len(), 2);
@@ -245,19 +260,19 @@ fn len_tracks_inserts_and_removes() {
 #[test]
 fn neighbor_returns_none_for_missing_cell() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::ORIGIN, &[1]);
     assert!(w.neighbor(Coord::ORIGIN, Direction::Xp).is_none());
 }
 
 #[test]
 fn neighbor_returns_some_for_existing_neighbor() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::ORIGIN, Cell::with_memory(vec![1]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![2, 3]));
+    w.insert_with_memory(Coord::ORIGIN, &[1]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[2, 3]);
     let n = w
         .neighbor(Coord::ORIGIN, Direction::Xp)
         .expect("neighbor should exist");
-    assert_eq!(n.memory(), vec![2, 3]);
+    assert_eq!(n.memory(w.arena()), vec![2, 3]);
 }
 
 #[test]
@@ -265,16 +280,15 @@ fn neighbor_works_for_all_six_directions() {
     let mut w = SparseWorld::new(0);
     let center = Coord::new(0, 0, 0);
     for &d in &Direction::ALL {
-        w.insert(
-            center.neighbor(d),
-            Cell::with_memory(vec![d.index() as u32]),
-        );
+        w.insert_with_memory(center.neighbor(d), &[d.index() as u32]);
     }
     for &d in &Direction::ALL {
-        let n = w
-            .neighbor(center, d)
-            .unwrap_or_else(|| panic!("missing neighbor {d:?}"));
-        assert_eq!(n.memory(), vec![d.index() as u32]);
+        let n_coord = center.neighbor(d);
+        assert!(
+            w.neighbor(center, d).is_some(),
+            "missing neighbor {d:?}",
+        );
+        assert_eq!(w.cell_memory(n_coord).unwrap(), &[d.index() as u32]);
     }
 }
 
@@ -287,7 +301,7 @@ fn neighbor_energy_zero_for_missing() {
 #[test]
 fn neighbor_energy_matches_neighbor_cell_energy() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1, 2, 3, 4, 5]));
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1, 2, 3, 4, 5]);
     assert_eq!(w.neighbor_energy(Coord::ORIGIN, Direction::Xp), 5);
 }
 
@@ -301,9 +315,9 @@ fn total_energy_zero_for_empty() {
 #[test]
 fn total_energy_sums_all_cells() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1; 3]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1; 5]));
-    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![1; 7]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 3]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 5]);
+    w.insert_with_memory(Coord::new(0, 1, 0), &[1; 7]);
     assert_eq!(w.total_energy(), 15);
 }
 
@@ -330,7 +344,7 @@ fn total_energy_returns_u64() {
 fn gc_empty_removes_empty_cells() {
     let mut w = SparseWorld::new(0);
     w.insert(Coord::new(0, 0, 0), Cell::new()); // empty
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1])); // non-empty
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1]); // non-empty
     w.insert(Coord::new(2, 0, 0), Cell::new()); // empty
     assert_eq!(w.len(), 3);
     w.gc_empty();
@@ -343,8 +357,8 @@ fn gc_empty_removes_empty_cells() {
 #[test]
 fn gc_empty_is_noop_when_no_empty_cells() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1, 2]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1, 2]);
     w.gc_empty();
     assert_eq!(w.len(), 2);
 }
@@ -366,9 +380,9 @@ fn sorted_iter_walks_cells_in_canonical_order() {
     // Insert in reverse-canonical order; sorted_iter must still yield
     // them in `(x, y, z)` lex order regardless of insertion sequence
     // and regardless of the underlying FxHashMap's hash order.
-    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![3]));
-    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![2]));
-    w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(2, 0, 0), &[3]);
+    w.insert_with_memory(Coord::new(0, 1, 0), &[2]);
+    w.insert_with_memory(Coord::new(0, 0, 1), &[1]);
     // Tests that mutate outside the tick loop have to refresh the
     // sorted/bbox cache themselves before reading — the tick loop
     // does this after `gc_empty`, but a bare `insert` does not.
@@ -391,9 +405,9 @@ fn coords_yields_keys_independent_of_order() {
     // order — only that every inserted key appears exactly once. The
     // sort happens at the snapshot boundary or via `sorted_iter`.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![3]));
-    w.insert(Coord::new(0, 1, 0), Cell::with_memory(vec![2]));
-    w.insert(Coord::new(0, 0, 1), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(2, 0, 0), &[3]);
+    w.insert_with_memory(Coord::new(0, 1, 0), &[2]);
+    w.insert_with_memory(Coord::new(0, 0, 1), &[1]);
 
     let mut keys: Vec<Coord> = w.coords().copied().collect();
     keys.sort_unstable();
@@ -410,8 +424,8 @@ fn coords_yields_keys_independent_of_order() {
 #[test]
 fn iter_yields_coord_cell_pairs() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![2, 3]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[2, 3]);
 
     let pairs: Vec<(Coord, u32)> = w.iter().map(|(c, cell)| (*c, cell.energy())).collect();
     assert_eq!(
@@ -422,38 +436,44 @@ fn iter_yields_coord_cell_pairs() {
 
 #[test]
 fn iter_mut_allows_modification() {
-    // Uses `iter_mut().for_each(...)` rather than `for (_, c) in w.iter_mut()`
-    // so this exercises the method form of `iter_mut`. The `for (_, c) in
-    // &mut world` form is covered by `into_iter_for_mut_reference_*`.
+    // Uses `iter_mut().for_each(...)` rather than `for (_, c) in
+    // w.iter_mut()` so this exercises the method form of `iter_mut`.
+    // The `for (_, c) in &mut world` form is covered by
+    // `into_iter_for_mut_reference_*`. After the arena refactor the
+    // mutation has to stay within fields the cell owns (no slot
+    // resize, since that needs `&mut arena` too) — use `pc` here.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![2]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[2]);
 
-    w.iter_mut().for_each(|(_, cell)| cell.push_memory_slot(99));
+    w.iter_mut().for_each(|(_, cell)| cell.pc = 99);
 
-    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().memory(), vec![1, 99]);
-    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().memory(), vec![2, 99]);
+    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().pc, 99);
+    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().pc, 99);
 }
 
 #[test]
 fn into_iter_for_shared_reference_walks_pairs() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1, 2]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![3]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1, 2]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[3]);
     let energies: Vec<u32> = (&w).into_iter().map(|(_, cell)| cell.energy()).collect();
     assert_eq!(energies, vec![2, 1]);
 }
 
 #[test]
 fn into_iter_for_mut_reference_allows_modification() {
+    // Same constraint as `iter_mut_allows_modification`: arena
+    // ownership means slot-resize through iter_mut would require a
+    // simultaneous `&mut arena` borrow. Stay within scalar fields.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![2]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(1, 0, 0), &[2]);
     for (_, cell) in &mut w {
-        cell.push_memory_slot(99);
+        cell.pc = 99;
     }
-    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().memory(), vec![1, 99]);
-    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().memory(), vec![2, 99]);
+    assert_eq!(w.get(Coord::new(0, 0, 0)).unwrap().pc, 99);
+    assert_eq!(w.get(Coord::new(1, 0, 0)).unwrap().pc, 99);
 }
 
 #[test]
@@ -462,9 +482,9 @@ fn coords_yields_just_inserted_keys() {
     // sequence. A separate test (`sorted_iter_walks_cells_in_canonical_order`)
     // covers the canonical-order contract.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(5, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(3, 0, 0), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(5, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(2, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(3, 0, 0), &[1]);
     let keys: std::collections::HashSet<Coord> = w.coords().copied().collect();
     assert_eq!(keys.len(), 3);
     assert!(keys.contains(&Coord::new(2, 0, 0)));
@@ -499,9 +519,9 @@ fn bbox_extends_on_get_or_alloc_outside_current_box() {
 #[test]
 fn bbox_extends_on_insert_outside_current_box() {
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(0, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(-4, 2, -1), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(3, -5, 6), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(-4, 2, -1), &[1]);
+    w.insert_with_memory(Coord::new(3, -5, 6), &[1]);
     assert_eq!(w.bounding_box(), Some((-4, 3, -5, 2, -1, 6)));
 }
 
@@ -526,7 +546,7 @@ fn sorted_iter_after_insert_remove_cycle_is_lex_ordered() {
         let coord = Coord::new(x, y, z);
         match next() % 3 {
             0 => {
-                w.insert(coord, Cell::with_memory(vec![1]));
+                w.insert_with_memory(coord, &[1]);
             }
             1 => {
                 w.get_or_alloc(coord);
@@ -550,8 +570,8 @@ fn bbox_invariant_matches_naive_after_mutations() {
     // over `cells.keys()`. This catches both stale-extend bugs and
     // missing dirty flags.
     let mut w = SparseWorld::big_bang(0, 1);
-    w.insert(Coord::new(4, -2, 6), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(-7, 3, -8), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(4, -2, 6), &[1]);
+    w.insert_with_memory(Coord::new(-7, 3, -8), &[1]);
     w.remove(Coord::ORIGIN);
     w.rebuild_indices_if_dirty();
     let naive = w.coords().fold(None, |acc, c| {
@@ -579,7 +599,7 @@ fn bbox_recomputes_after_gc_clears_extremes() {
     // extend-only update would leave x_min stale.
     let mut w = SparseWorld::new(0);
     w.insert(Coord::new(-10, 0, 0), Cell::new()); // empty → gc target
-    w.insert(Coord::new(10, 0, 0), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(10, 0, 0), &[1]);
     w.gc_empty();
     w.rebuild_indices_if_dirty();
     let bb = w.bounding_box().unwrap();
@@ -604,7 +624,7 @@ fn clone_preserves_cache_validity() {
     // therefore read its sorted_iter / bounding_box without an extra
     // rebuild — the invariant carries.
     let mut w = SparseWorld::big_bang(0, 4);
-    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(2, 0, 0), &[1]);
     w.rebuild_indices_if_dirty();
     let clone = w.clone();
     let collected: Vec<Coord> = clone.sorted_iter().map(|(c, _)| *c).collect();
@@ -619,12 +639,12 @@ fn insert_replace_does_not_invalidate_sorted_cache() {
     // needed before the next read. This pins the optimization so a
     // "set dirty on every insert" mutant gets caught.
     let mut w = SparseWorld::new(0);
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![1]));
-    w.insert(Coord::new(2, 0, 0), Cell::with_memory(vec![1]));
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1]);
+    w.insert_with_memory(Coord::new(2, 0, 0), &[1]);
     w.rebuild_indices_if_dirty();
     let cache_before: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();
     // Replace at an existing coord — should NOT dirty the cache.
-    w.insert(Coord::new(1, 0, 0), Cell::with_memory(vec![99]));
+    w.insert_with_memory(Coord::new(1, 0, 0), &[99]);
     // Read without an intervening rebuild — relies on the cache
     // still being valid.
     let cache_after: Vec<Coord> = w.sorted_iter().map(|(c, _)| *c).collect();

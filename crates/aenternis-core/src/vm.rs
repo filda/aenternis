@@ -23,6 +23,7 @@
 //! introspection invariant ("a cell cannot read another cell's
 //! interior, only its emissions").
 
+use crate::world::arena::Arena;
 use crate::{Cell, Direction};
 
 /// One of the 20 defined Aenternis opcodes.
@@ -189,14 +190,17 @@ impl Opcode {
 /// is intentional, not undefined behavior; rogue programs that drive a
 /// face's outflow past `u32::MAX` just wrap around.
 #[allow(clippy::too_many_lines)] // 20 opcodes per match; splitting hurts more than it helps
-pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction::COUNT]) {
+pub fn execute_instruction(
+    cell: &mut Cell,
+    arena: &mut Arena,
+    neighbor_energies: &[u32; Direction::COUNT],
+) {
     let mem_size = cell.memory_len();
     if mem_size == 0 {
         return;
     }
     let pc_u = cell.pc as usize;
-    let mem = cell.memory();
-    let opcode_slot = mem[pc_u % mem_size];
+    let opcode_slot = cell.memory_slot(arena, pc_u % mem_size);
 
     let Some(op) = Opcode::decode(opcode_slot) else {
         // Unknown opcode → nop, advance by 1.
@@ -206,12 +210,27 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
 
     let length = op.length() as usize;
 
-    // Read up to three operand slots upfront. After this point we no
-    // longer hold an immutable borrow of `cell.memory()`, so the
-    // match arms are free to mutate cells.
-    let arg1 = if length >= 2 { mem[(pc_u + 1) % mem_size] } else { 0 };
-    let arg2 = if length >= 3 { mem[(pc_u + 2) % mem_size] } else { 0 };
-    let arg3 = if length >= 4 { mem[(pc_u + 3) % mem_size] } else { 0 };
+    // Read up to three operand slots upfront. Storing them in
+    // locals (rather than re-reading mid-instruction) preserves
+    // the introspection invariant: even if an opcode writes to a
+    // slot mid-instruction, subsequent operand reads see the
+    // *pre-write* state. Matches the JS prototype's behaviour
+    // exactly.
+    let arg1 = if length >= 2 {
+        cell.memory_slot(arena, (pc_u + 1) % mem_size)
+    } else {
+        0
+    };
+    let arg2 = if length >= 3 {
+        cell.memory_slot(arena, (pc_u + 2) % mem_size)
+    } else {
+        0
+    };
+    let arg3 = if length >= 4 {
+        cell.memory_slot(arena, (pc_u + 3) % mem_size)
+    } else {
+        0
+    };
 
     // `Some(addr)` overrides the default PC-advance when set by a jump.
     let mut jump_to: Option<usize> = None;
@@ -221,32 +240,37 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
 
         Opcode::Set => {
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(dst, arg2);
+            cell.set_memory_slot(arena, dst, arg2);
         }
         Opcode::Copy => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(dst, cell.memory_slot(src));
+            let v = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, v);
         }
         Opcode::Add => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let sum = cell.memory_slot(dst).wrapping_add(cell.memory_slot(src));
-            cell.set_memory_slot(dst, sum);
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.wrapping_add(rhs));
         }
         Opcode::Sub => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let diff = cell.memory_slot(dst).wrapping_sub(cell.memory_slot(src));
-            cell.set_memory_slot(dst, diff);
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.wrapping_sub(rhs));
         }
         Opcode::Inc => {
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(dst, cell.memory_slot(dst).wrapping_add(1));
+            let v = cell.memory_slot(arena, dst);
+            cell.set_memory_slot(arena, dst, v.wrapping_add(1));
         }
         Opcode::Dec => {
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(dst, cell.memory_slot(dst).wrapping_sub(1));
+            let v = cell.memory_slot(arena, dst);
+            cell.set_memory_slot(arena, dst, v.wrapping_sub(1));
         }
 
         Opcode::Jmp => {
@@ -254,20 +278,20 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         }
         Opcode::Jz => {
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory_slot(probe) == 0 {
+            if cell.memory_slot(arena, probe) == 0 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
         Opcode::Jne => {
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory_slot(probe) != 0 {
+            if cell.memory_slot(arena, probe) != 0 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
         Opcode::Je => {
             let a = (arg1 as usize) % mem_size;
             let b = (arg2 as usize) % mem_size;
-            if cell.memory_slot(a) == cell.memory_slot(b) {
+            if cell.memory_slot(arena, a) == cell.memory_slot(arena, b) {
                 jump_to = Some((arg3 as usize) % mem_size);
             }
         }
@@ -280,12 +304,13 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         Opcode::Getp => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let dst = (arg2 as usize) % mem_size;
-            cell.set_memory_slot(dst, cell.pointers[dir]);
+            let v = cell.pointers[dir];
+            cell.set_memory_slot(arena, dst, v);
         }
         Opcode::Setpv => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let src = (arg2 as usize) % mem_size;
-            cell.pointers[dir] = cell.memory_slot(src) % (mem_size as u32);
+            cell.pointers[dir] = cell.memory_slot(arena, src) % (mem_size as u32);
             cell.pointer_override[dir] = true;
         }
 
@@ -296,27 +321,31 @@ pub fn execute_instruction(cell: &mut Cell, neighbor_energies: &[u32; Direction:
         Opcode::Senergy => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let dst = (arg2 as usize) % mem_size;
-            cell.set_memory_slot(dst, neighbor_energies[dir]);
+            let v = neighbor_energies[dir];
+            cell.set_memory_slot(arena, dst, v);
         }
 
         Opcode::Ldi => {
             let b_addr = (arg2 as usize) % mem_size;
-            let runtime = cell.memory_slot(b_addr) as usize;
+            let runtime = cell.memory_slot(arena, b_addr) as usize;
             let src = runtime % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(dst, cell.memory_slot(src));
+            let v = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, v);
         }
         Opcode::Sti => {
             let a_addr = (arg1 as usize) % mem_size;
             let b_addr = (arg2 as usize) % mem_size;
-            let runtime = cell.memory_slot(a_addr) as usize;
+            let runtime = cell.memory_slot(arena, a_addr) as usize;
             let dst = runtime % mem_size;
-            cell.set_memory_slot(dst, cell.memory_slot(b_addr));
+            let v = cell.memory_slot(arena, b_addr);
+            cell.set_memory_slot(arena, dst, v);
         }
 
         Opcode::Sid => {
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(dst, cell.origin_tag);
+            let tag = cell.origin_tag;
+            cell.set_memory_slot(arena, dst, tag);
         }
         Opcode::Paint => {
             cell.appearance = arg1;

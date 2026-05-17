@@ -35,13 +35,13 @@ fn weak_attacker_against_strong_target_produces_low_dominance() {
     // Result: inflow stacks at the membrane (writeStart = memSize), no
     // origin-tag inheritance.
     let mut w = SparseWorld::new(0);
-    let mut attacker = Cell::with_memory(vec![10, 20, 30]);
+    let mut attacker = w.alloc_cell(&[10, 20, 30]);
     attacker.rates[Direction::Xp.index()] = 1;
     attacker.pointers[Direction::Xp.index()] = 0;
     attacker.origin_tag = 0xAAAA_AAAA;
     w.insert(Coord::ORIGIN, attacker);
 
-    let mut target = Cell::with_memory(vec![99u32; 100]);
+    let mut target = w.alloc_cell(&[99u32; 100]);
     target.origin_tag = 0xBBBB_BBBB;
     w.insert(Coord::new(1, 0, 0), target);
 
@@ -52,7 +52,7 @@ fn weak_attacker_against_strong_target_produces_low_dominance() {
     // memSize_before_inflow = 100, dominance ≈ 0, write_start = 100,
     // so the inflow slot lands at the very end.
     assert_eq!(target.memory_len(), 101);
-    assert_eq!(target.memory()[100], 10);
+    assert_eq!(target.memory(w.arena())[100], 10);
     // Origin tag preserved (dominance < 0.5).
     assert_eq!(target.origin_tag, 0xBBBB_BBBB);
 }
@@ -70,14 +70,14 @@ fn strong_attacker_against_weak_target_produces_full_dominance() {
     // at the very end despite high dominance — that's a real edge case
     // of integer truncation, not the property we're testing here.
     let mut w = SparseWorld::new(0);
-    let mut attacker = Cell::with_memory(vec![1; 100]);
-    attacker.set_memory_slot(0, 0xAAAA);
+    let mut attacker = w.alloc_cell(&[1; 100]);
+    attacker.set_memory_slot(w.arena_mut(), 0, 0xAAAA);
     attacker.rates[Direction::Xp.index()] = 1;
     attacker.pointers[Direction::Xp.index()] = 0;
     attacker.origin_tag = 0xAAAA_AAAA;
     w.insert(Coord::ORIGIN, attacker);
 
-    let mut target = Cell::with_memory(vec![0xBBBB; 50]);
+    let mut target = w.alloc_cell(&[0xBBBB; 50]);
     target.origin_tag = 0xBBBB_BBBB;
     w.insert(Coord::new(1, 0, 0), target);
 
@@ -88,11 +88,11 @@ fn strong_attacker_against_weak_target_produces_full_dominance() {
     assert_eq!(target.memory_len(), 51);
     // Attacker slot lands at index 13 (= write_start), pushing the
     // last 37 of the original 0xBBBB block one slot up.
-    assert_eq!(target.memory()[13], 0xAAAA);
+    assert_eq!(target.memory(w.arena())[13], 0xAAAA);
     // Bookend assertions: positions 0..13 and 14..51 are still 0xBBBB.
-    assert_eq!(target.memory()[0], 0xBBBB);
-    assert_eq!(target.memory()[12], 0xBBBB);
-    assert_eq!(target.memory()[14], 0xBBBB);
+    assert_eq!(target.memory(w.arena())[0], 0xBBBB);
+    assert_eq!(target.memory(w.arena())[12], 0xBBBB);
+    assert_eq!(target.memory(w.arena())[14], 0xBBBB);
     // Top dominance ≥ 0.5, target inherits attacker's origin tag.
     assert_eq!(target.origin_tag, 0xAAAA_AAAA);
 }
@@ -102,8 +102,8 @@ fn void_target_gets_full_dominance() {
     // Target doesn't exist (void). target_E_post = 0, attacker_post = N.
     // r = 0; dominance = 1.
     let mut w = SparseWorld::new(0);
-    let mut attacker = Cell::with_memory(vec![1, 2, 3, 4, 5]);
-    attacker.set_memory_slot(0, 0xCAFE);
+    let mut attacker = w.alloc_cell(&[1, 2, 3, 4, 5]);
+    attacker.set_memory_slot(w.arena_mut(), 0, 0xCAFE);
     attacker.rates[Direction::Xp.index()] = 2;
     attacker.pointers[Direction::Xp.index()] = 0;
     attacker.origin_tag = 0xDEAD_BEEF;
@@ -116,7 +116,7 @@ fn void_target_gets_full_dominance() {
         .get(Coord::new(1, 0, 0))
         .expect("void target should be alloc-on-written");
     // Empty target, dominance 1, write_start = 0. Memory == slots.
-    assert_eq!(target.memory(), vec![0xCAFE, 2]);
+    assert_eq!(target.memory(w.arena()), vec![0xCAFE, 2]);
     // Inherited origin tag.
     assert_eq!(target.origin_tag, 0xDEAD_BEEF);
 }
@@ -133,12 +133,12 @@ fn intrusion_at_intermediate_dominance_inserts_in_the_middle() {
     // write_start = 5 - 2 = 3.
     // new_mem = [t0, t1, t2] ++ [a0] ++ [t3, t4]
     let mut w = SparseWorld::new(0);
-    let mut attacker = Cell::with_memory(vec![0xA0, 1, 2, 3, 4, 5]);
+    let mut attacker = w.alloc_cell(&[0xA0, 1, 2, 3, 4, 5]);
     attacker.rates[Direction::Xp.index()] = 1;
     attacker.pointers[Direction::Xp.index()] = 0;
     w.insert(Coord::ORIGIN, attacker);
 
-    let mut target = Cell::with_memory(vec![0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
+    let mut target = w.alloc_cell(&[0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
     target.origin_tag = 0xBBBB;
     w.insert(Coord::new(1, 0, 0), target);
 
@@ -146,7 +146,7 @@ fn intrusion_at_intermediate_dominance_inserts_in_the_middle() {
     apply_outflow(&mut w, &outflow);
 
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
-    assert_eq!(target.memory(), vec![0xB0, 0xB1, 0xB2, 0xA0, 0xB3, 0xB4]);
+    assert_eq!(target.memory(w.arena()), vec![0xB0, 0xB1, 0xB2, 0xA0, 0xB3, 0xB4]);
     // dominance ≥ 0.5 (exactly 0.5), origin_tag inherited from attacker
     // (which is 0 by default since we didn't set it).
     assert_eq!(target.origin_tag, 0);
@@ -163,13 +163,13 @@ fn origin_tag_preserved_below_threshold() {
     // Attacker 6 energy, emit 1 → post_burn = 5. Target post = 6.
     // Use target with 6 slots, no outflow.
     let mut w = SparseWorld::new(0);
-    let mut attacker = Cell::with_memory(vec![1, 2, 3, 4, 5, 6]);
+    let mut attacker = w.alloc_cell(&[1, 2, 3, 4, 5, 6]);
     attacker.rates[Direction::Xp.index()] = 1;
     attacker.pointers[Direction::Xp.index()] = 0;
     attacker.origin_tag = 0xAAAA;
     w.insert(Coord::ORIGIN, attacker);
 
-    let mut target = Cell::with_memory(vec![10, 20, 30, 40, 50, 60]);
+    let mut target = w.alloc_cell(&[10, 20, 30, 40, 50, 60]);
     target.origin_tag = 0xBBBB;
     w.insert(Coord::new(1, 0, 0), target);
 
@@ -203,18 +203,18 @@ fn multiple_inflows_apply_strongest_first() {
     //   [0xB0, 0xAAAA, 0xB1, 0xB2, 0xB3, 0xB4, 0xCC]  (size 7)
     let mut w = SparseWorld::new(0);
 
-    let mut weak = Cell::with_memory(vec![0xCC, 0, 0]);
+    let mut weak = w.alloc_cell(&[0xCC, 0, 0]);
     weak.rates[Direction::Xn.index()] = 1;
     weak.pointers[Direction::Xn.index()] = 0;
     w.insert(Coord::new(1, 0, 0), weak);
 
-    let mut strong = Cell::with_memory(vec![0xAA; 100]);
-    strong.set_memory_slot(0, 0xAAAA);
+    let mut strong = w.alloc_cell(&[0xAA; 100]);
+    strong.set_memory_slot(w.arena_mut(), 0, 0xAAAA);
     strong.rates[Direction::Xp.index()] = 1;
     strong.pointers[Direction::Xp.index()] = 0;
     w.insert(Coord::new(-1, 0, 0), strong);
 
-    let target = Cell::with_memory(vec![0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
+    let target = w.alloc_cell(&[0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
     w.insert(Coord::ORIGIN, target);
 
     let outflow = collect_outflow(&w);
@@ -223,12 +223,12 @@ fn multiple_inflows_apply_strongest_first() {
     let target = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(target.memory_len(), 7);
     // Strong inflow is at index 1 (just inside the membrane).
-    assert_eq!(target.memory()[1], 0xAAAA);
+    assert_eq!(target.memory(w.arena())[1], 0xAAAA);
     // Weak inflow is at the very end.
-    assert_eq!(*target.memory().last().unwrap(), 0xCC);
+    assert_eq!(*target.memory(w.arena()).last().unwrap(), 0xCC);
     // Strong's index < weak's index — the load-bearing property.
-    let strong_idx = target.memory().iter().position(|&v| v == 0xAAAA).unwrap();
-    let weak_idx = target.memory().iter().position(|&v| v == 0xCC).unwrap();
+    let strong_idx = target.memory(w.arena()).iter().position(|&v| v == 0xAAAA).unwrap();
+    let weak_idx = target.memory(w.arena()).iter().position(|&v| v == 0xCC).unwrap();
     assert!(
         strong_idx < weak_idx,
         "strong should land earlier than weak ({strong_idx} vs {weak_idx})"
@@ -275,7 +275,7 @@ fn six_inflows_with_equal_dominance_apply_in_canonical_direction_order() {
     //     [B0,B1,B2,A1,A3,A5,A4,A2,A0,B3,B4] mem=11
     let mut w = SparseWorld::new(0);
 
-    let target = Cell::with_memory(vec![0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
+    let target = w.alloc_cell(&[0xB0, 0xB1, 0xB2, 0xB3, 0xB4]);
     w.insert(Coord::ORIGIN, target);
 
     // Attacker layout: each at the cardinal neighbor of origin in
@@ -296,7 +296,7 @@ fn six_inflows_with_equal_dominance_apply_in_canonical_direction_order() {
         // points at the token so it's the slot that flows out.
         let mut mem = vec![0u32; 5];
         mem.push(token);
-        let mut a = Cell::with_memory(mem);
+        let mut a = w.alloc_cell(&mem);
         let emit_dir = face.opposite();
         a.rates[emit_dir.index()] = 1;
         a.pointers[emit_dir.index()] = 5;
@@ -308,7 +308,7 @@ fn six_inflows_with_equal_dominance_apply_in_canonical_direction_order() {
 
     let target = w.get(Coord::ORIGIN).unwrap();
     assert_eq!(
-        target.memory(),
+        target.memory(w.arena()),
         vec![0xB0, 0xB1, 0xB2, 0x00A1, 0x00A3, 0x00A5, 0x00A4, 0x00A2, 0x00A0, 0xB3, 0xB4,],
         "memory layout must reflect canonical-direction tie-break order — \
          any divergence indicates the multi-inflow sort was skipped",
@@ -346,13 +346,14 @@ fn pc_wraps_into_range_when_shrink_outpaces_inflow_for_dual_role_cell() {
     //       += → 10 + 7 = 17
     let mut w = SparseWorld::new(0);
 
-    let mut a = Cell::with_memory((0u32..12).collect());
+    let mem: Vec<u32> = (0u32..12).collect();
+    let mut a = w.alloc_cell(&mem);
     a.pc = 10;
     a.rates[Direction::Xp.index()] = 6;
     a.pointers[Direction::Xp.index()] = 0;
     w.insert(Coord::ORIGIN, a);
 
-    let mut b = Cell::with_memory(vec![0x99]);
+    let mut b = w.alloc_cell(&[0x99]);
     b.rates[Direction::Xn.index()] = 1;
     b.pointers[Direction::Xn.index()] = 0;
     w.insert(Coord::new(1, 0, 0), b);
@@ -374,7 +375,7 @@ fn pc_wraps_into_range_when_shrink_outpaces_inflow_for_dual_role_cell() {
 #[test]
 fn dominance_apply_still_conserves_total_slots() {
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    let mut cell = w.alloc_cell(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     cell.rates = [1, 1, 1, 1, 1, 1];
     cell.pointers = [0, 1, 2, 3, 4, 5];
     w.insert(Coord::ORIGIN, cell);
@@ -405,7 +406,7 @@ fn outflow_with_missing_source_treats_attacker_pre_as_zero() {
 
     assert!(!w.contains(Coord::ORIGIN));
     let target = w.get(Coord::new(1, 0, 0)).unwrap();
-    assert_eq!(target.memory(), vec![42]);
+    assert_eq!(target.memory(w.arena()), vec![42]);
 }
 
 // ----- inflow tracking (for the `sinflow` opcode) ----------------------------
@@ -418,17 +419,17 @@ fn apply_outflow_populates_target_inflow_per_direction() {
     //   inflow[Xp] = slots received from +x (= attacker at -1 emitting toward +x)
     let mut w = SparseWorld::new(0);
 
-    let mut from_plus_x = Cell::with_memory(vec![0xCC, 0, 0]);
+    let mut from_plus_x = w.alloc_cell(&[0xCC, 0, 0]);
     from_plus_x.rates[Direction::Xn.index()] = 1;
     from_plus_x.pointers[Direction::Xn.index()] = 0;
     w.insert(Coord::new(1, 0, 0), from_plus_x);
 
-    let mut from_minus_x = Cell::with_memory(vec![0xAA, 0, 0, 0, 0]);
+    let mut from_minus_x = w.alloc_cell(&[0xAA, 0, 0, 0, 0]);
     from_minus_x.rates[Direction::Xp.index()] = 2;
     from_minus_x.pointers[Direction::Xp.index()] = 0;
     w.insert(Coord::new(-1, 0, 0), from_minus_x);
 
-    let target = Cell::with_memory(vec![0xB0; 5]);
+    let target = w.alloc_cell(&[0xB0; 5]);
     w.insert(Coord::ORIGIN, target);
 
     let outflow = collect_outflow(&w);
@@ -463,7 +464,7 @@ fn apply_outflow_clears_inflow_from_previous_tick() {
     // After apply_outflow with no inflow this tick, inflow must be
     // zeroed — `sinflow` semantics is "last tick", not "ever received".
     let mut w = SparseWorld::new(0);
-    let mut cell = Cell::with_memory(vec![1, 2, 3]);
+    let mut cell = w.alloc_cell(&[1, 2, 3]);
     cell.inflow = [99, 99, 99, 99, 99, 99];
     w.insert(Coord::ORIGIN, cell);
 
@@ -493,12 +494,12 @@ fn raising_move_threshold_raises_dominance() {
         let mut w = SparseWorld::new(0);
         w.move_threshold = mt;
 
-        let mut attacker = Cell::with_memory(vec![1, 2, 3, 4, 5, 6]);
+        let mut attacker = w.alloc_cell(&[1, 2, 3, 4, 5, 6]);
         attacker.rates[Direction::Xp.index()] = 1;
         attacker.pointers[Direction::Xp.index()] = 0;
         w.insert(Coord::ORIGIN, attacker);
 
-        let target = Cell::with_memory(vec![0; 5]);
+        let target = w.alloc_cell(&[0; 5]);
         w.insert(Coord::new(1, 0, 0), target);
 
         let outflow = collect_outflow(&w);
@@ -506,7 +507,7 @@ fn raising_move_threshold_raises_dominance() {
 
         let target = w.get(Coord::new(1, 0, 0)).unwrap();
         target
-            .memory()
+            .memory(w.arena())
             .iter()
             .position(|&v| v != 0)
             .unwrap_or(target.memory_len())
