@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# Aenternis — full rebuild: TypeScript + WASM.
+# Aenternis — full rebuild: WASM + TypeScript.
 #
 # Two-stage WASM pass (same shape as the old `scripts/check.sh`):
 #   1. Single-threaded stable (CI parity — catches `#![feature(...)]`
 #      attributes that would compile on nightly but break stable CI).
 #   2. Threaded nightly (canonical runtime bundle that `web/worker.ts`
 #      consumes when the host page is `crossOriginIsolated`).
+#
+# WASM must run before TypeScript: `tsc` resolves `web/worker.ts`'s
+# import of `../crates/aenternis-wasm/pkg/aenternis_wasm.js` against
+# the colocated `.d.ts` that `wasm-pack` generates. On a fresh checkout
+# (CI deploy job, new clone) the `pkg/` directory doesn't exist yet —
+# it's `.gitignore`d — so a tsc-first order yields `TS2307: Cannot find
+# module`. The CI `typecheck` job already builds the bundle first for
+# the same reason; this script keeps the deploy job (which calls
+# `./build` directly) in sync.
 #
 # The threaded pass is skipped with a warning if the pinned nightly
 # toolchain (`WASM_THREADED_TOOLCHAIN` in
@@ -75,15 +84,13 @@ fi
 
 OVERALL=0
 
-# --- TypeScript -----------------------------------------------------------
-
-step "tsc (TypeScript build)" npm run --silent build:ts || OVERALL=1
-
 # --- WASM pass 1: single-threaded stable (CI parity) ----------------------
 #
 # Matches CI's `typecheck` and `test` jobs exactly. Catches stable-only
 # regressions (e.g. accidental `#![feature(...)]` attribute that
-# compiles fine on nightly but fails E0554 on stable).
+# compiles fine on nightly but fails E0554 on stable). Also leaves a
+# `pkg/` with a `.d.ts` so the threaded pass below (or, if nightly is
+# absent, the tsc step at the bottom) has something to resolve against.
 
 step "wasm-pack (single-threaded, stable; CI parity)" \
     wasm-pack build crates/aenternis-wasm --target web --release \
@@ -134,6 +141,18 @@ else
         echo "               --component rust-src --target wasm32-unknown-unknown"
     } | tee -a "${LOG}"
 fi
+
+# --- TypeScript -----------------------------------------------------------
+#
+# Runs last so `tsc` can resolve `web/worker.ts`'s import of
+# `../crates/aenternis-wasm/pkg/aenternis_wasm.js` against the `.d.ts`
+# the wasm-pack steps above just wrote. The threaded pass (when
+# available) leaves a `.d.ts` that exports `initThreadPool`; the
+# stable fallback leaves one without it. `web/worker.ts` is
+# feature-detected for that runtime difference, but tsc only needs
+# *some* `.d.ts` to compile against.
+
+step "tsc (TypeScript build)" npm run --silent build:ts || OVERALL=1
 
 {
     echo

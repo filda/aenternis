@@ -10,6 +10,7 @@
   - Coverage thresholds (vitest): 95% lines / 95% functions / 90% branches / 95% statements over `src/`.
   - Mutation thresholds (Stryker): break at 70%, low at 80%, high at 90%. Aim for 100% — the codebase is small enough.
   - Surviving mutants mean a missing assertion. Add one; do not weaken the threshold.
+- **`./build` is not a gate.** `./build` runs only the TS build, both wasm-pack passes, and the threaded-bundle verifier — it does **not** run `cargo fmt --check`, `cargo clippy -D warnings`, `vitest`, or coverage thresholds. A "green" from `./build` plus `cargo test` is silent about formatting drift and clippy lints (doc backticks, `Cell` vs `Self`, slow init patterns, missing `const fn`, `unwrap_or` vs `unwrap_or_else`, etc.). Do not declare a piece of work done until `./check` passes — those checks are what CI runs on the PR.
 - For trivial edits (typo, comment, single-line config tweak) `npm run test` (no mutation, no coverage) is an acceptable explicit shortcut. State the shortcut when you take it.
 - For browser / visual / UX work in prototypes, manual repro steps in chat are sufficient — see "Prototypes are exempt" below.
 - **Prototypes are exempt from the test gate.** Files under `prototypes/**` are throwaway laboratory experiments. They are explicitly excluded from coverage and mutation runs (see `vitest.config.js` and `stryker.conf.json`). Don't write tests for prototype code; don't refactor prototype code in service of testability.
