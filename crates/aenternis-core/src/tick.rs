@@ -439,7 +439,12 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // `old_mem_len - total_outflow`, computed numerically and used
     // below as the size of the cell's "Original" rope segment that
     // the merge will copy out of `arena_cur`.
-    let mut per_source_total_outflow: FxHashMap<Coord, u32> = FxHashMap::default();
+    // Take the pooled map out, clear it, and reuse the existing
+    // hashbrown bucket array. After `clear()` len is 0, so `reserve`
+    // is a no-op in steady state (capacity preserved) and only grows
+    // on the first tick / after a catastrophic shrink.
+    let mut per_source_total_outflow = std::mem::take(&mut world.scratch_per_source_total_outflow);
+    per_source_total_outflow.clear();
     per_source_total_outflow.reserve(outflow.len());
     for (coord, per_dir) in outflow {
         let total: u32 = per_dir
@@ -630,6 +635,11 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // Return the pooled inflow map to the world so its per-target
     // `Vec` capacities carry over to the next tick's apply.
     world.scratch_inflows_by_target = inflows_by_target;
+    // Same for the per-source total-outflow map — keeping its
+    // hashbrown bucket array allocated across ticks turns the
+    // 17 MB-per-tick churn at ~700 k cells into a single up-front
+    // grow.
+    world.scratch_per_source_total_outflow = per_source_total_outflow;
 }
 
 /// Inflow entry built during phase 2 of [`apply_outflow`].

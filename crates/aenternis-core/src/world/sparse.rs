@@ -142,6 +142,16 @@ pub struct SparseWorld {
     /// lists, then puts it back.
     pub(crate) scratch_inflows_by_target: FxHashMap<Coord, Vec<crate::tick::InflowEntry>>,
 
+    /// Per-tick scratch: per-source total outflow used by
+    /// [`crate::tick::apply_outflow`] phase 1. Same `mem::take` /
+    /// `clear()` reuse pattern as the other scratch maps — at
+    /// ~700 k sources a freshly-built `FxHashMap::default()` plus
+    /// `reserve(N)` rounds up to ~1 M hashbrown slots × 17 bytes,
+    /// which is a 17 MB churn per tick and was the alloc that hit
+    /// `__rust_alloc_error_handler` in the WASM build under
+    /// fragmented 32-bit address space.
+    pub(crate) scratch_per_source_total_outflow: FxHashMap<Coord, u32>,
+
     /// Lex-sorted snapshot of `cells.keys()`. Mirrors the canonical
     /// `(x, y, z)` order that [`Self::sorted_iter`] commits to.
     ///
@@ -225,6 +235,7 @@ impl SparseWorld {
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
             scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_per_source_total_outflow: FxHashMap::with_hasher(FxBuildHasher),
             sorted_cache: Vec::new(),
             sorted_dirty: false,
             bbox_cache: None,
