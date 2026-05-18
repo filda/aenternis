@@ -29,12 +29,12 @@
     "src/**/*.ts",
     "tests/**/*.ts",
     "web/**/*.ts",
+    "prototypes/10-render-tuner/**/*.ts",
     "vite.config.ts",
     "vitest.config.ts"
   ],
   "exclude": [
     "node_modules",
-    "prototypes",
     "target",
     "crates",
     "dist",

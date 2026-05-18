@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>Aenternis - prototyp 10: Render tuner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="status" class="status">Načítám…</div>
+
+  <header id="topbar" hidden>
+    <div class="round-label">
+      <span id="roundIdx">1</span> / <span id="roundTotal">9</span>
+      &middot;
+      <strong id="paramName">-</strong>
+    </div>
+    <div class="locked" id="lockedPanel"></div>
+    <div class="actions">
+      <button id="saveSnapshotBtn" type="button" title="Dump snapshot na disk pro pozdější static load">Save snapshot</button>
+      <button id="restartBtn" type="button">Restart</button>
+    </div>
+  </header>
+
+  <main id="grid" hidden>
+    <canvas id="canvas"></canvas>
+    <div id="overlay"></div>
+  </main>
+
+  <aside id="summary" hidden>
+    <h2>Hotovo &mdash; doporučené defaulty</h2>
+    <pre id="summaryJson"></pre>
+    <div class="btnrow">
+      <button id="copyBtn" type="button">Copy JSON</button>
+      <button id="refineBtn" type="button" title="Druhý průchod 9 kol s aktuálními hodnotami jako základem">Refine (další průchod)</button>
+      <button id="compareBtn" type="button" title="Porovnat všechny dosavadní finální výsledky vedle sebe">Compare past runs</button>
+      <button id="restartFinalBtn" type="button">Spustit znovu</button>
+    </div>
+
+    <section class="history">
+      <h3>History <button id="clearHistoryBtn" class="mini" type="button" title="Smazat historii">clear</button></h3>
+      <div id="historyList"></div>
+    </section>
+
+    <section class="median" id="medianPanel" hidden>
+      <h3>Median napříč všemi runs</h3>
+      <pre id="medianJson"></pre>
+      <button id="copyMedianBtn" type="button">Copy median JSON</button>
+    </section>
+  </aside>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.184.0",
+      "three/addons/": "https://esm.sh/three@0.184.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module" src="main.ts"></script>
+</body>
+</html>
