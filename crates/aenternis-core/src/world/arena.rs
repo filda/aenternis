@@ -7,18 +7,21 @@
 //! allocation at `big_bang`, fragmentation contained inside this
 //! module's free-list instead of the global allocator.
 //!
-//! ## Why a free-list, not a bump allocator
+//! ## Why a free-list at all
 //!
-//! Each tick's `apply_outflow` shrinks sources and grows targets in
-//! roughly equal measure — net allocation per tick is zero, but
-//! individual cell ranges churn. A bump allocator would walk past
-//! the high-water mark every tick and need periodic compaction; a
-//! free-list keeps reusing freed ranges in place. Phase 3 of the
-//! arena refactor (double-buffer + compact-by-construction) will
-//! drop this free-list entirely in favour of bump-into-`arena_next`
-//! per tick, which is naturally compact, but Phase 2 only needs to
-//! get the data out of per-cell `Vec`s and into one place — and the
-//! free-list is the smallest thing that satisfies that.
+//! After Phase 3 (double-buffer + compact-by-construction),
+//! [`crate::tick::apply_outflow`] never frees inside a tick: it
+//! calls [`Arena::clear`] on the staging arena, then bump-allocates
+//! every cell's new range. The free-list is effectively a single
+//! `(0, capacity)` entry for the duration of the tick's writes.
+//!
+//! The free-list still earns its keep for world-level mutations
+//! that happen *between* ticks — [`crate::SparseWorld::insert`]
+//! (replacing a cell), [`crate::SparseWorld::remove`],
+//! [`crate::SparseWorld::gc_empty`], [`crate::SparseWorld::alloc_cell`],
+//! [`crate::SparseWorld::insert_with_memory`]. These can drop
+//! ranges and immediately reuse them; coalescing on `free` keeps
+//! the list bounded under churn.
 //!
 //! ## Coalescing on free
 //!
@@ -101,15 +104,6 @@ impl Arena {
         if self.capacity > 0 {
             self.free.insert(0, self.capacity);
         }
-    }
-
-    /// Read-only view of the full backing slice. Cells use this
-    /// via [`Cell::memory`](crate::Cell::memory) plus their own
-    /// `(mem_start, mem_len)`; direct callers are tests and the
-    /// snapshot path.
-    #[must_use]
-    pub fn slots(&self) -> &[u32] {
-        &self.slots
     }
 
     /// Read-only slice over a specific range. Panics if
@@ -245,6 +239,21 @@ impl Arena {
     /// # Panics
     ///
     /// Panics if no free range of `>= new_len` slots exists.
+    ///
+    /// **Accepted-as-unkillable mutants** (`cargo mutants 27.0.0`):
+    ///
+    /// - `> 0` → `>= 0` on `if copy_len > 0`: when `copy_len == 0`
+    ///   the inner block degenerates into `split_at_mut(hi)` plus
+    ///   two empty-slice `copy_from_slice` calls, all observably
+    ///   no-ops. The `> 0` guard is a perf early-exit, not a
+    ///   correctness gate, so no test can distinguish the two.
+    /// - `<` → `<=` on either `if new < old` (the `(lo, hi)` tuple
+    ///   pick and the inner copy direction): both fire only when
+    ///   `new == old`, which is unreachable here. The early
+    ///   `if new_len == old_len` return guarantees `new_len !=
+    ///   old_len`; `alloc` returned a disjoint free range; and
+    ///   distinct-sized ranges can't share a start. So the `<=`
+    ///   branch's only extra case never executes.
     pub fn realloc(&mut self, old_start: u32, old_len: u32, new_len: u32) -> u32 {
         if new_len == old_len {
             return old_start;
@@ -438,5 +447,127 @@ mod tests {
         let slice = a.slice_mut(s, 5);
         slice.copy_from_slice(&[7, 8, 9, 10, 11]);
         assert_eq!(a.slice(s, 5), &[7, 8, 9, 10, 11]);
+    }
+
+    // ----- clear -----
+
+    #[test]
+    fn clear_resets_freelist_so_alloc_starts_from_zero() {
+        // Allocate, scribble, then `clear` and re-allocate: the new
+        // alloc must come back at offset 0, proving that `clear`
+        // actually rebuilt the single big free range. Without this
+        // test, a `clear` body that no-ops compiles fine — every
+        // existing free range is already populated, so subsequent
+        // ops look identical for many sequences.
+        let mut a = Arena::with_capacity(100);
+        let _ = a.alloc(50);
+        let _ = a.alloc(30);
+        // Free-list now has at most one trailing range; some live.
+        a.clear();
+        // Single big free range, bump from 0.
+        assert_eq!(a.free.len(), 1);
+        assert_eq!(a.free.get(&0), Some(&100));
+        assert_eq!(a.alloc(40), 0);
+    }
+
+    #[test]
+    fn clear_on_zero_capacity_leaves_free_list_empty() {
+        // Distinguishes `if capacity > 0` from `if capacity >= 0`:
+        // with the mutated guard, `clear` would insert a `(0, 0)`
+        // entry into the free-list even for an empty arena. The
+        // `> 0` original skips that.
+        let mut a = Arena::with_capacity(0);
+        a.clear();
+        assert!(
+            a.free.is_empty(),
+            "clear on empty arena must not insert (0, 0)"
+        );
+    }
+
+    // ----- alloc growth -----
+
+    #[test]
+    fn alloc_growth_doubles_capacity_when_doubling_is_enough() {
+        // `added` is computed as `doubled - capacity = capacity`
+        // when `capacity * 2` doesn't overflow and the doubled
+        // amount covers `len`. Mutating `-` to `+` gives `added =
+        // capacity + doubled = 3 * capacity`; mutating to `*` is
+        // even more divergent. Asserting the post-growth capacity
+        // is *exactly* `2 * pre_grow_capacity` catches both.
+        let mut a = Arena::with_capacity(8);
+        let _ = a.alloc(8); // fills the arena
+        let _ = a.alloc(4); // forces growth; len(4) fits inside doubled(16) - capacity(8) = 8
+        assert_eq!(
+            a.capacity(),
+            16,
+            "growth must double capacity when doubling covers the request"
+        );
+    }
+
+    // ----- realloc direction -----
+
+    #[test]
+    fn realloc_to_lower_start_copies_correct_data() {
+        // Sets up a realloc where the new start is *below* the
+        // old start in the slot array — the only path that
+        // exercises both `if new < old` branches with `new < old`
+        // being TRUE. Without this case, two mutants survive:
+        //   - `<` → `==` on the (lo, hi) tuple build
+        //   - `<` → `==` on the inner copy direction
+        // Both flip the copy direction or the slice indices in
+        // ways that either panic on out-of-range slicing or copy
+        // garbage into the new range. Asserting the new range's
+        // contents pins both down.
+        let mut a = Arena::with_capacity(40);
+        // [0..20) → block X, [20..40) → block Y.
+        let x = a.alloc(20);
+        let y = a.alloc(20);
+        assert_eq!(x, 0);
+        assert_eq!(y, 20);
+        // Scribble distinct contents into Y so we can detect the
+        // copy direction.
+        for i in 0..20 {
+            a.set(y, i, 0xB000 + i);
+        }
+        // Free X so the next alloc lands at offset 0.
+        a.free(x, 20);
+        // Realloc Y down by 4 — alloc fits in the freed [0, 20).
+        let y2 = a.realloc(y, 20, 4);
+        assert_eq!(y2, 0, "alloc(4) must reuse the freed [0..20) range");
+        // The first 4 slots of Y's old data must be at the new
+        // location, not anything else.
+        for i in 0..4 {
+            assert_eq!(
+                a.get(y2, i),
+                0xB000 + i,
+                "slot {i} should hold the copied value"
+            );
+        }
+    }
+
+    #[test]
+    fn realloc_to_lower_start_does_not_corrupt_other_slots() {
+        // Companion check for the `+` mutants on `lo + copy_len`
+        // in realloc's inner copy. With `-`, the slicing range
+        // becomes `lo..lo - copy_len`, which is either empty (no
+        // copy) or panics (underflow). With `*`, the range is
+        // `lo..lo * copy_len`, which copies the wrong number of
+        // slots and leaves the new range partially uninitialized.
+        let mut a = Arena::with_capacity(40);
+        let x = a.alloc(10);
+        let y = a.alloc(10);
+        for i in 0..10 {
+            a.set(y, i, 0xCAFE + i);
+        }
+        a.free(x, 10);
+        let y2 = a.realloc(y, 10, 6);
+        assert_eq!(y2, 0);
+        for i in 0..6 {
+            assert_eq!(
+                a.get(y2, i),
+                0xCAFE + i,
+                "expected the first 6 slots of the old data at the new start, slot {i}",
+            );
+        }
     }
 }

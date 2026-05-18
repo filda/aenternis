@@ -833,6 +833,19 @@ fn rope_insert(
 /// in `arena_next` — no thread-local scratch needed, since the
 /// destination is a single contiguous `&mut [u32]` carved out of
 /// `arena_next` by the caller.
+///
+/// **Accepted-as-unkillable mutants** (`cargo mutants 27.0.0`):
+///
+/// - `> 0` → `>= 0` on the `if post_outflow_len > 0` rope-seed
+///   guard: with `>= 0` the seed becomes `Original { start: 0,
+///   end: 0 }` for an empty source. The flatten loop's own
+///   `if seg_len > 0` check (also documented below) drops it
+///   without writing, so the output is identical.
+/// - `> 0` → `>= 0` on the two `if seg_len > 0` guards inside
+///   the flatten loop (one per segment kind): the inner copy
+///   degenerates to `dest[pos..pos].copy_from_slice(&src[..0])`
+///   when `seg_len == 0`, an observable no-op. The `> 0` guard
+///   is a perf early-exit, not a correctness gate.
 #[allow(clippy::too_many_arguments)]
 fn write_cell_into_next_arena(
     cell: &mut Cell,

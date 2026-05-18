@@ -179,12 +179,11 @@ impl SparseWorld {
     /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
     ///
     /// The arena starts at capacity zero — the first
-    /// [`insert_with_memory`](Self::insert_with_memory) or
-    /// [`get_or_alloc`](Self::get_or_alloc) followed by an
-    /// `extend_memory` call will grow it. For predictable behaviour
-    /// (no implicit `Vec::resize` during `step`), prefer
-    /// [`big_bang`](Self::big_bang) which sizes the arena to total
-    /// energy up front.
+    /// [`insert_with_memory`](Self::insert_with_memory) (or any
+    /// other arena-allocating helper) will grow it on demand. For
+    /// predictable behaviour (no implicit `Vec::resize` during
+    /// `step`), prefer [`big_bang`](Self::big_bang) which sizes the
+    /// arena to total energy up front.
     ///
     /// No longer `const fn` because `Arena::with_capacity` does a
     /// `Vec::with_capacity` and `Vec::resize`, neither of which are

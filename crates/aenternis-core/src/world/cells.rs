@@ -394,13 +394,16 @@ mod tests {
             c.get_or_insert_with(coord, || dummy_cell(arena_ref, 42))
         };
         assert!(was_vacant);
-        cell.push_memory_slot(&mut arena, 100);
+        // Distinct marker on a non-memory field so the second
+        // `get_or_insert_with` for the same coord returns the *same*
+        // entry, not a freshly-constructed `dummy_cell(0)`.
+        cell.origin_tag = 0x1234;
         let (was_vacant_again, cell) = {
             let arena_ref = &mut arena;
             c.get_or_insert_with(coord, || dummy_cell(arena_ref, 0))
         };
         assert!(!was_vacant_again);
-        assert!(cell.memory(&arena).contains(&100));
+        assert_eq!(cell.origin_tag, 0x1234);
     }
 
     #[test]

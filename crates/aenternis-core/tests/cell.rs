@@ -2,9 +2,8 @@
 //!
 //! Two layers of guarantees:
 //!
-//! 1. **State invariants** — `energy()` always equals `memory.len()`,
-//!    `end_of_tick` resets exactly the transient fields and nothing else,
-//!    `append_slots` and `shrink_from_end` saturate at sensible boundaries.
+//! 1. **State invariants** — `energy()` always equals `mem_len`,
+//!    `end_of_tick` resets exactly the transient fields and nothing else.
 //! 2. **Layout semantics** — `lay_out_pointers` walks the canonical end-order,
 //!    skips overridden directions without consuming their budget, and
 //!    `proportional_clamp` produces a deterministic post-clamp distribution
@@ -219,93 +218,6 @@ fn end_of_tick_does_not_touch_persistent_state() {
     assert_eq!(c.pc, 7);
     assert_eq!(c.origin_tag, 0xCAFE);
     assert_eq!(c.appearance, 0xBABE);
-}
-
-// ----- shrink_from_end -----
-
-#[test]
-fn shrink_from_end_drops_count_slots() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3, 4, 5]);
-    c.shrink_from_end(&mut arena, 2);
-    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
-    assert_eq!(c.energy(), 3);
-}
-
-#[test]
-fn shrink_from_end_zero_is_noop() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
-    c.shrink_from_end(&mut arena, 0);
-    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
-}
-
-#[test]
-fn shrink_from_end_saturates_at_full_length() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
-    c.shrink_from_end(&mut arena, 99);
-    assert!(c.is_empty());
-    assert_eq!(c.energy(), 0);
-}
-
-#[test]
-fn shrink_from_end_saturates_on_empty() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::new();
-    c.shrink_from_end(&mut arena, 5);
-    assert!(c.is_empty());
-}
-
-// ----- append_slots -----
-
-#[test]
-fn append_slots_no_cap_takes_all() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2]);
-    let taken = c.append_slots(&mut arena, &[3, 4, 5], None);
-    assert_eq!(taken, 3);
-    assert_eq!(c.memory(&arena), &[1, 2, 3, 4, 5][..]);
-}
-
-#[test]
-fn append_slots_under_cap_takes_all() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1]);
-    let taken = c.append_slots(&mut arena, &[2, 3], Some(10));
-    assert_eq!(taken, 2);
-    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
-}
-
-#[test]
-fn append_slots_truncates_at_cap() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
-    let taken = c.append_slots(&mut arena, &[4, 5, 6, 7], Some(5));
-    assert_eq!(taken, 2);
-    assert_eq!(c.memory(&arena), &[1, 2, 3, 4, 5][..]);
-}
-
-#[test]
-fn append_slots_with_cap_at_or_below_current_takes_nothing() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2, 3]);
-    let taken = c.append_slots(&mut arena, &[4, 5], Some(3));
-    assert_eq!(taken, 0);
-    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
-
-    let taken = c.append_slots(&mut arena, &[4, 5], Some(2));
-    assert_eq!(taken, 0);
-    assert_eq!(c.memory(&arena), &[1, 2, 3][..]);
-}
-
-#[test]
-fn append_slots_empty_input_is_noop() {
-    let mut arena = Arena::with_capacity(256);
-    let mut c = Cell::with_memory(&mut arena, &[1, 2]);
-    let taken = c.append_slots(&mut arena, &[], None);
-    assert_eq!(taken, 0);
-    assert_eq!(c.memory(&arena), &[1, 2][..]);
 }
 
 // ----- proportional_clamp -----

@@ -19,7 +19,7 @@
 //! one unit of energy *is* one slot of memory, and `mem_len` is the
 //! authoritative count.
 //!
-//! ## Arena indirection (Phase 2 of the arena refactor)
+//! ## Arena indirection
 //!
 //! Cells no longer own their memory; the storage lives in the
 //! world's [`Arena`](crate::world::arena::Arena). A cell carries
@@ -33,7 +33,15 @@
 //! mallocs per tick on a 1 M-energy world and fragmented the
 //! global allocator until a 5 MB contiguous request failed at
 //! tick 2200. See `docs/optimalizace-2026-05.md` for the
-//! diagnosis and the multi-phase rewrite plan.
+//! diagnosis and the multi-phase rewrite plan. Phases 1-4 of
+//! that plan are in; Phase 3's double-buffer arena
+//! ([`crate::SparseWorld::arena`] paired with
+//! [`crate::SparseWorld::arena_next`]) is what
+//! [`crate::tick::apply_outflow`] writes through, and it
+//! sidesteps every per-cell mutator that used to live on `Cell`
+//! (`extend_memory`, `replace_memory`, `shrink_from_end`, etc.)
+//! by computing each new cell's range up front and writing
+//! straight into the staging arena's slice.
 
 use crate::apportion::{apportion_with_shuffle, PROPORTIONAL_CLAMP_RNG_DOMAIN};
 use crate::world::arena::Arena;
@@ -63,8 +71,8 @@ pub const LAYOUT_ORDER: [Direction; Direction::COUNT] = [
 /// `PartialEq` / `Eq` compare only metadata. Two cells are equal
 /// iff their metadata fields agree — they may or may not point at
 /// the same arena range, and the contents at those ranges don't
-/// enter into the equality. Use [`Cell::memory_eq_in`] when you
-/// need a content-aware comparison.
+/// enter into the equality. For a content-aware comparison, read
+/// both cells' slices via [`Cell::memory`] and compare those.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// Start of the cell's slot range in the world's arena. Has
@@ -115,8 +123,12 @@ pub struct Cell {
 impl Cell {
     /// Build an empty cell — no memory, no program, all directional state
     /// at zero. The cell has no claim on any arena range yet; use
-    /// [`Cell::with_memory`] to allocate one at construction, or
-    /// [`Cell::extend_memory`] to grow into one later.
+    /// [`Cell::with_memory`] (or [`SparseWorld::alloc_cell`] /
+    /// [`SparseWorld::insert_with_memory`] at the world level) to put
+    /// it into an arena with a memory range attached.
+    ///
+    /// [`SparseWorld::alloc_cell`]: crate::SparseWorld::alloc_cell
+    /// [`SparseWorld::insert_with_memory`]: crate::SparseWorld::insert_with_memory
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -143,6 +155,16 @@ impl Cell {
     /// for the arena passed in. Inserting it into a different
     /// world's [`Cells`](crate::world::Cells) container would
     /// silently corrupt that other world.
+    ///
+    /// **Accepted-as-unkillable mutant** (`cargo mutants 27.0.0`):
+    ///
+    /// - `> 0` → `>= 0` on `if len > 0`: the guard avoids a single
+    ///   `arena.alloc(0) → arena.slice_mut(0, 0).copy_from_slice(&[])`
+    ///   round trip when there's nothing to copy. With `>= 0` the
+    ///   code runs the same alloc-and-empty-copy sequence, but
+    ///   `alloc(0)` already returns `0` without touching the free
+    ///   list and the empty `copy_from_slice` is a no-op. Observable
+    ///   output is identical.
     #[must_use]
     pub fn with_memory(arena: &mut Arena, slots: &[u32]) -> Self {
         let mut c = Self::new();
@@ -185,20 +207,6 @@ impl Cell {
         }
     }
 
-    /// Mutable view of the cell's memory slots from the arena.
-    /// Length cannot change through this handle — use
-    /// [`Cell::extend_memory`], [`Cell::shrink_from_end`],
-    /// [`Cell::push_memory_slot`], or [`Cell::replace_memory`] for
-    /// length changes.
-    #[must_use]
-    pub fn memory_mut<'a>(&self, arena: &'a mut Arena) -> &'a mut [u32] {
-        if self.mem_len == 0 {
-            &mut []
-        } else {
-            arena.slice_mut(self.mem_start, self.mem_len)
-        }
-    }
-
     /// Length of the cell's memory in slots. Same value as
     /// [`Cell::energy`] but `usize`-typed for indexing arithmetic.
     /// Reads the cached [`Cell::mem_len`] — does not consult the
@@ -225,59 +233,6 @@ impl Cell {
         arena.set(self.mem_start, i as u32, v);
     }
 
-    /// Append a single slot to the end of memory, growing energy by 1.
-    /// Reallocates the cell's arena range to fit; the old range is
-    /// returned to the free-list.
-    pub fn push_memory_slot(&mut self, arena: &mut Arena, slot: u32) {
-        self.extend_memory(arena, &[slot]);
-    }
-
-    /// Append `slots` to the end of memory, growing energy by
-    /// `slots.len()`. Reallocates the cell's arena range to the new
-    /// length, copies the existing contents over and the new tail in
-    /// after them.
-    pub fn extend_memory(&mut self, arena: &mut Arena, slots: &[u32]) {
-        let add = u32::try_from(slots.len()).unwrap_or(u32::MAX);
-        if add == 0 {
-            return;
-        }
-        let new_len = self.mem_len.saturating_add(add);
-        let new_start = arena.realloc(self.mem_start, self.mem_len, new_len);
-        // Write the new tail into the freshly allocated trailing range.
-        let tail = arena.slice_mut(new_start + self.mem_len, add);
-        tail.copy_from_slice(slots);
-        self.mem_start = new_start;
-        self.mem_len = new_len;
-    }
-
-    /// Replace the entire memory buffer with the given slots.
-    /// Allocates a fresh range of `new_slots.len()` in the arena,
-    /// copies the new contents in, and frees the cell's old range.
-    ///
-    /// Used by the rope-merge in [`crate::tick::apply_outflow`] —
-    /// it builds the rebuilt buffer in a thread-local scratch then
-    /// hands the slice here.
-    pub fn replace_memory(&mut self, arena: &mut Arena, new_slots: &[u32]) {
-        let new_len = u32::try_from(new_slots.len()).unwrap_or(u32::MAX);
-        // Free first so the new alloc can reuse the old range if
-        // sizes are close — first-fit on the free-list will pick
-        // the just-freed range when it fits, which is the common
-        // case for small inflow merges.
-        let old_start = self.mem_start;
-        let old_len = self.mem_len;
-        self.mem_start = 0;
-        self.mem_len = 0;
-        arena.free(old_start, old_len);
-        if new_len > 0 {
-            let new_start = arena.alloc(new_len);
-            arena
-                .slice_mut(new_start, new_len)
-                .copy_from_slice(new_slots);
-            self.mem_start = new_start;
-            self.mem_len = new_len;
-        }
-    }
-
     /// Free the cell's memory range back to the arena, leaving the
     /// cell empty (`mem_len` = 0). Called by world-level removal /
     /// `gc_empty` paths before discarding the metadata.
@@ -285,15 +240,6 @@ impl Cell {
         arena.free(self.mem_start, self.mem_len);
         self.mem_start = 0;
         self.mem_len = 0;
-    }
-
-    /// Compare two cells' memory contents from the same arena.
-    /// Equality of metadata is the cheap [`PartialEq`] path; this
-    /// extra method only matters when callers want to assert
-    /// content equality (mostly tests).
-    #[must_use]
-    pub fn memory_eq_in(&self, other: &Self, arena: &Arena) -> bool {
-        self.memory(arena) == other.memory(arena)
     }
 
     /// Sum of [`rates`](Self::rates) across all directions.
@@ -346,40 +292,6 @@ impl Cell {
     pub const fn end_of_tick(&mut self) {
         self.pointer_override = [false; Direction::COUNT];
         self.active_outflow = [0; Direction::COUNT];
-    }
-
-    /// Shrink memory from the end by `count` slots. Saturates if
-    /// `count` exceeds the current length. The trailing range is
-    /// returned to the arena's free-list; the cell's `mem_start`
-    /// is unchanged (in-place shrink, no copy).
-    pub fn shrink_from_end(&mut self, arena: &mut Arena, count: u32) {
-        let new_len = arena.shrink_in_place(self.mem_start, self.mem_len, count);
-        self.mem_len = new_len;
-        if new_len == 0 {
-            // Drop the now-meaningless start for cleaner equality
-            // (`Cell::new()` and a shrunk-to-zero cell should compare
-            // equal modulo arena-irrelevant state).
-            self.mem_start = 0;
-        }
-    }
-
-    /// Append `slots` to the end of memory, optionally capped at
-    /// `cap` total slots. Returns the number of slots actually
-    /// appended.
-    ///
-    /// Allocates a new trailing range in the arena; the old range
-    /// is freed via [`Arena::realloc`].
-    pub fn append_slots(&mut self, arena: &mut Arena, slots: &[u32], cap: Option<u32>) -> usize {
-        let mut to_take = slots.len();
-        if let Some(cap) = cap {
-            let cap_usize = cap as usize;
-            let room = cap_usize.saturating_sub(self.memory_len());
-            to_take = to_take.min(room);
-        }
-        if to_take > 0 {
-            self.extend_memory(arena, &slots[..to_take]);
-        }
-        to_take
     }
 }
 
