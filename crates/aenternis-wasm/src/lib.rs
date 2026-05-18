@@ -190,15 +190,17 @@ impl World {
     pub fn new(seed: u32, energy: u32) -> Self {
         Self {
             inner: SparseWorld::big_bang(u64::from(seed), energy),
-            // Snapshot peaks at `cell_count * STRIDE`, and cell count
-            // is energy-bounded — pre-reserve to that ceiling so the
-            // first snapshot (and every subsequent one up to the peak)
-            // doesn't ask the global allocator for a ~24 MB block at
-            // E = 1 M. Eliminates the very allocation that started the
-            // 2026-05-16 OOM investigation.
-            snapshot_buf: Vec::with_capacity(
-                (energy as usize).saturating_mul(Self::SNAPSHOT_STRIDE),
-            ),
+            // `snapshot_buf` grows on demand via `Vec::reserve`
+            // inside `fill_snapshot_buf`. Pre-reserving to
+            // `energy * STRIDE` (~24 MB at E = 1 M) tempted us in
+            // Phase 4, but a single contiguous request that big at
+            // construction time has been observed to fail in the
+            // shared-memory WASM environment even when the arenas
+            // (4 MB each) succeed. Incremental doubling caps at the
+            // same peak as the one-shot pre-reserve, without
+            // asking the global allocator for an outsized block on
+            // tick 0.
+            snapshot_buf: Vec::new(),
             inspect_buf: Vec::new(),
         }
     }
@@ -217,12 +219,8 @@ impl World {
     pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
         Self {
             inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
-            // See `World::new` for the pre-reservation rationale —
-            // cell-count peak is energy-bounded, snapshot peaks at
-            // `cell_count * STRIDE`.
-            snapshot_buf: Vec::with_capacity(
-                (energy as usize).saturating_mul(Self::SNAPSHOT_STRIDE),
-            ),
+            // See `World::new` for the rationale on not pre-reserving.
+            snapshot_buf: Vec::new(),
             inspect_buf: Vec::new(),
         }
     }

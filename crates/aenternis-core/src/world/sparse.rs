@@ -200,33 +200,32 @@ impl SparseWorld {
     /// the simulation's total energy).
     #[must_use]
     pub fn with_capacity(world_seed: u64, capacity: u32) -> Self {
-        // `capacity` is an upper bound on live cells (one slot per
-        // unit of energy, energy is conserved, so cell count never
-        // exceeds total energy). Pre-reserving every cell-keyed
-        // container to that bound means none of them ever rehashes
-        // during `step`, which removes the last per-tick large
-        // contiguous request that could still surprise the allocator
-        // — see Phase 4 of `docs/optimalizace-2026-05.md` for the
-        // "5 MB realloc fails at tick 2200" diagnosis the arena
-        // refactor unwound.
-        let cap_usize = capacity as usize;
+        // Only the two arenas get pre-reserved to `capacity` —
+        // that's the structural fragmentation fix from Phase 2/3.
+        // Reserving the other cell-keyed containers (cells.slots,
+        // coord_to_slot, scratch maps, sorted_cache) to the same
+        // bound seemed like a clean tidy-up in Phase 4, but in
+        // practice it asks the WASM allocator for a single
+        // ~140 MB `Vec<Option<(Coord, Cell)>>` block up front at
+        // `big_bang(_, 1_000_000)`, which fails in the shared-
+        // memory environment even though `--max-memory=4 GiB`
+        // would in theory allow it. The growing-by-doubling cost
+        // these containers pay during the first few hundred ticks
+        // is sequential (only `apply_outflow`'s alloc-on-write
+        // grows `cells`, only the first-tick fill grows scratch
+        // maps), so it doesn't reintroduce the per-cell allocator
+        // contention the arena refactor was here to fix.
         Self {
-            cells: Cells::with_capacity(cap_usize),
+            cells: Cells::new(),
             arena: Arena::with_capacity(capacity),
             arena_next: Arena::with_capacity(capacity),
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
-            scratch_neighbor_energies: FxHashMap::with_capacity_and_hasher(
-                cap_usize,
-                FxBuildHasher,
-            ),
-            scratch_outflow: FxHashMap::with_capacity_and_hasher(cap_usize, FxBuildHasher),
-            scratch_inflows_by_target: FxHashMap::with_capacity_and_hasher(
-                cap_usize,
-                FxBuildHasher,
-            ),
-            sorted_cache: Vec::with_capacity(cap_usize),
+            scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
+            sorted_cache: Vec::new(),
             sorted_dirty: false,
             bbox_cache: None,
             bbox_dirty: false,

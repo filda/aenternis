@@ -77,20 +77,6 @@ impl Cells {
         }
     }
 
-    /// Build an empty container pre-sized for up to `capacity` live
-    /// cells. The `coord_to_slot` map and the slot vector both
-    /// reserve `capacity` entries up front, so once a world fills
-    /// to its energy-bounded peak the storage backing the cells
-    /// never has to grow.
-    #[must_use]
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self {
-            coord_to_slot: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher),
-            slots: Vec::with_capacity(capacity),
-            free_slots: Vec::new(),
-        }
-    }
-
     /// Number of live cells.
     #[must_use]
     pub(crate) fn len(&self) -> usize {
