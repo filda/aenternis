@@ -20,7 +20,7 @@ zafixuje, přechod do dalšího kola.
 | 9 | `voxelSize`      | 0.2 - 1.5 | 1.00 |
 
 Po posledním kole se zobrazí JSON s finalní kombinací - lze nakopírovat
-do slider defaultů v `web/index.html`.
+do slider defaultů v root `index.html`.
 
 ## Statický svět
 

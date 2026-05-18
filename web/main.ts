@@ -129,7 +129,7 @@ export function bootstrap(): void {
   // ----- Configuration -------------------------------------------------------
   const config: RuntimeConfig = {
     seed: 1234,
-    energy: 10_000_000,
+    energy: 1_000_000,
     coeff: 0.15,
     k: 1,
     moveThreshold: 1.0,

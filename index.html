@@ -3,159 +3,542 @@
 <head>
   <meta charset="UTF-8">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <title>Aenternis - rozcestník prototypů</title>
+  <title>Aenternis — WASM 3D viewer</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0a0a10;
+      background: #050508;
       color: #e0e0e0;
-      min-height: 100vh;
-      padding: 40px 20px;
-      line-height: 1.5;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
     }
-    .container { max-width: 800px; margin: 0 auto; }
-    h1 {
-      color: #d4a76a;
-      font-size: 28px;
-      margin-bottom: 8px;
+    #canvasContainer {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
     }
-    .subtitle { color: #8a8a90; font-size: 14px; margin-bottom: 32px; }
-    h2 {
-      color: #d4a76a;
-      font-size: 16px;
-      margin-top: 24px;
-      margin-bottom: 12px;
-      border-bottom: 1px solid #2a2a35;
-      padding-bottom: 4px;
-    }
-    .proto {
+    #canvasContainer canvas {
       display: block;
+    }
+    .hud {
+      position: fixed;
+      top: 16px; left: 16px;
+      width: 320px;
+      max-height: calc(100vh - 32px);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+      font-size: 12px;
+      z-index: 10;
+      overflow-y: auto;
+      /* Slim scrollbar so it doesn't dominate the panel. */
+      scrollbar-width: thin;
+      scrollbar-color: #2a2a35 transparent;
+    }
+    .hud::-webkit-scrollbar { width: 6px; }
+    .hud::-webkit-scrollbar-thumb { background: #2a2a35; border-radius: 3px; }
+    .hud .panel {
       background: rgba(20, 20, 25, 0.85);
-      border: 1px solid #2a2a35;
+      border: 1px solid #333;
       border-radius: 4px;
-      padding: 12px 16px;
-      margin-bottom: 8px;
-      text-decoration: none;
-      color: #e0e0e0;
-      transition: border-color 0.15s, background 0.15s;
+      padding: 10px 12px;
+      pointer-events: auto;
+      backdrop-filter: blur(6px);
     }
-    .proto:hover {
-      border-color: #d4a76a;
-      background: rgba(40, 35, 25, 0.9);
+    /* Collapsible variants of `.panel` use <details>/<summary>. The
+       summary mimics the existing h2/h3 styling and adds a chevron
+       that rotates when opened. */
+    details.panel { padding: 0; }
+    details.panel > summary {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      padding: 10px 12px;
+      color: #d4a76a;
+      font-size: 12px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    .proto .name { font-weight: 600; color: #d4a76a; }
-    .proto .desc { font-size: 13px; color: #8a8a90; margin-top: 2px; }
-    .proto .latest { color: #f0c060; font-size: 11px; margin-left: 8px; }
-    .docs a {
+    details.panel > summary::-webkit-details-marker { display: none; }
+    details.panel > summary::before {
+      content: '▸';
+      display: inline-block;
+      transition: transform 0.15s ease-out;
+      color: #8a8a90;
+      font-size: 10px;
+    }
+    details.panel[open] > summary::before { transform: rotate(90deg); }
+    details.panel > .body {
+      padding: 0 12px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    /* Navigation panel — prototype + docs links. Styled like a list of
+       compact rows; no decorative borders so it doesn't fight the
+       Controls/Config panels below it for attention. */
+    .nav-list { display: flex; flex-direction: column; gap: 2px; }
+    .nav-list a {
+      display: block;
       color: #c0c0c8;
       text-decoration: none;
-      margin-right: 12px;
-      font-size: 13px;
-    }
-    .docs a:hover { color: #d4a76a; }
-    code {
-      background: #1a1a22;
-      padding: 1px 5px;
+      padding: 4px 6px;
       border-radius: 3px;
-      font-size: 12px;
-    }
-    .build-footer {
-      margin-top: 32px;
-      padding-top: 16px;
-      border-top: 1px solid #2a2a35;
-      color: #5a5a60;
       font-size: 11px;
-      font-family: ui-monospace, "SF Mono", Consolas, monospace;
     }
-    .build-footer code {
+    .nav-list a:hover { background: rgba(212, 167, 106, 0.12); color: #d4a76a; }
+    .nav-list .group {
       color: #8a8a90;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 6px 0 2px 6px;
+    }
+    .nav-list .group:first-child { margin-top: 0; }
+    .inspector {
+      position: fixed;
+      top: 16px; right: 16px;
+      width: 380px;
+      max-height: calc(100vh - 32px);
+      background: rgba(20, 20, 25, 0.92);
+      border: 1px solid #d4a76a;
+      border-radius: 4px;
+      padding: 12px 14px;
+      color: #e0e0e0;
+      font-size: 12px;
+      backdrop-filter: blur(6px);
+      z-index: 20;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+    }
+    .inspector.visible { display: flex; }
+    .inspector h3 {
+      color: #d4a76a;
+      font-size: 13px;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .inspector .close {
       background: transparent;
-      padding: 0;
+      color: #8a8a90;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+    }
+    .inspector .close:hover { color: #d4a76a; }
+    .inspector .arr {
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      color: #f0e0c0;
+      font-size: 11px;
+    }
+    .inspector pre.mem {
+      background: #0a0a10;
+      border: 1px solid #2a2a30;
+      border-radius: 3px;
+      padding: 6px 8px;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 10px;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre;
+      color: #c0c0c8;
+    }
+    .hud h2 {
+      font-size: 14px;
+      color: #d4a76a;
+      margin-bottom: 6px;
+    }
+    .hud h3 {
+      font-size: 12px;
+      color: #d4a76a;
+      margin-bottom: 4px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0;
+      flex-wrap: wrap;
+    }
+    .row .label, .row label {
+      color: #8a8a90;
+      min-width: 100px;
+    }
+    .row .value {
+      color: #f0e0c0;
+      font-variant-numeric: tabular-nums;
+      margin-left: auto;
+    }
+    .panel.hint {
+      color: #8a8a90;
+      font-style: italic;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .panel.hint strong {
+      color: #d4a76a;
+      font-style: normal;
+    }
+    input[type="number"], select {
+      background: #0e0e12;
+      color: #e0e0e0;
+      border: 1px solid #2a2a30;
+      padding: 3px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+      width: 110px;
+    }
+    input[type="range"] {
+      flex: 1;
+      max-width: 130px;
+    }
+    button {
+      background: #2a2a35;
+      color: #e0e0e0;
+      border: 1px solid #3a3a45;
+      padding: 4px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+      margin-right: 4px;
+    }
+    button:hover { background: #34344a; }
+    .build-info {
+      position: fixed;
+      bottom: 8px;
+      right: 12px;
+      font-size: 10px;
+      color: #4a4a50;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .build-info code {
+      color: #6a6a70;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Aenternis</h1>
-    <div class="subtitle">3D toroidální simulace s programovatelnými entitami jako 8bit mikropočítači. Vše vychází z fyziky.</div>
+  <div id="canvasContainer"></div>
 
-    <h2>Prototypy</h2>
-
-    <a class="proto" href="/prototypes/01-diffusion/">
-      <div class="name">01 — Difuze</div>
-      <div class="desc">Základní 1D/2D difuze energie. Sub-tick reflow, conservation.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/02-memory/">
-      <div class="name">02 — Paměť ve slotech</div>
-      <div class="desc">Cell drží 32-bit sloty místo skalární energie. Slot = kód × hodnota.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/03-vm/">
-      <div class="name">03 — VM</div>
-      <div class="desc">Mini virtuální stroj. PC, opcodes, set/copy/jmp.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/04-ports/">
-      <div class="name">04 — Porty a aktivní rates</div>
-      <div class="desc">Cell ovlivňuje vlastní outflow přes 6 register-pointerů.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/05-pointers/">
-      <div class="name">05 — Pasivní reprodukce přes pointery</div>
-      <div class="desc">Pasivní vyzařování, žádný aktivní zápis sousedovi.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/06-cooperation/">
-      <div class="name">06 — Kooperace + dominance</div>
-      <div class="desc">Asembler/disasembler, sid/paint, lineage tracker, intrusion mechanika.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/07-perf-3d/">
-      <div class="name">07 — 3D perf benchmark</div>
-      <div class="desc">Měření plné 3D simulace (až 100³). Bez vizualizace, jen čísla.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/08-viewer-3d/">
-      <div class="name">08 — 3D Viewer</div>
-      <div class="desc">Three.js voxelové vykreslení. WSAD kamera, tracker s trail, Web Worker mód.</div>
-    </a>
-
-    <a class="proto" href="/prototypes/10-render-tuner/">
-      <div class="name">10 — Render tuner</div>
-      <div class="desc">Tournament chooser pro defaulty render bloku v /web/. Statický svět, 5×2 mřížka, 9 kol.</div>
-    </a>
-
-    <h2>Production (Rust + WASM)</h2>
-
-    <a class="proto" href="/web/">
-      <div class="name">WASM smoke test
-        <span class="latest">↑ poslední</span>
-      </div>
-      <div class="desc">Rust + WASM core, animovaná 2D projekce, HUD + Pause/Reset. Phase 3c milestone.</div>
-    </a>
-
-    <h2>Dokumentace</h2>
-    <div class="docs">
-      <a href="/AENTERNIS.md">AENTERNIS.md</a>
-      <a href="/MECHANIKY.md">MECHANIKY.md</a>
-      <a href="/VM.md">VM.md</a>
-      <a href="/OTAZKY.md">OTAZKY.md</a>
-      <a href="/PLAN.md">PLAN.md</a>
-      <a href="/PROTOTYPY.md">PROTOTYPY.md</a>
+  <div class="hud">
+    <div class="panel">
+      <h2>Aenternis · WASM 3D</h2>
+      <div class="row"><span class="label">tick</span><span class="value" id="tick">0</span></div>
+      <div class="row"><span class="label">cells</span><span class="value" id="cells">0</span></div>
+      <div class="row"><span class="label">total energy</span><span class="value" id="energy">1,000,000</span></div>
+      <div class="row"><span class="label">bbox</span><span class="value" id="bbox">-</span></div>
+      <div class="row"><span class="label">FPS</span><span class="value" id="fps">-</span></div>
+      <div class="row"><span class="label">ms/tick</span><span class="value" id="msPerTick">-</span></div>
+      <div class="row"><span class="label">ticks/s</span><span class="value" id="ticksPerSec">-</span></div>
     </div>
 
-    <h2>Jak spustit</h2>
-    <p style="font-size: 13px; color: #b0b0b8;">
-      Dev server: <code>npm run dev</code> · jen prototyp 8: <code>npm run dev:p8</code>
-    </p>
+    <details class="panel">
+      <summary>Prototypy &amp; docs</summary>
+      <div class="body">
+        <div class="nav-list">
+          <div class="group">Prototypy</div>
+          <a href="/prototypes/01-diffusion/">01 — Difuze</a>
+          <a href="/prototypes/02-memory/">02 — Paměť ve slotech</a>
+          <a href="/prototypes/03-vm/">03 — VM</a>
+          <a href="/prototypes/04-ports/">04 — Porty a aktivní rates</a>
+          <a href="/prototypes/05-pointers/">05 — Pasivní reprodukce</a>
+          <a href="/prototypes/06-cooperation/">06 — Kooperace + dominance</a>
+          <a href="/prototypes/07-perf-3d/">07 — 3D perf benchmark</a>
+          <a href="/prototypes/08-viewer-3d/">08 — 3D Viewer</a>
+          <a href="/prototypes/10-render-tuner/">10 — Render tuner</a>
 
-    <footer class="build-footer">
-      <code>v__BUILD_VERSION__</code> ·
-      <code>__BUILD_COMMIT__</code> ·
-      <span>__BUILD_DATE__</span>
-    </footer>
+          <div class="group">Dokumentace</div>
+          <a href="/docs/aenternis.md">aenternis.md</a>
+          <a href="/docs/mechanics.md">mechanics.md</a>
+          <a href="/docs/vm.md">vm.md</a>
+          <a href="/docs/questions.md">questions.md</a>
+          <a href="/docs/plan.md">plan.md</a>
+          <a href="/docs/prototypes.md">prototypes.md</a>
+        </div>
+      </div>
+    </details>
+
+    <div class="panel">
+      <h3>Controls</h3>
+      <div class="row">
+        <button id="pauseBtn">Resume</button>
+        <button id="tickBtn" title="Posune simulaci o 1 tick. Pokud běží, zároveň pauzne.">Tick</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+    </div>
+
+    <details class="panel">
+      <summary>Backend</summary>
+      <div class="body">
+        <div class="row">
+          <label style="font-weight: normal;">
+            <input id="backendNative" type="checkbox">
+            native dev backend
+          </label>
+        </div>
+        <div class="row">
+          <span class="label">URL</span>
+          <span class="value" id="backendUrl" style="font-family: ui-monospace, monospace; font-size: 10px;">-</span>
+        </div>
+        <div class="row hint">
+          Změna se projeví po reloadu. URL flagy <code>?backend=wasm|native</code>
+          a <code>?server=ws://host:port/sim</code> přepíší a uloží.
+          Default native URL: <code>ws://&lt;hostname&gt;:8765/sim</code>.
+        </div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>Config</summary>
+      <div class="body">
+      <div class="row">
+        <label>seed</label>
+        <input id="seed" type="number" value="1234" min="0" max="4294967295">
+      </div>
+      <div class="row">
+        <label>energy</label>
+        <input id="energy_in" type="number" value="1000000" min="0" max="10000000">
+      </div>
+      <div class="row">
+        <label>coeff</label>
+        <input id="coeff" type="range" min="0.05" max="1.00" step="0.01" value="0.15">
+        <span class="value" id="coeffVal">0.15</span>
+      </div>
+      <div class="row">
+        <label>k</label>
+        <input id="k" type="range" min="1" max="32" value="1">
+        <span class="value" id="kVal">1</span>
+      </div>
+      <div class="row">
+        <label>move_threshold</label>
+        <input id="moveThreshold" type="range" min="0.5" max="4.0" step="0.1" value="1.0">
+        <span class="value" id="moveThresholdVal">1.0</span>
+      </div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>Program v centrální buňce</summary>
+      <div class="body">
+      <div class="hint" style="margin-bottom: 4px;">
+        Asembler: <code>label:</code>, <code>setp xp, start</code>,
+        <code>jmp start</code>, <code>port d, i</code>, atd. Sólo číslo =
+        raw slot. Směry: <code>xp xn yp yn zp zn</code>. Komentář <code>;</code>.
+        Aplikuje se po Reset.
+      </div>
+      <textarea id="programText" rows="6" style="
+        width: 100%;
+        background: #0a0a10;
+        color: #e0e0e0;
+        border: 1px solid #2a2a30;
+        border-radius: 3px;
+        padding: 6px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        resize: vertical;
+      ">start:
+  setp xp, start
+  jmp start</textarea>
+      <div id="programStatus" class="hint" style="margin-top: 4px;">empty</div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>Tracker</summary>
+      <div class="body">
+      <div class="row">
+        <label>sledovat</label>
+        <input id="trackerEnabled" type="checkbox">
+        <span class="hint">nejsilnější cela</span>
+      </div>
+      <div class="row">
+        <label>trail</label>
+        <input id="trailLen" type="range" min="0" max="200" step="5" value="60">
+        <span class="value" id="trailLenVal">60</span>
+      </div>
+      <div class="row">
+        <label>pozice</label>
+        <span class="value" id="trackerPos">-</span>
+      </div>
+      </div>
+    </details>
+
+    <details class="panel" open>
+      <summary>Render</summary>
+      <div class="body">
+      <div class="row">
+        <label>voxel size</label>
+        <input id="voxelSize" type="range" min="0.2" max="1.5" step="0.05" value="1.20">
+        <span class="value" id="voxelSizeVal">1.20</span>
+      </div>
+      <div class="row">
+        <label>shape</label>
+        <label style="font-weight: normal;">
+          <input id="shapeOcta" type="checkbox">
+          octahedron (8 trianglů)
+        </label>
+      </div>
+      <div class="row">
+        <label>bloom</label>
+        <input id="bloomEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· threshold</label>
+        <input id="bloomThreshold" type="range" min="0" max="1" step="0.05" value="0.20">
+        <span class="value" id="bloomThresholdVal">0.20</span>
+      </div>
+      <div class="row">
+        <label>· strength</label>
+        <input id="bloomStrength" type="range" min="0" max="2" step="0.05" value="0.20">
+        <span class="value" id="bloomStrengthVal">0.20</span>
+      </div>
+      <div class="row">
+        <label>· radius</label>
+        <input id="bloomRadius" type="range" min="0" max="1" step="0.05" value="0.20">
+        <span class="value" id="bloomRadiusVal">0.20</span>
+      </div>
+      <div class="row">
+        <label>tonemap exposure</label>
+        <input id="exposure" type="range" min="0.3" max="2.5" step="0.05" value="0.80">
+        <span class="value" id="exposureVal">0.80</span>
+      </div>
+      <div class="row">
+        <label>fog</label>
+        <input id="fogEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· density</label>
+        <input id="fogDensity" type="range" min="0" max="0.03" step="0.001" value="0.003">
+        <span class="value" id="fogDensityVal">0.003</span>
+      </div>
+      <div class="row">
+        <label>emissive</label>
+        <input id="emissive" type="range" min="0" max="2" step="0.05" value="0.20">
+        <span class="value" id="emissiveVal">0.20</span>
+      </div>
+      <div class="row">
+        <label>roughness</label>
+        <input id="roughness" type="range" min="0" max="1" step="0.05" value="0.20">
+        <span class="value" id="roughnessVal">0.20</span>
+      </div>
+      <div class="row">
+        <label>SSAO</label>
+        <input id="ssaoEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· radius</label>
+        <input id="ssaoRadius" type="range" min="1" max="20" step="0.5" value="13.5">
+        <span class="value" id="ssaoRadiusVal">13.5</span>
+      </div>
+      <div class="row">
+        <label>environment</label>
+        <input id="envEnabled" type="checkbox" checked>
+      </div>
+      <div class="row">
+        <label>· skybox</label>
+        <input id="envBackground" type="checkbox">
+      </div>
+      <div class="row">
+        <label>z = 0 slice</label>
+        <input id="sliceEnabled" type="checkbox">
+      </div>
+      <div class="row hint">
+        Slice skryje cely s z ≠ 0 — 2D pohled jako prototyp 9 pro porovnání.
+      </div>
+      </div>
+    </details>
+
+    <div class="panel hint">
+      <strong>Kamera:</strong> drag = rotace, scroll = zoom, pravé tl. = pan.<br>
+      <strong>WSAD</strong> + Q/E (dolů/nahoru), Shift = sprint (3×).<br>
+      <strong>Klik</strong> na buňku → otevře inspector.
+    </div>
   </div>
+
+  <aside class="inspector" id="inspector">
+    <h3>
+      <span>Inspector — <span id="iCoord">-</span></span>
+      <button class="close" id="iClose" title="Close">×</button>
+    </h3>
+    <div class="row"><span class="label">tick @ snapshot</span><span class="value" id="iTick">-</span></div>
+    <div class="row"><span class="label">pc</span><span class="value" id="iPc">-</span></div>
+    <div class="row"><span class="label">energy</span><span class="value" id="iEnergy">-</span></div>
+    <div class="row"><span class="label">origin_tag</span><span class="value" id="iOriginTag">-</span></div>
+    <div class="row"><span class="label">appearance</span><span class="value" id="iAppearance">-</span></div>
+    <div><strong>pointers</strong> <span class="arr" id="iPointers"></span></div>
+    <div><strong>rates</strong> <span class="arr" id="iRates"></span></div>
+    <div><strong>active_outflow</strong> <span class="arr" id="iActiveOutflow"></span></div>
+    <div><strong>inflow (last tick)</strong> <span class="arr" id="iInflow"></span></div>
+    <div><strong>memory</strong></div>
+    <pre class="mem" id="iMemory"></pre>
+  </aside>
+
+  <!--
+    Importmap pro static deploy (GitHub Pages). V dev módu Vite přepíše
+    bare importy na URL z node_modules ještě než se HTML dostane do
+    prohlížeče, takže importmap zůstává nepoužitá. V buildu/staticky
+    servírovaném výstupu prohlížeč narazí na neresolvnutý `import "three"`
+    a sáhne sem.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.184.0",
+      "three/addons/": "https://esm.sh/three@0.184.0/examples/jsm/"
+    }
+  }
+  </script>
+  <div class="build-info">
+    <code>v__BUILD_VERSION__</code> ·
+    <code>__BUILD_COMMIT__</code> ·
+    __BUILD_DATE__
+  </div>
+
+  <!--
+    coi-serviceworker shim. On hosts that can't set COOP/COEP headers
+    natively (notably GitHub Pages), this Service Worker registers
+    itself on first load, then intercepts subsequent fetches and
+    rewrites them with `Cross-Origin-Opener-Policy: same-origin` +
+    `Cross-Origin-Embedder-Policy: credentialless`. After the SW
+    activates the script reloads the page once, and from that point
+    on `window.crossOriginIsolated` is true — which is what
+    `wasm-bindgen-rayon` needs to enable `SharedArrayBuffer` and
+    spawn the worker pool.
+
+    Lives at the repo root (next to this index.html) so its default
+    SW scope is `/` (dev) or `/aenternis/` (Pages) — broad enough to
+    intercept fetches from the sibling `crates/aenternis-wasm/pkg/
+    snippets/wasm-bindgen-rayon-*/src/workerHelpers.js` that the
+    threaded WASM bundle loads.
+
+    Must precede the main module: the page reload it triggers has to
+    happen before the WASM bootstrap runs. On hosts that *do* set the
+    headers (Vite dev server below, Cloudflare Pages, etc.), the
+    script becomes a no-op — `crossOriginIsolated` is already true,
+    `shouldRegister()` returns false, the SW never installs.
+  -->
+  <script src="./coi-serviceworker.js"></script>
+
+  <!--
+    Production-deployed `web/main.js` is the tsc emit of `web/main.ts`.
+    In Vite dev mode the bundler resolves `./web/main.js` to
+    `./web/main.ts` source automatically, so the same script tag works
+    in both contexts.
+  -->
+  <script type="module">
+    import { bootstrap } from './web/main.js';
+    bootstrap();
+  </script>
 </body>
 </html>

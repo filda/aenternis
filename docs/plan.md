@@ -90,7 +90,7 @@ API surface:
 - `cells_snapshot()` — flat `Uint32Array`, 6 fields per cell `(x, y, z, energy, origin_tag, appearance)`, deterministic canonical iteration order
 - `snapshot_stride` getter (= 6) so JS doesn't hard-code the layout
 
-Animated smoke-test page lives in `web/` (`web/index.html` + `web/main.js`): `requestAnimationFrame` loop, 2D xy projection on a canvas, heat-ramp coloring of cells, HUD with tick / cell count / total energy / FPS, and Pause / Reset / config controls. Run via `npm run dev:wasm` (which opens `/web/` in the browser; the WASM bundle must already be built — `./check` and `./build` both rebuild it as a side effect).
+Animated smoke-test page lives at the repo root (`index.html` + `web/main.js`): `requestAnimationFrame` loop, 2D xy projection on a canvas, heat-ramp coloring of cells, HUD with tick / cell count / total energy / FPS, and Pause / Reset / config controls. Run via `npm run dev` (which opens `/` in the browser; the WASM bundle must already be built — `./check` and `./build` both rebuild it as a side effect).
 
 **Done 2026-05-03.**
 

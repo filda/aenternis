@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "vite",
     "dev:p8": "vite --open /prototypes/08-viewer-3d/",
-    "dev:wasm": "vite --open /web/",
     "preview": "vite preview",
     "build": "bash ./build",
     "build:ts": "tsc -p tsconfig.build.json",

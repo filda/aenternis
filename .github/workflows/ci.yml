@@ -302,21 +302,22 @@ jobs:
         run: ./build
 
       # The site is a flat copy of the static parts of the repo:
-      #   index.html, prototypes/, docs/, the wasm-pack pkg/, and the
-      #   tsc-emitted dist/web/ + dist/src/ trees mounted as web/ + src/.
-      #   No bundling — bare imports resolve via the importmap.
+      #   index.html (WASM viewer), prototypes/, docs/, the wasm-pack
+      #   pkg/, and the tsc-emitted dist/web/ + dist/src/ trees mounted
+      #   as web/ + src/. No bundling — bare imports resolve via the
+      #   importmap inline in index.html.
       #
       # The sed call rewrites `href="/foo"` → `href="foo"` in the root
-      # rozcestník so the absolute paths land under Pages' `/<repo>/`
-      # subpath. Local dev (vite serving from `/`) still works because
-      # browsers resolve the rewritten relatives against the page URL.
+      # index so absolute paths in the navigation menu land under
+      # Pages' `/<repo>/` subpath. Local dev (vite serving from `/`)
+      # still works because browsers resolve the rewritten relatives
+      # against the page URL.
       - name: Assemble site
         run: |
           mkdir -p _site/web _site/src
           cp index.html _site/
           cp -r prototypes _site/
           cp -r docs _site/
-          cp web/index.html _site/web/index.html
           cp dist/web/*.js _site/web/
           # coi-serviceworker.js lives at the repo root so its default
           # SW scope is `/aenternis/` on Pages (not `/aenternis/web/`),
@@ -374,24 +375,22 @@ jobs:
 
           echo "OK: _site has every threaded-WASM artifact in the right place"
 
-      # Stamp the deployed pages with package version, short commit
+      # Stamp the deployed page with package version, short commit
       # SHA, and build date so a viewer can tell which release they're
       # looking at. Placeholders (`__BUILD_VERSION__`, `__BUILD_COMMIT__`,
-      # `__BUILD_DATE__`) are baked into `index.html` and `web/index.html`
-      # at source; in `npm run dev` they're visible verbatim, which is
-      # the intended signal that you're not on a deployed build.
+      # `__BUILD_DATE__`) are baked into `index.html` at source; in
+      # `npm run dev` they're visible verbatim, which is the intended
+      # signal that you're not on a deployed build.
       - name: Inject build metadata
         run: |
           VERSION=$(node -p "require('./package.json').version")
           COMMIT=$(git rev-parse --short HEAD)
           DATE=$(date -u +%Y-%m-%d)
-          for f in _site/index.html _site/web/index.html; do
-            sed -i \
-              -e "s|__BUILD_VERSION__|${VERSION}|g" \
-              -e "s|__BUILD_COMMIT__|${COMMIT}|g" \
-              -e "s|__BUILD_DATE__|${DATE}|g" \
-              "$f"
-          done
+          sed -i \
+            -e "s|__BUILD_VERSION__|${VERSION}|g" \
+            -e "s|__BUILD_COMMIT__|${COMMIT}|g" \
+            -e "s|__BUILD_DATE__|${DATE}|g" \
+            _site/index.html
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
