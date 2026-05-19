@@ -468,6 +468,14 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     // we just compute them inline.
     let move_threshold = world.move_threshold.max(f32::EPSILON);
     let mut inflows_by_target = std::mem::take(&mut world.scratch_inflows_by_target);
+    // Drop entries for targets whose cell has since been gc'd. Without
+    // this retain the outer map (and every dead target's inner
+    // `Vec<InflowEntry>` capacity) grows monotonically with the set of
+    // ever-been-a-target coords — same leak the fused
+    // [`outflow_phase_inplace`] would otherwise hit, kept in sync here
+    // so `step_diffusion` and direct `apply_outflow` callers don't
+    // bleed memory in long runs.
+    inflows_by_target.retain(|coord, _| world.cells.contains_key(coord));
     for v in inflows_by_target.values_mut() {
         v.clear();
     }
@@ -1139,10 +1147,19 @@ pub fn outflow_phase_inplace(world: &mut SparseWorld) {
     // resolved source slot ranges in `arena_cur`.
     // -------------------------------------------------------------------
     // Pulled out via `mem::take` so per-target `Vec<InflowFast>`
-    // capacities persist across ticks (the steady-state allocator hit
-    // the per-tick `entry().or_default().push(...)` cycle used to add
-    // up to).
+    // capacities persist across ticks. The `retain` *must* run before
+    // the inner `clear()` — without it, stale entries for cells that
+    // have died via `gc_empty` since they were last a target stay
+    // forever, and their inner `Vec<InflowFast>` capacities pile up
+    // monotonically. In a long-running sim with diffusion across a
+    // growing bbox this leak reached ~29 M outer entries plus ~92 M
+    // pooled `InflowFast` slots (~3 GB) by tick ~2000 at 686 k live
+    // cells — the actual OOM trigger observed in production, not the
+    // arena (`apply_outflow` was already alloc-on-write disciplined).
+    // Matches the existing pattern in [`collect_outflow_into`] /
+    // [`refresh_neighbor_energies`]: drop dead keys, then clear+refill.
     let mut inflows = std::mem::take(&mut world.scratch_inflows_fast);
+    inflows.retain(|coord, _| world.cells.contains_key(coord));
     for v in inflows.values_mut() {
         v.clear();
     }
