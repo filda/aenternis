@@ -642,6 +642,56 @@ pub fn apply_outflow(world: &mut SparseWorld, outflow: &Outflow) {
     world.scratch_per_source_total_outflow = per_source_total_outflow;
 }
 
+/// Inflow descriptor built during phase 2 of [`outflow_phase_inplace`].
+///
+/// Pre-resolves the source's slot range in `arena_cur` so the write
+/// phase can `memcpy` source slots straight into `arena_next` without
+/// any further world lookup. The wrap-around case (rare: only when
+/// `source.pointers[d] + rate > source.mem_len`) is encoded as a
+/// non-zero `wrap_len` carrying the prefix that wraps to the start of
+/// the source's memory range.
+///
+/// Sibling to [`InflowEntry`], which is used by the public-API
+/// [`apply_outflow`] path (tests + `step_diffusion`). The reason we
+/// don't share: `InflowEntry` keys back into the `Outflow` map by
+/// `(source_coord, source_dir)`, while `InflowFast` carries the
+/// resolved arena ranges directly — fewer hashmap lookups in the hot
+/// per-tick path.
+#[derive(Debug, Clone, Copy)]
+pub struct InflowFast {
+    /// First slot of the inflow in `arena_cur` (= `source.mem_start +
+    /// source.pointers[source_dir]`). Valid for `head_len` slots.
+    pub head_start: u32,
+    /// Number of slots starting at `head_start`. Equals the inflow's
+    /// total rate when there is no wrap; otherwise the part before the
+    /// wrap point.
+    pub head_len: u32,
+    /// Start of the wrap-around portion in `arena_cur` (= `source
+    /// .mem_start`). Only meaningful when `wrap_len > 0`.
+    pub wrap_start: u32,
+    /// Slots in the wrap-around portion. Zero in the common case (no
+    /// wrap).
+    pub wrap_len: u32,
+    /// Dominance against the target (`0.0..=1.0`).
+    pub dominance: f32,
+    /// Attacker's `origin_tag`, used for metempsychosis when this
+    /// inflow's dominance crosses the `>= 0.5` threshold and it's the
+    /// top-ranked entry for the target.
+    pub src_origin_tag: u32,
+    /// Direction-from-target index (`0..6`). Used for the secondary
+    /// sort key and to bump `target.inflow[dir_from_target]`.
+    pub dir_from_target: u8,
+}
+
+impl InflowFast {
+    /// Total slot count of this inflow (= `head_len + wrap_len`).
+    #[must_use]
+    #[inline]
+    pub const fn slot_count(self) -> u32 {
+        self.head_len.saturating_add(self.wrap_len)
+    }
+}
+
 /// Inflow entry built during phase 2 of [`apply_outflow`].
 ///
 /// Stores the minimum needed to look up the slice of slots in the
@@ -1002,6 +1052,439 @@ fn usize_to_f32(v: usize) -> f32 {
     v as f32
 }
 
+/// Fused replacement for [`lay_out_pointers`] + [`collect_outflow`] +
+/// [`apply_outflow`] in [`step`]'s per-tick path.
+///
+/// Eliminates the per-cell-per-direction `Vec<u32>` intermediate that
+/// [`Outflow`] kept — slot data flows from `arena_cur` straight into
+/// `arena_next` in a single memcpy, instead of the old two-stage
+/// `arena_cur → Outflow Vec → arena_next` pipeline. At ~500 k cells
+/// the dominant phase (`apply_outflow` ≈ 65 % of tick per
+/// `examples/phase_breakdown`) loses both the ~12 hashmap lookups per
+/// cell that the old structure needed and the redundant memcpy of
+/// every slot leaving the world.
+///
+/// Semantics match the chained `lay_out_pointers` then
+/// `collect_outflow` then `apply_outflow` flow exactly — the
+/// `tests/apply_outflow_bit_parity.rs` baseline pins every observable
+/// per-cell field tick-by-tick, so any divergence surfaces as a hash
+/// mismatch under `./check`.
+///
+/// **Phases:**
+///
+/// 1. Per source: compute combined rate (`rates + active_outflow`,
+///    proportionally clamped to `mem_len`), lay out `cell.pointers`
+///    from the end of memory honoring `pointer_override`, cache total
+///    outflow in `scratch_per_source_total_outflow`. Sequential so
+///    the pointer layout and the scratch insert share one pass.
+/// 2. Build per-target [`InflowFast`] lists. Each entry pre-resolves
+///    the source's slot range in `arena_cur`
+///    (`head_start, head_len, wrap_start, wrap_len`) plus dominance
+///    from post-outflow energies, so phase 4 needs no further
+///    `world.cells` lookup to read source slots.
+/// 3. Sort each target's inflows (`dominance desc, dir_from_target
+///    asc`) and alloc-on-write metadata for new targets.
+/// 4. For each cell: bump-allocate `new_len` slots in `arena_next`,
+///    rope-merge the post-outflow remainder of the cell's old memory
+///    with the sorted inflows, copy segments directly from
+///    `arena_cur`. Honors origin-tag inheritance and PC wrap.
+/// 5. `mem::swap(&mut world.arena, &mut world.arena_next)` and return
+///    the pooled scratch maps to the world for next-tick reuse.
+///
+/// **Determinism:** Phase 1's `combined_clamped` reads only the cell's
+/// own state plus `(world_seed, rng_tick, coord)`, so its iteration
+/// order doesn't matter; phase 2's `combined_clamped` recompute hits
+/// the same inputs and produces bit-identical rates. The dominance
+/// formula and tie-break sort are identical to the legacy path.
+#[allow(clippy::too_many_lines)]
+pub fn outflow_phase_inplace(world: &mut SparseWorld) {
+    let world_seed = world.world_seed;
+    let rng_tick = world.tick;
+    let move_threshold = world.move_threshold.max(f32::EPSILON);
+
+    // -------------------------------------------------------------------
+    // Phase 1: combined rates + pointer layout + total outflow per source.
+    // -------------------------------------------------------------------
+    // Sequential to keep the three operations in one pass — splitting
+    // the pointer layout into a parallel branch would require a side
+    // channel to ferry the total back out, and the per-cell work here
+    // is light enough that the sequential pass costs ~2 % of tick time
+    // even at 500 k cells.
+    let mut per_source_total = std::mem::take(&mut world.scratch_per_source_total_outflow);
+    per_source_total.clear();
+    per_source_total.reserve(world.cells.len().saturating_sub(per_source_total.len()));
+
+    for (coord, cell) in world.cells.iter_mut() {
+        let mem_size = cell.memory_len();
+        if mem_size == 0 {
+            per_source_total.insert(*coord, 0);
+            continue;
+        }
+        let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
+        let combined = combined_clamped(
+            &cell.rates,
+            &cell.active_outflow,
+            mem_size_u32,
+            world_seed,
+            rng_tick,
+            *coord,
+        );
+        cell.lay_out_pointers(&combined);
+        let total: u32 = combined.iter().copied().fold(0u32, u32::saturating_add);
+        per_source_total.insert(*coord, total);
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 2: build per-target inflow lists with dominance + pre-
+    // resolved source slot ranges in `arena_cur`.
+    // -------------------------------------------------------------------
+    // Pulled out via `mem::take` so per-target `Vec<InflowFast>`
+    // capacities persist across ticks (the steady-state allocator hit
+    // the per-tick `entry().or_default().push(...)` cycle used to add
+    // up to).
+    let mut inflows = std::mem::take(&mut world.scratch_inflows_fast);
+    for v in inflows.values_mut() {
+        v.clear();
+    }
+    inflows.reserve(world.cells.len().saturating_sub(inflows.len()));
+
+    for (source_coord, source_cell) in world.cells.iter() {
+        let mem_size = source_cell.memory_len();
+        if mem_size == 0 {
+            continue;
+        }
+        let mem_size_u32 = u32::try_from(mem_size).unwrap_or(u32::MAX);
+        // Recompute combined — the same `(world_seed, rng_tick, coord)`
+        // RNG keying as phase 1 produces identical rates. Caching
+        // combined in a side map was considered, but at 6 u32 × cells
+        // it's ~12 MB peak at 500 k cells — same magnitude as the OOM
+        // pressure we're trying to relieve, for a 1.7 % CPU saving.
+        let combined = combined_clamped(
+            &source_cell.rates,
+            &source_cell.active_outflow,
+            mem_size_u32,
+            world_seed,
+            rng_tick,
+            *source_coord,
+        );
+        let src_total = per_source_total.get(source_coord).copied().unwrap_or(0);
+        let attacker_post = source_cell.mem_len.saturating_sub(src_total);
+        let attacker_post_burn = attacker_post.max(1);
+        let source_mem_start = source_cell.mem_start;
+        let source_mem_len = source_cell.mem_len;
+        let src_origin_tag = source_cell.origin_tag;
+
+        for &d in &Direction::ALL {
+            let rate = combined[d.index()];
+            if rate == 0 {
+                continue;
+            }
+
+            let target_coord = source_coord.neighbor(d);
+            let tgt_mem_len = world.cells.get(&target_coord).map_or(0, |c| c.mem_len);
+            let tgt_total = per_source_total.get(&target_coord).copied().unwrap_or(0);
+            let target_e_post = tgt_mem_len.saturating_sub(tgt_total);
+
+            let r = u32_to_f32(target_e_post) / u32_to_f32(attacker_post_burn);
+            let dom = (1.0 - r / move_threshold).clamp(0.0, 1.0);
+
+            // Resolve the source's slot range in `arena_cur` once,
+            // including the rare wraparound (when `ptr + rate >
+            // mem_len`). Phase 4's flatten consumes this directly.
+            let ptr = source_cell.pointers[d.index()];
+            let tail = source_mem_len.saturating_sub(ptr);
+            let (head_len, wrap_len) = if rate <= tail {
+                (rate, 0)
+            } else {
+                (tail, rate - tail)
+            };
+
+            inflows.entry(target_coord).or_default().push(InflowFast {
+                head_start: source_mem_start.saturating_add(ptr),
+                head_len,
+                wrap_start: source_mem_start,
+                wrap_len,
+                dominance: dom,
+                src_origin_tag,
+                dir_from_target: d.opposite().index() as u8,
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 3: sort each target's inflows + alloc-on-write metadata.
+    // -------------------------------------------------------------------
+    for entries in inflows.values_mut() {
+        if entries.len() <= 1 {
+            continue;
+        }
+        entries.sort_by(|a, b| {
+            b.dominance
+                .partial_cmp(&a.dominance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.dir_from_target.cmp(&b.dir_from_target))
+        });
+    }
+
+    for (target_coord, entries) in &inflows {
+        if entries.is_empty() {
+            continue;
+        }
+        if !world.cells.contains_key(target_coord) {
+            let mut cell = Cell::new();
+            cell.origin_tag = crate::rng::cell_seed(world_seed, *target_coord);
+            world.cells.insert(*target_coord, cell);
+            world.sorted_dirty = true;
+            world.bbox_cache = Some(crate::world::sparse::extend_bbox(
+                world.bbox_cache,
+                *target_coord,
+            ));
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 4: write each cell's new memory into `arena_next`.
+    // -------------------------------------------------------------------
+    world.arena_next.clear();
+    {
+        let cells = &mut world.cells;
+        let arena_cur = &world.arena;
+        let arena_next = &mut world.arena_next;
+        let inflows_ref = &inflows;
+        let per_source_ref = &per_source_total;
+
+        for (coord, cell) in cells.iter_mut() {
+            let old_mem_start = cell.mem_start;
+            let old_mem_len = cell.mem_len;
+            let total_outflow = per_source_ref.get(coord).copied().unwrap_or(0);
+            let post_outflow_len = old_mem_len.saturating_sub(total_outflow);
+            let entries: &[InflowFast] = inflows_ref.get(coord).map_or(&[], |e| e.as_slice());
+
+            cell.inflow = [0; Direction::COUNT];
+
+            let total_inflow: u32 = entries
+                .iter()
+                .map(|e| e.slot_count())
+                .fold(0u32, u32::saturating_add);
+            let new_len = post_outflow_len.saturating_add(total_inflow);
+
+            if new_len == 0 {
+                cell.mem_start = 0;
+                cell.mem_len = 0;
+                continue;
+            }
+
+            let new_start = arena_next.alloc(new_len);
+
+            write_cell_into_next_arena_fast(
+                cell,
+                arena_cur,
+                arena_next,
+                new_start,
+                new_len,
+                old_mem_start,
+                post_outflow_len,
+                entries,
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 5: swap arenas + return scratch.
+    // -------------------------------------------------------------------
+    std::mem::swap(&mut world.arena, &mut world.arena_next);
+    world.scratch_inflows_fast = inflows;
+    world.scratch_per_source_total_outflow = per_source_total;
+}
+
+/// Sibling of [`write_cell_into_next_arena`] for the
+/// [`outflow_phase_inplace`] fast path. Same rope-merge semantics, but
+/// reads inflow slot data straight from `arena_cur` via the pre-
+/// resolved [`InflowFast`] range (with optional wrap) instead of
+/// indirecting through a copied-out `&[u32]`.
+///
+/// **Accepted-as-unkillable mutants** (`cargo mutants 27.0.0`, verified
+/// 2026-05-19) — all mirror the same-shaped unkillables already
+/// documented on [`write_cell_into_next_arena`]:
+///
+/// - `> 0` → `>= 0` on `if post_outflow_len > 0` rope-seed guard:
+///   with `>= 0` the seed becomes `Original { start: 0, end: 0 }` for
+///   an empty source; the flatten loop's own `if seg_len > 0` guard
+///   drops it without writing.
+/// - `> 0` → `>= 0` on the two `if seg_len > 0` guards inside the
+///   flatten loop (one per `MergeSegment` arm): the inner copy
+///   degenerates to `dest[pos..pos].copy_from_slice(...&[..0])` when
+///   `seg_len == 0` — observably a no-op. The guards are perf
+///   early-exits, not correctness gates.
+/// - `-` → `+` on `let seg_len = (end - start)` in the `Insert` arm:
+///   only diverges from the original when `start == end > 0` (a
+///   zero-length Insert with non-zero start), which the rope merge
+///   never produces. The `if seg_len > 0` guard means the mutated
+///   value gates the same set of cases as the original for any state
+///   reachable from a real `outflow_phase_inplace` call; in the
+///   unreachable edge case, `flatten_inflow_segment`'s downstream
+///   `copy_from_slice` of a `start..end` range with `start == end`
+///   is still a no-op.
+#[allow(clippy::too_many_arguments)]
+fn write_cell_into_next_arena_fast(
+    cell: &mut Cell,
+    arena_cur: &crate::world::arena::Arena,
+    arena_next: &mut crate::world::arena::Arena,
+    new_start: u32,
+    new_len: u32,
+    old_mem_start: u32,
+    post_outflow_len: u32,
+    entries: &[InflowFast],
+) {
+    // Origin-tag inheritance fires on the top-ranked entry only, and
+    // only when its dominance ≥ 0.5. Matches `write_cell_into_next_arena`.
+    if let Some(top) = entries.first() {
+        if top.dominance >= 0.5 {
+            cell.origin_tag = top.src_origin_tag;
+        }
+    }
+
+    let post_outflow_len_usize = post_outflow_len as usize;
+
+    let mut rope = [MergeSegment::Original { start: 0, end: 0 }; MERGE_ROPE_CAP];
+    let mut rope_len: usize = if post_outflow_len > 0 {
+        rope[0] = MergeSegment::Original {
+            start: 0,
+            end: post_outflow_len,
+        };
+        1
+    } else {
+        0
+    };
+    let mut current_len = post_outflow_len_usize;
+
+    // Pre-resolve each entry's slot range once so the flatten loop
+    // doesn't re-hash any map. Empty `InflowFast` slots are unused.
+    let zero_entry = InflowFast {
+        head_start: 0,
+        head_len: 0,
+        wrap_start: 0,
+        wrap_len: 0,
+        dominance: 0.0,
+        src_origin_tag: 0,
+        dir_from_target: 0,
+    };
+    let mut entry_descriptors: [InflowFast; MERGE_MAX_ENTRIES] = [zero_entry; MERGE_MAX_ENTRIES];
+    let mut slot_count: usize = 0;
+
+    for entry in entries {
+        if slot_count >= MERGE_MAX_ENTRIES {
+            break;
+        }
+        let entry_total = entry.slot_count();
+        if entry_total == 0 {
+            continue;
+        }
+
+        let intrusion_depth = (entry.dominance * usize_to_f32(current_len)) as usize;
+        let write_start_usize = current_len.saturating_sub(intrusion_depth);
+        let write_start_u32 = u32::try_from(write_start_usize).unwrap_or(u32::MAX);
+
+        let new_seg = MergeSegment::Insert {
+            entry_idx: slot_count as u32,
+            start: 0,
+            end: entry_total,
+        };
+        rope_len = rope_insert(&mut rope, rope_len, write_start_u32, new_seg);
+        entry_descriptors[slot_count] = *entry;
+        slot_count += 1;
+        current_len += entry_total as usize;
+
+        let dir_idx = entry.dir_from_target as usize;
+        cell.inflow[dir_idx] = cell.inflow[dir_idx].saturating_add(entry_total);
+    }
+
+    debug_assert_eq!(
+        current_len, new_len as usize,
+        "rope flatten size must match the bump-allocated new_len"
+    );
+
+    let dest = arena_next.slice_mut(new_start, new_len);
+    let mut pos: usize = 0;
+    for seg in &rope[..rope_len] {
+        match *seg {
+            MergeSegment::Original { start, end } => {
+                let seg_len = (end - start) as usize;
+                if seg_len > 0 {
+                    let src = arena_cur.slice(old_mem_start + start, end - start);
+                    dest[pos..pos + seg_len].copy_from_slice(src);
+                    pos += seg_len;
+                }
+            }
+            MergeSegment::Insert {
+                entry_idx,
+                start,
+                end,
+            } => {
+                let seg_len = (end - start) as usize;
+                if seg_len > 0 {
+                    let entry = entry_descriptors[entry_idx as usize];
+                    flatten_inflow_segment(arena_cur, dest, &mut pos, &entry, start, end);
+                }
+            }
+        }
+    }
+    debug_assert_eq!(pos, new_len as usize);
+
+    cell.mem_start = new_start;
+    cell.mem_len = new_len;
+
+    // PC wrap mirrors `write_cell_into_next_arena`: fires only when at
+    // least one inflow with non-empty slots was applied. Cells with
+    // outflow but no inflow keep their pre-apply pc verbatim.
+    if slot_count > 0 {
+        if new_len == 0 {
+            cell.pc = 0;
+        } else {
+            cell.pc %= new_len;
+        }
+    }
+}
+
+/// Copy a sub-range `[start, end)` of an [`InflowFast`]'s slots from
+/// `arena_cur` into `dest[*pos..]`, advancing `pos`. Handles the
+/// wraparound boundary at `head_len`: the segment lands wholly in the
+/// head, wholly in the wrap, or straddles the boundary and emits two
+/// memcpys. Wraparound only ever fires when the source's
+/// `pointers[d] + rate` overflowed `mem_len`, so the straddle branch
+/// is rare in practice.
+fn flatten_inflow_segment(
+    arena_cur: &crate::world::arena::Arena,
+    dest: &mut [u32],
+    pos: &mut usize,
+    entry: &InflowFast,
+    start: u32,
+    end: u32,
+) {
+    debug_assert!(start < end);
+    let seg_len = (end - start) as usize;
+
+    if end <= entry.head_len {
+        let src = arena_cur.slice(entry.head_start + start, end - start);
+        dest[*pos..*pos + seg_len].copy_from_slice(src);
+        *pos += seg_len;
+    } else if start >= entry.head_len {
+        let wrap_offset = start - entry.head_len;
+        let src = arena_cur.slice(entry.wrap_start + wrap_offset, end - start);
+        dest[*pos..*pos + seg_len].copy_from_slice(src);
+        *pos += seg_len;
+    } else {
+        let head_part_len = (entry.head_len - start) as usize;
+        let wrap_part_len = (end - entry.head_len) as usize;
+        let src_head = arena_cur.slice(entry.head_start + start, entry.head_len - start);
+        dest[*pos..*pos + head_part_len].copy_from_slice(src_head);
+        *pos += head_part_len;
+        let src_wrap = arena_cur.slice(entry.wrap_start, end - entry.head_len);
+        dest[*pos..*pos + wrap_part_len].copy_from_slice(src_wrap);
+        *pos += wrap_part_len;
+    }
+}
+
 /// Reset transient per-tick state on every cell: pointer overrides and
 /// active outflow buffers. Called after the outflow phase to clear the
 /// programmer's per-tick instructions before the next tick starts.
@@ -1070,26 +1553,24 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
 /// 2. [`cpu_phase`] — per-cell `floor(energy/k)` instructions; programs
 ///    may override pointers via `setp`/`setpv` and accumulate active
 ///    outflow via `port`.
-/// 3. [`lay_out_pointers`] — sub-tick reflow with combined rate
-///    (`rates + active_outflow`), honoring `pointer_override` flags.
-/// 4. [`collect_outflow`] / [`apply_outflow`] — emission across faces,
-///    alloc-on-write into void neighbors.
-/// 5. [`end_of_tick`] — reset overrides and active outflow.
-/// 6. [`SparseWorld::gc_empty`] — drop cells whose memory shrank to zero.
-/// 7. Increment `world.tick`.
+/// 3. [`outflow_phase_inplace`] — sub-tick pointer reflow with combined
+///    rates, emission across faces, alloc-on-write into void neighbors.
+///    Fuses the legacy `lay_out_pointers` + `collect_outflow` +
+///    `apply_outflow` chain into one pass that skips the
+///    `Outflow Vec<u32>` intermediate (see the function's own doc for
+///    the rationale and the bit-parity contract).
+/// 4. [`end_of_tick`] — reset overrides and active outflow.
+/// 5. [`SparseWorld::gc_empty`] — drop cells whose memory shrank to zero.
+/// 6. Increment `world.tick`.
 ///
-/// Energy is conserved across the cycle.
+/// Energy is conserved across the cycle. The legacy
+/// `lay_out_pointers` / `collect_outflow` / `apply_outflow` helpers
+/// are still public for tests and [`step_diffusion`]; they exercise
+/// the reference path that the bit-parity baseline pins.
 pub fn step(world: &mut SparseWorld, coeff: f64, k: u32) {
     initialize(world, coeff);
     cpu_phase(world, k);
-    lay_out_pointers(world);
-    // `mem::take` pulls the scratch buffer out so we can pass `&mut
-    // world.cells` into `apply_outflow` while still owning a populated
-    // `Outflow`. Reattach at the end so capacities persist across ticks.
-    let mut outflow = std::mem::take(&mut world.scratch_outflow);
-    collect_outflow_into(world, &mut outflow);
-    apply_outflow(world, &outflow);
-    world.scratch_outflow = outflow;
+    outflow_phase_inplace(world);
     end_of_tick(world);
     world.gc_empty();
     world.rebuild_indices_if_dirty();

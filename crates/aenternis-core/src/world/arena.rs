@@ -90,6 +90,16 @@ impl Arena {
         self.capacity
     }
 
+    /// Capacity of the backing `Vec<u32>` in slots. Equals
+    /// [`Arena::capacity`] in steady state, but `Vec`'s amortized
+    /// doubling can leave it temporarily larger right after a grow.
+    /// Exposed for memory diagnostics that need the *real* allocation
+    /// size rather than the conceptual capacity.
+    #[must_use]
+    pub fn slots_vec_capacity(&self) -> usize {
+        self.slots.capacity()
+    }
+
     /// Mark every slot as free. The free-list collapses to a single
     /// `(0, capacity)` entry; existing `(mem_start, mem_len)` indices
     /// pointing into this arena become stale (the slot bytes survive,

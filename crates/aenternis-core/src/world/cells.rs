@@ -213,6 +213,19 @@ impl Cells {
         }
     }
 
+    /// Diagnostic snapshot of internal storage sizes. Numbers are raw
+    /// counts/capacities — multiply by element size to get bytes.
+    #[must_use]
+    pub(crate) fn memory_report(&self) -> CellsMemoryReport {
+        CellsMemoryReport {
+            slots_len: self.slots.len(),
+            slots_cap: self.slots.capacity(),
+            free_slots_len: self.free_slots.len(),
+            free_slots_cap: self.free_slots.capacity(),
+            coord_to_slot_cap: self.coord_to_slot.capacity(),
+        }
+    }
+
     /// Parallel mutable iteration over live cells in slot order.
     /// Mirrors the old `FxHashMap::par_iter_mut` semantics — order
     /// is unspecified but iteration is bit-parity-safe because the
@@ -241,6 +254,15 @@ impl Default for Cells {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Per-container size snapshot returned by [`Cells::memory_report`].
+pub(crate) struct CellsMemoryReport {
+    pub slots_len: usize,
+    pub slots_cap: usize,
+    pub free_slots_len: usize,
+    pub free_slots_cap: usize,
+    pub coord_to_slot_cap: usize,
 }
 
 /// Immutable iterator over live `(coord, cell)` pairs in

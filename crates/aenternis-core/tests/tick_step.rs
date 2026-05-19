@@ -171,21 +171,31 @@ fn step_is_deterministic_with_vm_running() {
 fn step_with_huge_k_matches_step_diffusion() {
     // Per-cell budget = floor(energy / u32::MAX) is 0 for any
     // realistic energy, so cpu_phase runs zero instructions. The
-    // result must match `step_diffusion` byte-for-byte.
+    // resulting cell set + per-cell memory must match
+    // `step_diffusion`. We compare on coord-sorted vectors because
+    // `step` (fused outflow phase) and `step_diffusion` (legacy
+    // `collect_outflow` + `apply_outflow` chain) populate different
+    // pooled scratch maps; the two maps end up with identical key
+    // sets but their `FxHashMap` iteration order can diverge by
+    // insertion history, which `world.iter()` inherits. Coord sort
+    // pins the comparison to the actually-meaningful invariant
+    // (same cells, same memory), not the incidental walk order.
     let mut a = SparseWorld::big_bang(7, 50);
     let mut b = SparseWorld::big_bang(7, 50);
     for _ in 0..10 {
         step(&mut a, 0.15, u32::MAX);
         step_diffusion(&mut b, 0.15);
     }
-    let pa: Vec<_> = a
+    let mut pa: Vec<_> = a
         .iter()
         .map(|(c, cell)| (*c, cell.memory(a.arena()).to_vec()))
         .collect();
-    let pb: Vec<_> = b
+    let mut pb: Vec<_> = b
         .iter()
         .map(|(c, cell)| (*c, cell.memory(b.arena()).to_vec()))
         .collect();
+    pa.sort_by_key(|(c, _)| (c.x, c.y, c.z));
+    pb.sort_by_key(|(c, _)| (c.x, c.y, c.z));
     assert_eq!(pa, pb);
 }
 

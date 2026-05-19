@@ -15,6 +15,12 @@ import {
 // ---- Test fixtures ---------------------------------------------------------
 
 function makeMockWorld(): WorldHandle {
+  // `memoryReport` returns a 21-`u32` flat array, matching the Rust-
+  // side `MEMORY_REPORT_LEN`. Tests never exercise the diagnostic
+  // cadence (default 50 ticks; mocked tick is 42), so the values are
+  // arbitrary — only the length-check inside `logMemoryReport` would
+  // care, and that path stays unreached.
+  const MEMORY_REPORT_LEN = 21;
   return {
     free: vi.fn(),
     setMoveThreshold: vi.fn(),
@@ -25,8 +31,10 @@ function makeMockWorld(): WorldHandle {
     cellCount: vi.fn(() => 5),
     totalEnergy: vi.fn(() => 10_000),
     cellInspectView: vi.fn(() => new Uint32Array([0xCAFE, 0xBABE])),
+    memoryReport: vi.fn(() => new Uint32Array(MEMORY_REPORT_LEN)),
     snapshotStride: 4,
     inspectPrefix: 8,
+    memoryReportLen: MEMORY_REPORT_LEN,
   };
 }
 

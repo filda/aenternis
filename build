@@ -117,15 +117,20 @@ if wasm_threaded_build_available; then
 -C link-arg=--export=__tls_align \
 -C link-arg=--export=__tls_base"
 
-    step "wasm-pack (threaded, nightly)" \
-        wasm-pack build crates/aenternis-wasm \
-            --target web --features wasm-threads \
+    # Folded into one `step` so the file-watcher race that vite hits
+    # — wasm-pack emits unpatched `import('../../..')`, then the sed
+    # patcher rewrites it — never exposes the intermediate state to
+    # a dev-server running in parallel. Without the fold, vite's
+    # pre-transform fires between the two sub-steps and surfaces the
+    # transient unpatched import as a hard error before the patcher
+    # has a chance to run.
+    wasm_pack_threaded_and_patch() {
+        wasm-pack build crates/aenternis-wasm --target web --features wasm-threads \
+            && patch_wasm_bindgen_rayon_worker_helpers
+    }
+    step "wasm-pack (threaded, nightly) + patch worker helpers" \
+        wasm_pack_threaded_and_patch \
         || OVERALL=1
-
-    # Rewrites `import('../../..')` in wasm-bindgen-rayon's worker
-    # bootstrap to an explicit file URL — required for bundlerless
-    # production hosts (GitHub Pages). See helper's docstring.
-    patch_wasm_bindgen_rayon_worker_helpers
 
     step "verify-threaded-wasm" bash scripts/verify-threaded-wasm.sh \
         || OVERALL=1

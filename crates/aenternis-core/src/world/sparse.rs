@@ -152,6 +152,18 @@ pub struct SparseWorld {
     /// fragmented 32-bit address space.
     pub(crate) scratch_per_source_total_outflow: FxHashMap<Coord, u32>,
 
+    /// Per-tick scratch: per-target inflow lists for the fused
+    /// outflow phase ([`crate::tick::outflow_phase_inplace`]). Sibling
+    /// to [`Self::scratch_inflows_by_target`], but the entry type
+    /// ([`crate::tick::InflowFast`]) carries pre-resolved
+    /// `(head_start, head_len, wrap_start, wrap_len)` ranges into
+    /// `arena_cur` instead of `(source_coord, source_dir)` — so the
+    /// write phase reads source slots directly without re-traversing
+    /// any `world.cells` lookup. Filled by the fused path only;
+    /// `apply_outflow` (the public reference impl used by tests and
+    /// `step_diffusion`) keeps using the legacy map.
+    pub(crate) scratch_inflows_fast: FxHashMap<Coord, Vec<crate::tick::InflowFast>>,
+
     /// Lex-sorted snapshot of `cells.keys()`. Mirrors the canonical
     /// `(x, y, z)` order that [`Self::sorted_iter`] commits to.
     ///
@@ -236,6 +248,7 @@ impl SparseWorld {
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
             scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
             scratch_per_source_total_outflow: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_inflows_fast: FxHashMap::with_hasher(FxBuildHasher),
             sorted_cache: Vec::new(),
             sorted_dirty: false,
             bbox_cache: None,
@@ -635,6 +648,111 @@ impl SparseWorld {
             (c, cell)
         })
     }
+
+    /// Diagnostic snapshot of every container's allocated size on the
+    /// world. Reports `len` / `capacity` for `Vec`s and `capacity()`
+    /// for `FxHashMap`s; for the nested scratch maps (`Coord ->
+    /// [Vec<u32>; 6]` and `Coord -> Vec<InflowEntry>`) also reports
+    /// the sum of inner `Vec` capacities. Used by the WASM diagnostic
+    /// path to track which container is growing ahead of cell count
+    /// before an OOM trap.
+    ///
+    /// `O(n)` over the cells in the nested scratch maps because of the
+    /// inner-`Vec` capacity sum. Cheap enough to call once every few
+    /// dozen ticks for diagnostics; do not put on the hot per-tick path.
+    #[must_use]
+    pub fn memory_report(&self) -> MemoryReport {
+        let cells = self.cells.memory_report();
+        let scratch_outflow_inner_vec_cap_sum: usize = self
+            .scratch_outflow
+            .values()
+            .map(|per_dir| per_dir.iter().map(Vec::capacity).sum::<usize>())
+            .sum();
+        let scratch_inflows_inner_vec_cap_sum: usize = self
+            .scratch_inflows_by_target
+            .values()
+            .map(Vec::capacity)
+            .sum::<usize>()
+            + self
+                .scratch_inflows_fast
+                .values()
+                .map(Vec::capacity)
+                .sum::<usize>();
+        MemoryReport {
+            tick: self.tick,
+            cell_count: self.cells.len(),
+            cells_slots_len: cells.slots_len,
+            cells_slots_cap: cells.slots_cap,
+            cells_free_slots_len: cells.free_slots_len,
+            cells_free_slots_cap: cells.free_slots_cap,
+            cells_coord_to_slot_cap: cells.coord_to_slot_cap,
+            scratch_neighbor_energies_cap: self.scratch_neighbor_energies.capacity(),
+            scratch_outflow_cap: self.scratch_outflow.capacity(),
+            scratch_outflow_inner_vec_cap_sum,
+            scratch_inflows_by_target_cap: self.scratch_inflows_by_target.capacity()
+                + self.scratch_inflows_fast.capacity(),
+            scratch_inflows_inner_vec_cap_sum,
+            scratch_per_source_total_outflow_cap: self.scratch_per_source_total_outflow.capacity(),
+            sorted_cache_len: self.sorted_cache.len(),
+            sorted_cache_cap: self.sorted_cache.capacity(),
+            arena_capacity: self.arena.capacity() as usize,
+            arena_slots_vec_cap: self.arena.slots_vec_capacity(),
+            arena_next_capacity: self.arena_next.capacity() as usize,
+            arena_next_slots_vec_cap: self.arena_next.slots_vec_capacity(),
+        }
+    }
+}
+
+/// Diagnostic snapshot of every container on a [`SparseWorld`].
+/// Returned by [`SparseWorld::memory_report`]. All counts are raw
+/// element/entry counts — multiply by element size to estimate bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryReport {
+    /// Current `world.tick` value.
+    pub tick: u64,
+    /// Number of live cells (= `cells.len()`).
+    pub cell_count: usize,
+    /// `cells.slots.len()` — including recyclable `None` slots.
+    pub cells_slots_len: usize,
+    /// `cells.slots.capacity()` — backing `Vec`'s allocation.
+    pub cells_slots_cap: usize,
+    /// `cells.free_slots.len()` — slots awaiting reuse on next insert.
+    pub cells_free_slots_len: usize,
+    /// `cells.free_slots.capacity()` — backing `Vec`'s allocation.
+    pub cells_free_slots_cap: usize,
+    /// `cells.coord_to_slot.capacity()` — entries the coord→slot map
+    /// can hold without rehash.
+    pub cells_coord_to_slot_cap: usize,
+    /// `scratch_neighbor_energies.capacity()` — entry capacity, not
+    /// bucket count.
+    pub scratch_neighbor_energies_cap: usize,
+    /// `scratch_outflow.capacity()` — entry capacity.
+    pub scratch_outflow_cap: usize,
+    /// Sum of `Vec<u32>::capacity()` across every inner per-direction
+    /// outflow buffer in `scratch_outflow`. The hot per-tick storage
+    /// the pooled map keeps alive between ticks.
+    pub scratch_outflow_inner_vec_cap_sum: usize,
+    /// `scratch_inflows_by_target.capacity()` — entry capacity.
+    pub scratch_inflows_by_target_cap: usize,
+    /// Sum of `Vec<InflowEntry>::capacity()` across every inner
+    /// per-target inflow list.
+    pub scratch_inflows_inner_vec_cap_sum: usize,
+    /// `scratch_per_source_total_outflow.capacity()` — entry capacity.
+    pub scratch_per_source_total_outflow_cap: usize,
+    /// `sorted_cache.len()` — live cached coord count.
+    pub sorted_cache_len: usize,
+    /// `sorted_cache.capacity()` — backing `Vec<Coord>`'s allocation.
+    pub sorted_cache_cap: usize,
+    /// Current arena's conceptual slot capacity (= `Arena::capacity`).
+    pub arena_capacity: usize,
+    /// Current arena's backing `Vec<u32>::capacity()` in slots —
+    /// equals `arena_capacity` in steady state, may be larger right
+    /// after a grow due to `Vec`'s amortized doubling.
+    pub arena_slots_vec_cap: usize,
+    /// Staging arena's conceptual slot capacity.
+    pub arena_next_capacity: usize,
+    /// Staging arena's backing `Vec<u32>::capacity()` in slots.
+    pub arena_next_slots_vec_cap: usize,
 }
 
 /// Build an empty cell whose `origin_tag` is deterministic in

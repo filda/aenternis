@@ -103,7 +103,7 @@ pub use wasm_bindgen_rayon::init_thread_pool;
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console, js_name = error)]
-    fn console_error_alloc_fail(msg: &str, size: u32, align: u32);
+    fn console_error_alloc_fail(msg: &str, size: u32, align: u32, wasm_memory_pages: u32);
 }
 
 /// `std::alloc` error hook installed at module start. Default
@@ -121,10 +121,17 @@ extern "C" {
 fn aenternis_alloc_error_hook(layout: std::alloc::Layout) {
     let size = u32::try_from(layout.size()).unwrap_or(u32::MAX);
     let align = u32::try_from(layout.align()).unwrap_or(u32::MAX);
+    // `memory.size` is a pure WASM instruction with no allocation — safe
+    // to call from the alloc-error hook. Returns the current linear-
+    // memory size in 64 KiB pages, so JS can distinguish a hit-the-cap
+    // failure (`pages` near 65536 = 4 GiB) from a `memory.grow` refusal
+    // at a smaller footprint (fragmentation, browser/OS limit, etc.).
+    let pages = u32::try_from(core::arch::wasm32::memory_size(0)).unwrap_or(u32::MAX);
     console_error_alloc_fail(
-        "Aenternis WASM allocation failure (out of memory). Following: requested size, align.",
+        "Aenternis WASM allocation failure (out of memory). Following: requested size, align, current WASM memory pages (64 KiB each).",
         size,
         align,
+        pages,
     );
 }
 
@@ -444,6 +451,84 @@ impl World {
     pub fn inspect_prefix(&self) -> u32 {
         Self::INSPECT_PREFIX as u32
     }
+
+    /// Diagnostic snapshot of every container's allocated size, plus
+    /// the current WASM linear-memory page count. Returns a flat
+    /// `Uint32Array` of length [`World::MEMORY_REPORT_LEN`] = 21.
+    ///
+    /// Layout — each slot is a `u32`, saturating-cast from the
+    /// underlying `usize` / `u64`:
+    ///
+    /// | offset | field                                       |
+    /// |--------|---------------------------------------------|
+    /// | `0`    | `wasm_memory_pages` (64 KiB each; native = 0) |
+    /// | `1`    | `tick`                                      |
+    /// | `2`    | `cell_count`                                |
+    /// | `3`    | `cells_slots_len`                           |
+    /// | `4`    | `cells_slots_cap`                           |
+    /// | `5`    | `cells_free_slots_len`                      |
+    /// | `6`    | `cells_free_slots_cap`                      |
+    /// | `7`    | `cells_coord_to_slot_cap`                   |
+    /// | `8`    | `scratch_neighbor_energies_cap`             |
+    /// | `9`    | `scratch_outflow_cap`                       |
+    /// | `10`   | `scratch_outflow_inner_vec_cap_sum`         |
+    /// | `11`   | `scratch_inflows_by_target_cap`             |
+    /// | `12`   | `scratch_inflows_inner_vec_cap_sum`         |
+    /// | `13`   | `scratch_per_source_total_outflow_cap`      |
+    /// | `14`   | `sorted_cache_len`                          |
+    /// | `15`   | `sorted_cache_cap`                          |
+    /// | `16`   | `arena_capacity`                            |
+    /// | `17`   | `arena_slots_vec_cap`                       |
+    /// | `18`   | `arena_next_capacity`                       |
+    /// | `19`   | `arena_next_slots_vec_cap`                  |
+    /// | `20`   | reserved / zero                             |
+    ///
+    /// Reserved slot is kept so the layout is a round 21 fields —
+    /// adding a new metric uses the slot, no width change. JS unpacks
+    /// this against a hand-coded label table in the worker.
+    #[must_use]
+    #[wasm_bindgen(js_name = memoryReport)]
+    pub fn memory_report(&self) -> Vec<u32> {
+        let r = self.inner.memory_report();
+        #[cfg(target_arch = "wasm32")]
+        let pages = u32::try_from(core::arch::wasm32::memory_size(0)).unwrap_or(u32::MAX);
+        #[cfg(not(target_arch = "wasm32"))]
+        let pages: u32 = 0;
+        let to_u32 = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        let tick = u32::try_from(r.tick).unwrap_or(u32::MAX);
+        vec![
+            pages,
+            tick,
+            to_u32(r.cell_count),
+            to_u32(r.cells_slots_len),
+            to_u32(r.cells_slots_cap),
+            to_u32(r.cells_free_slots_len),
+            to_u32(r.cells_free_slots_cap),
+            to_u32(r.cells_coord_to_slot_cap),
+            to_u32(r.scratch_neighbor_energies_cap),
+            to_u32(r.scratch_outflow_cap),
+            to_u32(r.scratch_outflow_inner_vec_cap_sum),
+            to_u32(r.scratch_inflows_by_target_cap),
+            to_u32(r.scratch_inflows_inner_vec_cap_sum),
+            to_u32(r.scratch_per_source_total_outflow_cap),
+            to_u32(r.sorted_cache_len),
+            to_u32(r.sorted_cache_cap),
+            to_u32(r.arena_capacity),
+            to_u32(r.arena_slots_vec_cap),
+            to_u32(r.arena_next_capacity),
+            to_u32(r.arena_next_slots_vec_cap),
+            0,
+        ]
+    }
+
+    /// Length of the [`World::memory_report`] flat array (= 21). JS
+    /// uses this to validate the layout it unpacks against.
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = memoryReportLen)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn memory_report_len(&self) -> u32 {
+        Self::MEMORY_REPORT_LEN as u32
+    }
 }
 
 impl World {
@@ -456,6 +541,12 @@ impl World {
     /// [`World::cell_inspect`] before the variable-length memory
     /// region starts (4 scalars + 4 × 6 directional arrays = 28).
     pub const INSPECT_PREFIX: usize = 28;
+
+    /// Number of `u32` fields in [`World::memory_report`]'s flat array.
+    /// JS validates against [`World::memory_report_len`] (the JS-side
+    /// getter) before unpacking, so a layout change here is caught at
+    /// the boundary rather than producing silently wrong labels.
+    pub const MEMORY_REPORT_LEN: usize = 21;
 
     /// Refresh `snapshot_buf` with the current world state in lex
     /// order. Shared between [`World::cells_snapshot`] (clones the
