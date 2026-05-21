@@ -29,9 +29,11 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 
 import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
+import { disassemble } from '../src/disasm.ts';
 import { heatColor, meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
 import { JITTER_AMPLITUDE, gridJitter } from '../src/jitter.ts';
 import type { SimChannel } from '../src/native-client.ts';
+import { PRESETS, findPreset } from '../src/presets.ts';
 import { parseProgramText } from '../src/program-text.ts';
 import type {
   CellDetailMsg,
@@ -164,6 +166,7 @@ export function bootstrap(): void {
     trackerPos: requireEl('trackerPos', HTMLSpanElement),
     programText: requireEl('programText', HTMLTextAreaElement),
     programStatus: requireEl('programStatus', HTMLDivElement),
+    programPreset: requireEl('programPreset', HTMLSelectElement),
     sliceEnabled: requireEl('sliceEnabled', HTMLInputElement),
     voxelSize: requireEl('voxelSize', HTMLInputElement),
     voxelSizeVal: requireEl('voxelSizeVal', HTMLSpanElement),
@@ -869,6 +872,25 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     config.energy = parseInt(dom.energyIn.value, 10) || 0;
     initPaused();
   });
+  for (const preset of PRESETS) {
+    const opt = document.createElement('option');
+    opt.value = preset.name;
+    opt.textContent = preset.name;
+    opt.title = preset.hint;
+    dom.programPreset.appendChild(opt);
+  }
+  dom.programPreset.addEventListener('change', () => {
+    const preset = findPreset(dom.programPreset.value);
+    if (preset) {
+      dom.programText.value = preset.source;
+      const { status } = parseProgramText(preset.source);
+      dom.programStatus.textContent = status;
+    }
+  });
+  dom.programText.addEventListener('input', () => {
+    // User-edited program no longer matches any preset.
+    dom.programPreset.value = '';
+  });
   dom.coeff.addEventListener('input', () => {
     config.coeff = parseFloat(dom.coeff.value);
     dom.coeffVal.textContent = config.coeff.toFixed(2);
@@ -1053,11 +1075,20 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     iActiveOutflow: requireEl('iActiveOutflow', HTMLSpanElement),
     iInflow: requireEl('iInflow', HTMLSpanElement),
     iMemory: requireEl('iMemory', HTMLPreElement),
+    iMemoryView: requireEl('iMemoryView', HTMLButtonElement),
     iClose: requireEl('iClose', HTMLButtonElement),
+    memoryView: 'disasm' as 'disasm' | 'hex',
+    lastMsg: null as CellDetailMsg | null,
   };
   inspector.iClose.addEventListener('click', () => {
     inspector.coord = null;
+    inspector.lastMsg = null;
     inspector.panel.classList.remove('visible');
+  });
+  inspector.iMemoryView.addEventListener('click', () => {
+    inspector.memoryView = inspector.memoryView === 'disasm' ? 'hex' : 'disasm';
+    inspector.iMemoryView.textContent = inspector.memoryView;
+    if (inspector.lastMsg) renderInspector(inspector.lastMsg);
   });
 
   const raycaster = new THREE.Raycaster();
@@ -1092,6 +1123,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     if (!inspector.coord) return;
     const { x, y, z } = inspector.coord;
     if (msg.x !== x || msg.y !== y || msg.z !== z) return; // stale
+    inspector.lastMsg = msg;
     const data = msg.data;
     const prefix = msg.prefix;
 
@@ -1109,9 +1141,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       inspector.iMemory.textContent = '';
       return;
     }
+    const pc = data[0]!;
     inspector.iCoord.textContent = `(${x}, ${y}, ${z})`;
     inspector.iTick.textContent = String(msg.tick);
-    inspector.iPc.textContent = String(data[0]!);
+    inspector.iPc.textContent = String(pc);
     inspector.iEnergy.textContent = data[1]!.toLocaleString();
     inspector.iOriginTag.textContent = `0x${data[2]!.toString(16).padStart(8, '0')}`;
     inspector.iAppearance.textContent = `0x${data[3]!.toString(16).padStart(8, '0')}`;
@@ -1119,7 +1152,11 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     inspector.iRates.textContent = fmtDirArr(data.slice(10, 16));
     inspector.iActiveOutflow.textContent = fmtDirArr(data.slice(16, 22));
     inspector.iInflow.textContent = fmtDirArr(data.slice(22, 28));
-    inspector.iMemory.textContent = fmtMemoryHexDump(data.slice(prefix));
+    const memSlots = data.slice(prefix);
+    inspector.iMemory.textContent =
+      inspector.memoryView === 'disasm'
+        ? disassemble(memSlots, { pc })
+        : fmtMemoryHexDump(memSlots);
   }
 
   // Auto-refresh the inspector every ~5 frames while it's open and the

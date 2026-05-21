@@ -153,6 +153,25 @@
       white-space: pre;
       color: #c0c0c8;
     }
+    .inspector .mem-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .inspector .mem-toggle {
+      background: transparent;
+      color: #d4a76a;
+      border: 1px solid #d4a76a;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 10px;
+      cursor: pointer;
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    }
+    .inspector .mem-toggle:hover {
+      background: rgba(212, 167, 106, 0.15);
+    }
     .hud h2 {
       font-size: 14px;
       color: #d4a76a;
@@ -337,6 +356,12 @@
         raw slot. Směry: <code>xp xn yp yn zp zn</code>. Komentář <code>;</code>.
         Aplikuje se po Reset.
       </div>
+      <div class="row" style="margin-bottom: 4px;">
+        <label for="programPreset">preset</label>
+        <select id="programPreset">
+          <option value="">— vlastní —</option>
+        </select>
+      </div>
       <textarea id="programText" rows="6" style="
         width: 100%;
         background: #0a0a10;
@@ -485,7 +510,10 @@
     <div><strong>rates</strong> <span class="arr" id="iRates"></span></div>
     <div><strong>active_outflow</strong> <span class="arr" id="iActiveOutflow"></span></div>
     <div><strong>inflow (last tick)</strong> <span class="arr" id="iInflow"></span></div>
-    <div><strong>memory</strong></div>
+    <div class="mem-header">
+      <strong>memory</strong>
+      <button class="mem-toggle" id="iMemoryView" title="Toggle hex / disassembly view">disasm</button>
+    </div>
     <pre class="mem" id="iMemory"></pre>
   </aside>
 

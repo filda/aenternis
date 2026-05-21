@@ -25,7 +25,7 @@ When a slot is interpreted as an instruction:
 - **opcode** = `slot & 0xFF` (lowest byte)
 - the upper bits of the slot are ignored during opcode decode — but they remain part of the slot value, so any instruction that reads this slot as data or address sees all 32 bits
 
-An opcode outside the defined range (currently > 0x13) behaves like `nop` — the PC advances by 1 slot.
+An opcode outside the defined range (currently > 0x16) behaves like `nop` — the PC advances by 1 slot.
 
 ## Instruction set
 
@@ -51,6 +51,9 @@ An opcode outside the defined range (currently > 0x13) behaves like `nop` — th
 | `0x11` | `setpv d a`   | 3 slots | `pointers[d mod DIRS] = mem[a]` — `setp` with a runtime-computed value |
 | `0x12` | `sid a`       | 2 slots | `mem[a] = own origin_tag` — call-sign instruction (UI layer) |
 | `0x13` | `paint v`     | 2 slots | `appearance = v` — war paint (UI layer, does not affect physics) |
+| `0x14` | `sinflow d a` | 3 slots | `mem[a % memSize] = number of slots received from direction d mod DIRS in the last tick` |
+| `0x15` | `sself a`     | 2 slots | `mem[a % memSize] = own energy / memSize` |
+| `0x16` | `srate d a`   | 3 slots | `mem[a % memSize] = own combined rate in direction d mod DIRS` |
 
 DIRS = 6 in the 3D model, 4 in the 2D model.
 
@@ -164,11 +167,7 @@ Specific agreed-upon instructions waiting for implementation (from the consolida
 
 ### Sensors (read-only, see introspection invariant)
 
-| Mnemonic       | Length  | Semantics |
-|----------------|---------|-----------|
-| `sinflow d a`  | 3 slots | mem[a] = number of slots that arrived from direction d in the last tick |
-| `sself a`      | 2 slots | mem[a] = own energy / memSize |
-| `srate d a`    | 3 slots | mem[a] = own combined rate in direction d |
+`sinflow`, `sself`, and `srate` are already implemented (see the table above, opcodes `0x14`–`0x16`).
 
 Optional, later:
 
@@ -200,4 +199,4 @@ Open question whether to add it at all. For now all sensors work at distance 1.
 
 ## Opcode density
 
-Current density of meaningful opcodes in the 2D variant: **20 / 256 = 7.8 %**. Better emergence from random noise would prefer ~60 % (Z80 level). The planned extensions above should bring us closer.
+Current density of meaningful opcodes: **23 / 256 = 9.0 %**. Better emergence from random noise would prefer ~60 % (Z80 level). The planned extensions above should bring us closer.
