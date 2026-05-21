@@ -167,6 +167,8 @@ export function bootstrap(): void {
     sliceEnabled: requireEl('sliceEnabled', HTMLInputElement),
     voxelSize: requireEl('voxelSize', HTMLInputElement),
     voxelSizeVal: requireEl('voxelSizeVal', HTMLSpanElement),
+    minLuma: requireEl('minLuma', HTMLInputElement),
+    minLumaVal: requireEl('minLumaVal', HTMLSpanElement),
     shapeOcta: requireEl('shapeOcta', HTMLInputElement),
     bloomEnabled: requireEl('bloomEnabled', HTMLInputElement),
     bloomThreshold: requireEl('bloomThreshold', HTMLInputElement),
@@ -599,11 +601,22 @@ export function bootstrap(): void {
   let voxelMaterialShader: THREE.WebGLProgramParametersWithUniforms | null = null;
   voxelMaterial.onBeforeCompile = (shader) => {
     shader.uniforms['uEmissiveBoost'] = { value: parseFloat(dom.emissive.value) };
+    shader.uniforms['uMinLuma'] = { value: parseFloat(dom.minLuma.value) };
     shader.fragmentShader = shader.fragmentShader
       .replace(
         'uniform vec3 emissive;',
         `uniform vec3 emissive;
-uniform float uEmissiveBoost;`,
+uniform float uEmissiveBoost;
+uniform float uMinLuma;`,
+      )
+      // Alpha-test discard pro low-energy buňky: po color_fragment už
+      // diffuseColor.rgb obsahuje per-instance heat color. Buňky pod
+      // luminance prahem se zahodí ještě před lighting passes — voxel
+      // zmizí včetně siluety v SSAO.
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+if (dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114)) < uMinLuma) discard;`,
       )
       .replace(
         '#include <emissivemap_fragment>',
@@ -753,6 +766,13 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     voxelScale = parseFloat(dom.voxelSize.value);
     dom.voxelSizeVal.textContent = voxelScale.toFixed(2);
     lastRenderedTick = -1; // force a re-render even if no new snapshot.
+  });
+  dom.minLuma.addEventListener('input', () => {
+    const v = parseFloat(dom.minLuma.value);
+    if (voxelMaterialShader) {
+      voxelMaterialShader.uniforms['uMinLuma']!.value = v;
+    }
+    dom.minLumaVal.textContent = v.toFixed(2);
   });
   dom.shapeOcta.addEventListener('change', () => {
     setVoxelShape(dom.shapeOcta.checked);

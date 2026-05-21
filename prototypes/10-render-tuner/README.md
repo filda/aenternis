@@ -18,6 +18,7 @@ zafixuje, přechod do dalšího kola.
 | 7 | `fogDensity`     | 0 - 0.03  | 0.005 |
 | 8 | `ssaoRadius`     | 1 - 20    | 8.0  |
 | 9 | `voxelSize`      | 0.2 - 1.5 | 1.00 |
+| 10 | `minLuma`       | 0 - 1.00  | 0.42 |
 
 Po posledním kole se zobrazí JSON s finalní kombinací - lze nakopírovat
 do slider defaultů v root `index.html`.

@@ -60,6 +60,7 @@ const PARAM_DEFS: readonly ParamDef[] = [
   { name: 'fogDensity',     label: 'fog density',      min: 0.0,  max: 0.03, step: 0.001, default: 0.005, precision: 3 },
   { name: 'ssaoRadius',     label: 'SSAO radius',      min: 1.0,  max: 20.0, step: 0.5,   default: 8.0,   precision: 1 },
   { name: 'voxelSize',      label: 'voxel size',       min: 0.2,  max: 1.5,  step: 0.05,  default: 1.00,  precision: 2 },
+  { name: 'minLuma',        label: 'min luma (cull)',  min: 0.0,  max: 1.00, step: 0.02,  default: 0.42,  precision: 2 },
 ];
 
 interface RenderParams {
@@ -72,6 +73,7 @@ interface RenderParams {
   fogDensity: number;
   ssaoRadius: number;
   voxelSize: number;
+  minLuma: number;
 }
 
 function defaultParams(): RenderParams {
@@ -92,7 +94,11 @@ function loadHistory(): RenderParams[] {
     const raw = window.localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as RenderParams[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    // Backfill — staré entries z localStorage nemají nově přidané klíče (např.
+    // minLuma); jinak by .toFixed() na undefined spadlo. Default doplní díru.
+    const defaults = defaultParams();
+    return parsed.map((h) => ({ ...defaults, ...(h as Partial<RenderParams>) }));
   } catch {
     return [];
   }
@@ -421,11 +427,22 @@ function createTile(
   let materialShader: THREE.WebGLProgramParametersWithUniforms | null = null;
   material.onBeforeCompile = (shader) => {
     shader.uniforms['uEmissiveBoost'] = { value: params.emissive };
+    shader.uniforms['uMinLuma'] = { value: params.minLuma };
     shader.fragmentShader = shader.fragmentShader
       .replace(
         'uniform vec3 emissive;',
         `uniform vec3 emissive;
-uniform float uEmissiveBoost;`,
+uniform float uEmissiveBoost;
+uniform float uMinLuma;`,
+      )
+      // Alpha-test discard pro low-energy entities: po color_fragment chunk-u
+      // už diffuseColor.rgb obsahuje per-instance heat color, takže luminanci
+      // z něj porovnáme s prahem. discard běží před lighting passes, takže
+      // se ušetří i fragment work.
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+if (dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114)) < uMinLuma) discard;`,
       )
       .replace(
         '#include <emissivemap_fragment>',
@@ -479,6 +496,7 @@ function applyTileParams(
   tile.material.roughness = next.roughness;
   if (tile.materialShader) {
     tile.materialShader.uniforms['uEmissiveBoost']!.value = next.emissive;
+    tile.materialShader.uniforms['uMinLuma']!.value = next.minLuma;
   }
   tile.ssaoPass.kernelRadius = next.ssaoRadius;
   tile.bloomPass.threshold = next.bloomThreshold;
@@ -640,6 +658,11 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  function syncCameraAspect(): void {
+    camera.aspect = layout.tileWidth / Math.max(1, layout.tileHeight);
+    camera.updateProjectionMatrix();
+  }
+
   function renderLockedBreadcrumb(): void {
     const panel = document.getElementById('lockedPanel') as HTMLDivElement;
     panel.innerHTML = '';
@@ -668,6 +691,7 @@ async function bootstrap(): Promise<void> {
 
     layout = computeLayout(canvas, GRID_COLS, GRID_ROWS);
     for (const t of tiles) resizeTile(t, layout.tileWidth, layout.tileHeight);
+    syncCameraAspect();
 
     const values = tileValues(def, TILES_PER_ROUND);
     rebuildOverlay(
@@ -691,6 +715,7 @@ async function bootstrap(): Promise<void> {
 
     layout = computeLayout(canvas, 1, 1);
     resizeTile(tiles[0]!, layout.tileWidth, layout.tileHeight);
+    syncCameraAspect();
 
     const finalParams: RenderParams = { ...defaultParams(), ...locked };
     applyTileParams(tiles[0]!, finalParams, snapshot);
@@ -717,6 +742,7 @@ async function bootstrap(): Promise<void> {
     (document.getElementById('roundIdx') as HTMLSpanElement).textContent = '★';
     renderLockedBreadcrumb();
 
+    syncCameraAspect();
     for (let i = 0; i < activeTileCount; i += 1) {
       resizeTile(tiles[i]!, layout.tileWidth, layout.tileHeight);
       applyTileParams(tiles[i]!, compareCandidates[i]!, snapshot);
@@ -728,7 +754,8 @@ async function bootstrap(): Promise<void> {
         return `<span class="v">run ${i + 1}</span>`
           + `<br>exp:${formatValue(c.exposure, 2)} `
           + `bloom:${formatValue(c.bloomStrength, 2)} `
-          + `vox:${formatValue(c.voxelSize, 2)}`;
+          + `vox:${formatValue(c.voxelSize, 2)} `
+          + `lum:${formatValue(c.minLuma, 2)}`;
       },
       (i) => onPickCompare(i),
     );
@@ -773,7 +800,8 @@ async function bootstrap(): Promise<void> {
           + ` <span class="snip">exp:${formatValue(h.exposure, 2)} `
           + `emis:${formatValue(h.emissive, 2)} `
           + `bloom:${formatValue(h.bloomStrength, 2)} `
-          + `vox:${formatValue(h.voxelSize, 2)}</span>`;
+          + `vox:${formatValue(h.voxelSize, 2)} `
+          + `lum:${formatValue(h.minLuma, 2)}</span>`;
         list.appendChild(item);
       }
     }
@@ -846,8 +874,7 @@ async function bootstrap(): Promise<void> {
       cells[i]!.style.width = `${layout.tileWidth}px`;
       cells[i]!.style.height = `${layout.tileHeight}px`;
     }
-    camera.aspect = layout.tileWidth / Math.max(1, layout.tileHeight);
-    camera.updateProjectionMatrix();
+    syncCameraAspect();
   });
 
   // 8) Buttons.
@@ -875,11 +902,7 @@ async function bootstrap(): Promise<void> {
     renderHistoryPanel();
   });
 
-  // 9) Camera aspect ratio — based on tile aspect (since each RenderPass renders into a tile-sized viewport).
-  camera.aspect = layout.tileWidth / Math.max(1, layout.tileHeight);
-  camera.updateProjectionMatrix();
-
-  // 10) Start.
+  // 9) Start — enterRound() interně volá syncCameraAspect().
   enterRound(0);
   hideStatus();
   requestAnimationFrame(frame);
