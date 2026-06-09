@@ -25,6 +25,7 @@ const elements = {
   stepButton: document.querySelector("#stepButton"),
   resetButton: document.querySelector("#resetButton"),
   presetInput: document.querySelector("#presetInput"),
+  boundaryInput: document.querySelector("#boundaryInput"),
   sizeInput: document.querySelector("#sizeInput"),
   energyInput: document.querySelector("#energyInput"),
   coeffInput: document.querySelector("#coeffInput"),
@@ -62,13 +63,14 @@ const state = {
   totalEnergy: 1_000_000,
   initialEnergy: 1_000_000,
   preset: "bigbang",
-  coeff: 0.08, // radiace (difuze)
-  grav: 0.03, // sila gravitace
-  radius: 3, // dosah gravitace (cutoff, v bunkach)
-  pressure: 0.5, // sila tlaku
+  boundary: "torus", // "torus" (periodicka, bez ztrat) | "void" (otevreny vesmir, ztraty)
+  coeff: 0.02, // radiace (difuze)
+  grav: 0.12, // sila gravitace
+  radius: 4, // dosah gravitace (cutoff, v bunkach)
+  pressure: 0.2, // sila tlaku
   gamma: 2.0, // exponent stavove rovnice tlaku
   dt: 0.4, // casovy krok
-  noise: 0.02, // symetrii lamajici sum (analog stochastic_floor)
+  noise: 0.08, // symetrii lamajici sum (analog stochastic_floor)
   step: 0,
   running: false,
   axis: "z",
@@ -88,6 +90,11 @@ const state = {
 
 function cellIndex(x, y, z, size) {
   return x + size * (y + size * z);
+}
+
+// Periodicke zabaleni souradnice do [0, size).
+function wrapCoord(value, size) {
+  return ((value % size) + size) % size;
 }
 
 // Deterministicky RNG (mulberry32) - aby byl prubeh reprodukovatelny.
@@ -120,6 +127,7 @@ function resetWorld() {
   state.initialEnergy = Math.max(1, Number(elements.energyInput.value) || 1);
   state.totalEnergy = state.initialEnergy;
   state.preset = elements.presetInput.value;
+  state.boundary = elements.boundaryInput.value;
   state.coeff = Number(elements.coeffInput.value);
   state.grav = Number(elements.gravInput.value);
   state.radius = Number(elements.radiusInput.value);
@@ -166,6 +174,30 @@ function seedWorld() {
   if (state.preset === "bigbang") {
     // Prvotni entita: vsechna energie v jedne bunce -> maximalni hustota.
     current[cellIndex(center, center, center, size)] = state.initialEnergy;
+  } else if (state.preset === "bigbang-lumpy") {
+    // Zrnity tresk: husty centralni shluk s nahodnymi fluktuacemi. Mirnejsi
+    // exploze nez bodovy zdroj + rovnou nasazene seminko pro fragmentaci.
+    const blobR = Math.max(2, Math.floor(size / 8));
+    const r2 = blobR * blobR;
+    let sum = 0;
+    for (let dz = -blobR; dz <= blobR; dz += 1) {
+      for (let dy = -blobR; dy <= blobR; dy += 1) {
+        for (let dx = -blobR; dx <= blobR; dx += 1) {
+          if (dx * dx + dy * dy + dz * dz > r2) continue;
+          const v = 0.5 + nextRandom();
+          const i = cellIndex(
+            wrapCoord(center + dx, size),
+            wrapCoord(center + dy, size),
+            wrapCoord(center + dz, size),
+            size,
+          );
+          current[i] = v;
+          sum += v;
+        }
+      }
+    }
+    const scale = state.initialEnergy / sum;
+    for (let i = 0; i < current.length; i += 1) current[i] *= scale;
   } else if (state.preset === "noise") {
     // Nahodne pole -> Jeansova nestabilita: kde se sum nakupi, gravitace zacne.
     let sum = 0;
@@ -200,6 +232,7 @@ function computePotential() {
   const potential = state.potential;
   const offsets = state.offsets;
   const offsetCount = offsets.length;
+  const torus = state.boundary === "torus";
 
   for (let z = 0; z < size; z += 1) {
     for (let y = 0; y < size; y += 1) {
@@ -207,10 +240,14 @@ function computePotential() {
         let acc = 0;
         for (let o = 0; o < offsetCount; o += 1) {
           const off = offsets[o];
-          const nx = x + off.di;
-          const ny = y + off.dj;
-          const nz = z + off.dk;
-          if (nx < 0 || nx >= size || ny < 0 || ny >= size || nz < 0 || nz >= size) {
+          let nx = x + off.di;
+          let ny = y + off.dj;
+          let nz = z + off.dk;
+          if (torus) {
+            nx = wrapCoord(nx, size);
+            ny = wrapCoord(ny, size);
+            nz = wrapCoord(nz, size);
+          } else if (nx < 0 || nx >= size || ny < 0 || ny >= size || nz < 0 || nz >= size) {
             continue; // void neprispiva
           }
           acc += current[nx + size * ny + size2 * nz] * off.w;
@@ -239,6 +276,8 @@ function simulateStep() {
   const dt = state.dt;
   const noise = state.noise;
 
+  const torus = state.boundary === "torus";
+
   computePotential();
   next.set(current);
 
@@ -255,15 +294,25 @@ function simulateStep() {
         let out0 = 0, out1 = 0, out2 = 0, out3 = 0, out4 = 0, out5 = 0;
         let total = 0;
 
-        // -x, +x, -y, +y, -z, +z
-        const nbr = [
-          x > 0 ? index - 1 : -1,
-          x < size - 1 ? index + 1 : -1,
-          y > 0 ? index - size : -1,
-          y < size - 1 ? index + size : -1,
-          z > 0 ? index - size2 : -1,
-          z < size - 1 ? index + size2 : -1,
-        ];
+        // -x, +x, -y, +y, -z, +z. Na toru se zabaluje (vzdy realny soused),
+        // ve voidu je -1 = energie odteka mimo svet a ztraci se.
+        const nbr = torus
+          ? [
+              cellIndex(wrapCoord(x - 1, size), y, z, size),
+              cellIndex(wrapCoord(x + 1, size), y, z, size),
+              cellIndex(x, wrapCoord(y - 1, size), z, size),
+              cellIndex(x, wrapCoord(y + 1, size), z, size),
+              cellIndex(x, y, wrapCoord(z - 1, size), size),
+              cellIndex(x, y, wrapCoord(z + 1, size), size),
+            ]
+          : [
+              x > 0 ? index - 1 : -1,
+              x < size - 1 ? index + 1 : -1,
+              y > 0 ? index - size : -1,
+              y < size - 1 ? index + size : -1,
+              z > 0 ? index - size2 : -1,
+              z < size - 1 ? index + size2 : -1,
+            ];
 
         for (let d = 0; d < 6; d += 1) {
           const ni = nbr[d];
@@ -556,6 +605,7 @@ elements.stepButton.addEventListener("click", stepOnce);
 elements.resetButton.addEventListener("click", resetWorld);
 
 elements.presetInput.addEventListener("change", resetWorld);
+elements.boundaryInput.addEventListener("change", resetWorld);
 elements.sizeInput.addEventListener("change", resetWorld);
 elements.energyInput.addEventListener("change", resetWorld);
 elements.radiusInput.addEventListener("change", () => {

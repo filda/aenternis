@@ -55,8 +55,16 @@
               <span>Scenar</span>
               <select id="presetInput">
                 <option value="bigbang" selected>Velky tresk (1 bunka)</option>
+                <option value="bigbang-lumpy">Velky tresk (zrnity)</option>
                 <option value="noise">Sum (Jeansova nestabilita)</option>
                 <option value="two-bodies">Dve telesa</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Hranice</span>
+              <select id="boundaryInput">
+                <option value="torus" selected>Torus (periodicka, bez ztrat)</option>
+                <option value="void">Void (otevreny vesmir, ztraty)</option>
               </select>
             </label>
             <label class="field">
@@ -94,23 +102,23 @@
             <h2>Sily</h2>
             <label class="field">
               <span>Radiace (coeff)</span>
-              <input id="coeffInput" type="range" min="0" max="0.166" step="0.001" value="0.080">
-              <output id="coeffValue">0.080</output>
+              <input id="coeffInput" type="range" min="0" max="0.166" step="0.001" value="0.020">
+              <output id="coeffValue">0.020</output>
             </label>
             <label class="field">
               <span>Gravitace (sila)</span>
-              <input id="gravInput" type="range" min="0" max="0.3" step="0.001" value="0.030">
-              <output id="gravValue">0.030</output>
+              <input id="gravInput" type="range" min="0" max="0.3" step="0.001" value="0.120">
+              <output id="gravValue">0.120</output>
             </label>
             <label class="field">
               <span>Gravitace (dosah R)</span>
-              <input id="radiusInput" type="range" min="1" max="8" step="1" value="3">
-              <output id="radiusValue">3</output>
+              <input id="radiusInput" type="range" min="1" max="8" step="1" value="4">
+              <output id="radiusValue">4</output>
             </label>
             <label class="field">
               <span>Tlak (sila)</span>
-              <input id="pressureInput" type="range" min="0" max="2" step="0.01" value="0.50">
-              <output id="pressureValue">0.50</output>
+              <input id="pressureInput" type="range" min="0" max="2" step="0.01" value="0.20">
+              <output id="pressureValue">0.20</output>
             </label>
             <label class="field">
               <span>Tlak (exponent gamma)</span>
@@ -124,8 +132,8 @@
             </label>
             <label class="field">
               <span>Sum (lameni symetrie)</span>
-              <input id="noiseInput" type="range" min="0" max="0.2" step="0.001" value="0.020">
-              <output id="noiseValue">0.020</output>
+              <input id="noiseInput" type="range" min="0" max="0.2" step="0.001" value="0.080">
+              <output id="noiseValue">0.080</output>
             </label>
           </section>
 
