@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <title>Aenternis - Prototyp 11</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Aenternis / laboratorni prototyp</p>
+          <h1>Gravitace a tlak vs. radiace</h1>
+        </div>
+        <div class="step-readout">
+          <span>Takt</span>
+          <strong id="stepValue">0</strong>
+          <span id="phaseValue" class="phase">-</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="viewport-panel" aria-label="Vizualizace rezu sveta">
+          <div class="canvas-toolbar">
+            <div class="axis-control" aria-label="Osa rezu">
+              <label><input type="radio" name="axis" value="z" checked><span>Z</span></label>
+              <label><input type="radio" name="axis" value="y"><span>Y</span></label>
+              <label><input type="radio" name="axis" value="x"><span>X</span></label>
+            </div>
+            <label class="slice-control">
+              <span>Rez</span>
+              <input id="sliceInput" type="range" min="0" max="31" value="16">
+              <output id="sliceValue">16</output>
+            </label>
+          </div>
+          <canvas id="worldCanvas" width="640" height="640" aria-label="Heatmapa hustoty"></canvas>
+          <div class="legend" aria-label="Legenda heatmapy">
+            <span>ridke</span>
+            <div class="legend-bar"></div>
+            <span>huste</span>
+          </div>
+        </section>
+
+        <aside class="control-panel" aria-label="Ovladani prototypu">
+          <section class="panel-section">
+            <h2>Beh</h2>
+            <div class="button-row">
+              <button id="runButton" type="button">Spustit</button>
+              <button id="stepButton" type="button">Krok</button>
+              <button id="resetButton" type="button">Reset</button>
+            </div>
+            <label class="field">
+              <span>Scenar</span>
+              <select id="presetInput">
+                <option value="bigbang" selected>Velky tresk (1 bunka)</option>
+                <option value="noise">Sum (Jeansova nestabilita)</option>
+                <option value="two-bodies">Dve telesa</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Kroky / frame</span>
+              <input id="stepsPerFrameInput" type="number" min="1" max="200" step="1" value="1">
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Pole</h2>
+            <label class="field">
+              <span>Rozmer</span>
+              <select id="sizeInput">
+                <option value="16">16^3</option>
+                <option value="32" selected>32^3</option>
+                <option value="48">48^3</option>
+                <option value="64">64^3</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Energie</span>
+              <input id="energyInput" type="number" min="1" step="1000" value="1000000">
+            </label>
+            <label class="field">
+              <span>Barevne meritko</span>
+              <select id="scaleInput">
+                <option value="auto" selected>Aktualni maximum (log)</option>
+                <option value="initial">Pocatecni maximum (log)</option>
+                <option value="mean">Prumer = stred</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Sily</h2>
+            <label class="field">
+              <span>Radiace (coeff)</span>
+              <input id="coeffInput" type="range" min="0" max="0.166" step="0.001" value="0.080">
+              <output id="coeffValue">0.080</output>
+            </label>
+            <label class="field">
+              <span>Gravitace (sila)</span>
+              <input id="gravInput" type="range" min="0" max="0.3" step="0.001" value="0.030">
+              <output id="gravValue">0.030</output>
+            </label>
+            <label class="field">
+              <span>Gravitace (dosah R)</span>
+              <input id="radiusInput" type="range" min="1" max="8" step="1" value="3">
+              <output id="radiusValue">3</output>
+            </label>
+            <label class="field">
+              <span>Tlak (sila)</span>
+              <input id="pressureInput" type="range" min="0" max="2" step="0.01" value="0.50">
+              <output id="pressureValue">0.50</output>
+            </label>
+            <label class="field">
+              <span>Tlak (exponent gamma)</span>
+              <input id="gammaInput" type="range" min="1" max="3" step="0.1" value="2.0">
+              <output id="gammaValue">2.0</output>
+            </label>
+            <label class="field">
+              <span>Krok (dt)</span>
+              <input id="dtInput" type="range" min="0.02" max="1" step="0.02" value="0.40">
+              <output id="dtValue">0.40</output>
+            </label>
+            <label class="field">
+              <span>Sum (lameni symetrie)</span>
+              <input id="noiseInput" type="range" min="0" max="0.2" step="0.001" value="0.020">
+              <output id="noiseValue">0.020</output>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <h2>Metriky</h2>
+            <dl class="metrics">
+              <div><dt>Energie v poli</dt><dd id="totalMetric">0</dd></div>
+              <div><dt>Ztraceno (void)</dt><dd id="leakedMetric">0</dd></div>
+              <div><dt>Max hustota</dt><dd id="maxMetric">0</dd></div>
+              <div><dt>Prumer</dt><dd id="meanMetric">0</dd></div>
+              <div><dt>Shluky</dt><dd id="clumpsMetric">0</dd></div>
+              <div><dt>Nerovnovaha</dt><dd id="imbalanceMetric">0</dd></div>
+            </dl>
+            <canvas id="graphCanvas" width="420" height="120" aria-label="Graf maxima, shluku a nerovnovahy"></canvas>
+          </section>
+
+          <section class="panel-section note-section">
+            <h2>Otazka</h2>
+            <p>Vznikne z prvotni entity nejdriv exploze (tlak) a pak stabilni shluky (gravitace), nebo se vsechno jen rozredi do voidu? Kde se protnou krivky gravitace a tlaku?</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>
