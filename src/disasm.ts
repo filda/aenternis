@@ -6,8 +6,9 @@
 // as a program listing instead of (or alongside) the raw hex dump.
 //
 // Variable-length instructions: a known opcode consumes `1 + args`
-// slots. If the opcode is unknown (> 0x16) or the instruction would
-// overrun the slot array, the slot is rendered as a single `raw 0x…`
+// slots. If the opcode is unknown (> 0x13, the VM's `Opcode::MAX`) or the
+// instruction would overrun the slot array, the slot is rendered as a
+// single `raw 0x…`
 // line. This is more conservative than the VM (which treats unknown
 // opcodes as nop) — for a static listing, "raw" honestly conveys "I
 // don't know what this is", which matches how the suffix slots (RNG
@@ -29,7 +30,7 @@ const DIR_NAMES: readonly string[] = Object.freeze(['xp', 'xn', 'yp', 'yn', 'zp'
 
 // Direction is always the first arg in these mnemonics (`docs/vm.md`).
 const DIR_ARG_OPS: ReadonlySet<string> = new Set([
-  'setp', 'getp', 'port', 'senergy', 'setpv', 'sinflow', 'srate',
+  'setp', 'getp', 'port', 'senergy', 'setpv',
 ]);
 
 const OPS_BY_CODE: ReadonlyMap<number, DecodedOp> = (() => {

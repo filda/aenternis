@@ -48,7 +48,7 @@ An opcode outside the implemented range (currently > 0x13) behaves like `nop` �
 | `0x0E` | `je a b t`    | 4 slots | `if mem[a % memSize] == mem[b % memSize]: PC = t % memSize` |
 | `0x0F` | `ldi a b`     | 3 slots | `mem[a] = mem[mem[b]]` — load indirect (read from runtime address stored in b) |
 | `0x10` | `sti a b`     | 3 slots | `mem[mem[a]] = mem[b]` — store indirect (write to runtime address stored in a) |
-| `0x11` | `setpv d a`   | 3 slots | `pointers[d mod DIRS] = mem[a]` — `setp` with a runtime-computed value |
+| `0x11` | `setpv d a`   | 3 slots | `pointers[d mod DIRS] = mem[a] % memSize` — `setp` with a runtime-computed value |
 | `0x12` | `sid a`       | 2 slots | `mem[a] = own origin_tag` — call-sign instruction (UI layer) |
 | `0x13` | `paint v`     | 2 slots | `appearance = v` — war paint (UI layer, does not affect physics) |
 | `0x14` | `sinflow d a` | 3 slots | *(planned, not implemented)* `mem[a % memSize] = number of slots received from direction d mod DIRS in the last tick` |

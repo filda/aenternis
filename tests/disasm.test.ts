@@ -71,9 +71,13 @@ describe('disassemble — known opcodes', () => {
     expect(disassemble([OPCODES.paint!.code, 0xCAFE])).toBe('  0000: paint 0xcafe');
   });
 
-  it('honors direction operand on sinflow / srate', () => {
-    expect(disassemble([OPCODES.sinflow!.code, 3, 0x20])).toBe('  0000: sinflow yn, 0x20');
-    expect(disassemble([OPCODES.srate!.code, 4, 0x20])).toBe('  0000: srate zp, 0x20');
+  it('renders planned-but-unimplemented sensors (0x14–0x16) as raw', () => {
+    // sinflow/sself/srate are specified in docs/vm.md but the VM stops at
+    // 0x13 (Opcode::MAX). The disassembler must not invent mnemonics the
+    // VM cannot run — in real memory these low bytes are RNG noise.
+    expect(disassemble([0x14])).toBe('  0000: raw 0x00000014');
+    expect(disassemble([0x15])).toBe('  0000: raw 0x00000015');
+    expect(disassemble([0x16])).toBe('  0000: raw 0x00000016');
   });
 
   it('hex/decimal boundary at 10', () => {
@@ -88,7 +92,7 @@ describe('disassemble — known opcodes', () => {
 });
 
 describe('disassemble — raw fallback', () => {
-  it('renders unknown opcodes (> 0x16) as raw', () => {
+  it('renders unknown opcodes (> 0x13) as raw', () => {
     expect(disassemble([0xFF])).toBe('  0000: raw 0x000000ff');
     expect(disassemble([0x17])).toBe('  0000: raw 0x00000017');
   });
@@ -168,8 +172,6 @@ describe('disassemble — round-trip with assembler', () => {
       'port yp, 2',
       'senergy yn, 3',
       'setpv zp, 4',
-      'sinflow zn, 5',
-      'srate xp, 6',
     ].join('\n');
     const { slots, errors } = assemble(src);
     expect(errors).toEqual([]);
@@ -180,8 +182,6 @@ describe('disassemble — round-trip with assembler', () => {
       '  0006: port yp, 2',
       '  0009: senergy yn, 3',
       '  000c: setpv zp, 4',
-      '  000f: sinflow zn, 5',
-      '  0012: srate xp, 6',
     ]);
   });
 });

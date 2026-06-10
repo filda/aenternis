@@ -22,9 +22,14 @@
 //   - hex integers: `0x1A`, `0XFF`
 //   - label references (resolved to the slot offset of the label)
 //
-// Mnemonics match `docs/vm.md` 1:1. The opcode count and operand count
-// are derived from `OPCODES` below; adding a new opcode only requires
-// extending that map (and the Rust VM, of course).
+// Mnemonics cover the *implemented* opcodes from `docs/vm.md` — the ones
+// the Rust VM actually executes (0x00–0x13, `Opcode::MAX`). The planned
+// sensors `sinflow`/`sself`/`srate` (0x14–0x16) are deliberately absent:
+// the VM treats them as `nop` and advances the PC by 1 slot, so assembling
+// `sinflow d, a` as three slots would desync the PC and corrupt the rest
+// of the program. Until the VM implements them they surface as
+// `unknown mnemonic` errors. Adding a new opcode requires extending this
+// map (and the Rust VM, of course).
 
 export interface Opcode {
   readonly code: number;
@@ -52,9 +57,6 @@ export const OPCODES: Readonly<Record<string, Opcode>> = Object.freeze({
   setpv:   { code: 0x11, args: 2 }, // d, a
   sid:     { code: 0x12, args: 1 }, // a
   paint:   { code: 0x13, args: 1 }, // v
-  sinflow: { code: 0x14, args: 2 }, // d, a
-  sself:   { code: 0x15, args: 1 }, // a
-  srate:   { code: 0x16, args: 2 }, // d, a
 });
 
 export const DIRECTIONS = Object.freeze({

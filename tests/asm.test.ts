@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { OPCODES, DIRECTIONS, resolveOperand, assemble } from '../src/asm.ts';
 
 describe('OPCODES table', () => {
-  it('has 23 entries matching the Rust VM', () => {
-    expect(Object.keys(OPCODES)).toHaveLength(23);
+  it('has 20 entries matching the Rust VM (Opcode::COUNT)', () => {
+    expect(Object.keys(OPCODES)).toHaveLength(20);
   });
 
   it('opcode codes are unique', () => {
@@ -170,6 +170,19 @@ describe('assemble — error reporting', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/line 2/);
     expect(errors[0]).toMatch(/unknown mnemonic/);
+  });
+
+  it('rejects planned-but-unimplemented sensors as unknown mnemonics', () => {
+    // sinflow/sself/srate are specified in docs/vm.md but the VM stops at
+    // 0x13. Accepting them would emit slots the VM mis-decodes as nop,
+    // desyncing the PC and corrupting the rest of the program — so the
+    // assembler must refuse them rather than silently lay them out.
+    for (const mnemonic of ['sinflow zn, 5', 'sself 0', 'srate xp, 6']) {
+      const { slots, errors } = assemble(mnemonic);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/unknown mnemonic/);
+      expect(slots).toHaveLength(0);
+    }
   });
 
   it('reports wrong arg count', () => {
