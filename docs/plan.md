@@ -119,9 +119,9 @@ PC stays numerically the same across the insert (body-snatch vs. continuity per 
 
 **Visual observable:** before phase 5 the WASM 3D viewer rendered a uniform "potato"; after phase 5 it shows the same wisps and local concentrations as JS prototype 9. The fix wasn't iteration order, it was a missing physical mechanic.
 
-### Phase 6 — Sensors ✓
+### Phase 6 — Sensors (partial — data plumbing only)
 
-`Sinflow` (0x14), `Sself` (0x15), `Srate` (0x16) opcodes wired through `Cell::inflow`, `vm::execute_instruction`, and the inflow-tracking pass in `tick::apply_outflow`. Programs can now observe (a) how many slots arrived from each face in the last tick, (b) their own current energy / memSize, (c) their own combined per-direction rate. Total opcode count: 23 of 256 (= 9 % density). **Done 2026-05-04.**
+The inflow-tracking groundwork landed: `Cell::inflow` records how many slots arrived from each face in the last tick (refreshed by the inflow pass in `tick::apply_outflow`, persisted across `end_of_tick`). The three sensor **opcodes** that would expose this and the cell's own state to programs — `sinflow` (0x14), `sself` (0x15), `srate` (0x16) — were **not** added. The VM still tops out at `Opcode::MAX = 0x13`, i.e. **20 opcodes** (`nop`…`paint`), a 20/256 ≈ 7.8 % density. So a program cannot yet read its own inflow / energy / rate; that work stays on the backlog ("Done in design → Sensors" above and `vm.md`'s planned extensions).
 
 ### Phase 7 — Program injection ✓
 
@@ -132,6 +132,7 @@ WASM exposes this as `World.newWithProgram(seed, energy, Uint32Array)`. The fron
 This closes the prototype-9 parity gap on the initial-state semantics: pure RNG noise (random emergence) vs deterministic seeded program (intentional experiments) is now a textarea-level choice rather than a code-level one. Mnemonic assembler (parsing `set 5, 42` etc. into slots) is still pending — see "Later". **Done 2026-05-04.**
 
 ### Later
+- **Gravitace, tlak a hustotní mutace** — koncentrační síla soupeřící s radiací (gravitace `~1/r²` na hmotu `m = α·E`), tlak `∝ ρ^γ` jako protitlak, a seedované překlápění bitů s pravděpodobností rostoucí v gravitačních dolech (mutagenní kotle evoluce). Vstupuje jako další člen do per-směrové rate v `tick.rs`, se zachováním determinismu a konzervace; setrvačnost/hybnost vědomě zamítnuta (svět hýbe energií, ne hmotou). Fyzika ověřena v `prototypes/11-gravity/`. Plán a otevřené otázky: **`docs/gravity-plan.md`**. Předpoklad: hustší instrukční sada (viz Z80-density níže).
 - **Mnemonic assembler / disassembler** — phase 7 lands raw u32 program injection; the next step is parsing `set 5, 42` / `port 0, 10` / `jmp 0` mnemonics into slots, plus rendering the inspector's memory dump as a disassembly with PC marker. Pairs naturally with preset programs (`burner`, `repli`, `orbiter`) that prototype 9 had.
 - **Lineage tracker** + manual tag + war paint as a UI overlay.
 - **Z80-density opcodes**: bitwise, arithmetic, conditional jumps, stack. Goal: ~60 % meaningful opcodes for emergent appearance from random noise.

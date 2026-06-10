@@ -1,14 +1,14 @@
 # Aenternis — open questions and resolved decisions
 
-Last updated: 2026-05-01
+Last updated: 2026-06-11 (synced to actual engine state — dominance implemented, sensor opcodes still pending)
 
 This document collects questions about the world's mechanics — both active (waiting for a decision or experiment) and resolved (with the decision and a pointer to where it landed).
 
 ## Active open questions
 
-### Implementation of dominance / intrusion (point 8)
+### Calibration of dominance / intrusion (point 8)
 
-The collision-as-soft-mixing-of-continuities mechanic is described in `mechanics.md` (section "Collision as soft mixing of continuities"), but not yet implemented. Open details:
+The collision-as-soft-mixing-of-continuities mechanic (`mechanics.md`, "Collision as soft mixing of continuities") is **implemented** in the Rust core (`tick::apply_outflow`, roadmap Phase 5, 2026-05-04). What remains open is tuning, not implementation:
 
 - Calibration of `move_threshold` (default 2.0, to be tuned experimentally)
 - The `intrusion_depth(dominance)` function — currently linear `dominance * memSize`, possibly exponential
@@ -17,10 +17,10 @@ The collision-as-soft-mixing-of-continuities mechanic is described in `mechanics
 
 ### Identity and tracking
 
-- Implementing the lineage tracker in the UI (Hamming-distance match on low addresses, "follow this entity")
-- Manual cell tagging in the UI with visualization
-- Rule for dominance-propagation of the tag (does the target inherit the attacker's origin_tag when dominance > X?)
-- Optional: opcodes `sid` (read self-tag) and `paint` (set appearance)
+- Implementing the lineage tracker in the UI (Hamming-distance match on low addresses, "follow this entity") — still open
+- Manual cell tagging in the UI with visualization — still open
+- Rule for dominance-propagation of the tag — **resolved & implemented**: the target inherits the attacker's `origin_tag` when top dominance ≥ 0.5 (Phase 5)
+- Opcodes `sid` (read self-tag) and `paint` (set appearance) — **implemented** (0x12 / 0x13, 2026-05-02)
 
 ### Sensors and communication
 
@@ -68,7 +68,7 @@ The current density of meaningful opcodes is ~8 % (20 / 256 in prototype 6). For
 | 5 | Ignition | An active contribution to outflow, not a special movement force. `combined_rate = natural + active`. `mechanics.md`. |
 | 6 | Pointer layout | Layout reacts to combined_rate within the current tick (sub-tick reflow). Implemented in prototypes 5 and 6. |
 | 7 | Ignition strength | Programmable, with real risk. Trade-off: stronger is not automatically better. `mechanics.md`. |
-| 8 | Collision | Soft mixing of continuities through dominance / intrusion. **Designed, awaiting implementation.** |
+| 8 | Collision | Soft mixing of continuities through dominance / intrusion. **Implemented** (Rust core, Phase 5, 2026-05-04); `move_threshold` calibration still open. |
 | 9 | Core / membrane | Emergent layers, not implemented rules. `mechanics.md`. |
 | 10 | Diagonals | Physically impossible — no shared 2D interface between corners. `mechanics.md`. |
 | 11 | Velocity / inertia | Do not exist. Every tick re-evaluates from scratch. `mechanics.md`. |

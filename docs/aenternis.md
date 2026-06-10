@@ -47,12 +47,15 @@ Concretely:
 - **[`vm.md`](vm.md)** — virtual machine specification, instruction set, slot format
 - **[`questions.md`](questions.md)** — open questions and resolved decisions
 - **[`prototypes.md`](prototypes.md)** — series of laboratory prototypes and what each one verifies
-- **[`plan.md`](plan.md)** — current implementation status and planned extensions
+- **[`plan.md`](plan.md)** — current implementation status and planned extensions (single source of truth for status)
+- **[`gravity-plan.md`](gravity-plan.md)** — design for gravity / pressure / density-coupled mutation (awaiting a denser instruction set)
+- **[`optimalizace-2026-05.md`](optimalizace-2026-05.md)** — archive of the May 2026 core-optimization wave (what landed, what was reverted, why)
+- **[`native-server.md`](native-server.md)** — dev runbook for the native WebSocket backend (`aenternis-server`)
 
 ## Project status
 
-Eight laboratory web prototypes live in `prototypes/` (`01-diffusion`, `02-memory`, `03-vm`, `04-ports`, `05-pointers`, `06-cooperation`, `07-perf-3d`, `08-viewer-3d`). Each prototype verifies a specific layer of physics or programmer interface. Details in `prototypes.md`.
+A series of laboratory web prototypes lives in `prototypes/` — each verifies a specific layer of physics or programmer interface (details in `prototypes.md`). The production engine has since moved to a **Rust + WASM core** (`crates/`), with a sparse, unbounded world replacing the toroidal grid. Implementation status and roadmap are tracked in `plan.md`.
 
-The VM currently has 20 opcodes in the latest 2D variant (prototype 6), and 12 in the older 3D variant (prototype 5). Density of meaningful opcodes is ~8 % — sufficient for writing simple cooperative programs, sparse for emergence from pure noise. Instruction-set extensions will come when needed.
+The VM currently has **20 opcodes** (`0x00`–`0x13`, `nop`…`paint`) — a meaningful-opcode density of ~8 %, sufficient for simple hand-written programs but sparse for emergence from pure noise. Instruction-set extensions come when needed.
 
-The next stages are **dominance + intrusion_depth** (collision as soft mixing of continuities), **lineage tracker / war paint** (a UI layer for the player), and **expansion of sensors** (`sinflow`, `sself`, `srate`).
+**Done:** diffusion + VM tick, dominance / intrusion (collision as soft mixing), WASM + Three.js viewer, inspector, program injection. **Backlog:** sensor opcodes (`sinflow`, `sself`, `srate` — only the inflow-tracking data exists so far), lineage tracker / war-paint UI, a denser (Z80-level) instruction set, and gravity / pressure / density-coupled mutation (see `gravity-plan.md`).

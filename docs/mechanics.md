@@ -222,7 +222,7 @@ Combat shifts from direct damage to:
 
 Drain as a standalone instruction **does not exist**. This was a deliberate decision (consolidation 2026-05-01, point 4): a cell cannot directly steal energy, only modify its own outflow.
 
-## Collision as soft mixing of continuities (proposal)
+## Collision as soft mixing of continuities
 
 Collision is not a binary "moved / didn't move." A softer model:
 
@@ -265,7 +265,7 @@ When several inflows arrive at once with different dominance:
 3. weaker inflows stack on top of those
 4. the weakest stays at the surface
 
-**Status:** the dominance / intrusion mechanic is designed but not yet implemented. See `questions.md` and `plan.md`.
+**Status:** implemented in the Rust core (`tick::apply_outflow`, roadmap Phase 5, 2026-05-04). `move_threshold` is a public field on `SparseWorld`, default `2.0`. Calibration of `move_threshold` and the exact `intrusion_depth(dominance)` curve remain open tuning questions — see `questions.md` and `plan.md`.
 
 ## Communication and intrigue
 
@@ -303,7 +303,7 @@ The question of how to initialize the program of the initial cells largely resol
 
 The question reduces from "how to initialize" to "how to make sure this phase doesn't last 500 million ticks" — that one stays open.
 
-Because of the 8-bit address limitation (and a practical cap of 4096 slots), it is **impossible to put "all the world's energy in one cell"**. The big bang is a **dense region** of maximally saturated cells, not a singularity. That is physically more accurate than a mathematical singularity.
+In the sparse production engine the big bang is literally **one origin cell holding all the world's energy**; the world then expands outward by alloc-on-write as energy diffuses into the void. There is no `MAX_MEMORY` / 4096-slot cap and no 8-bit address limit — addresses are 32-bit slot values taken modulo the cell's current `memSize` (`vm.md`, "Addressing"), so a single cell can legitimately hold the whole world at tick 0. (An earlier design assumed a per-cell slot cap forcing a "dense region of saturated cells, not a singularity"; the engine does not impose that cap, so the singular origin cell is the actual initial condition — see `questions.md`, "Resolved on initialization".)
 
 ## Self-encapsulation and multi-cellular organisms
 
