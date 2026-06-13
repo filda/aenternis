@@ -22,3 +22,5 @@ perf.data*
 # cargo-mutants output (current run + rotated previous run)
 mutants.out/
 mutants.out.old/
+/prototypes/10-render-tuner/snapshot.bin
+/prototypes/10-render-tuner/snapshot.meta.json
