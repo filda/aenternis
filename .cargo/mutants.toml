@@ -18,6 +18,18 @@ exclude_re = [
     # invisible to any deterministic snapshot.
     "rng\\.rs:.*replace < with <= in Rng::stochastic_floor",
 
+    # The three `coord.x + off.x` (and y, z) offset additions in
+    # `refresh_mass` flipped to `-`. Equivalent by stencil symmetry: the
+    # gravity stencil contains an offset `(a,b,c)` iff it contains
+    # `(-a,b,c)` (the cutoff `a²+b²+c² ≤ R²` and weight `1/|d|` depend only
+    # on the squared components), so negating any single axis is a
+    # weight-preserving bijection of the stencil. The mass sum
+    # `Σ E(c+off)·w` is therefore *identical* whether each axis is added or
+    # subtracted — no input can distinguish them. (Note this is the bare
+    # `+`; the `acc += e*w` accumulation flipped to `-=` is a different,
+    # non-equivalent mutant and is caught.)
+    "tick\\.rs:.*replace \\+ with - in refresh_mass",
+
     # `next_f64() < p_flip` vs `<=` in `apply_density_coupled_mutation`.
     # Same measure-zero argument as `stochastic_floor` above: the two
     # comparisons differ only when `next_f64()` (a `k / 2^32` value)

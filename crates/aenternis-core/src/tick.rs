@@ -91,13 +91,14 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     let gamma = world.pressure_gamma;
     let eref = world.pressure_eref;
     let alpha = world.gravity_alpha;
+    let radius = world.gravity_radius;
 
-    // Gravitational mass `M = α·Σ E_nbr` is only needed when gravity is
-    // on. On the gravity-off path `scratch_mass` stays empty and is
+    // Gravitational mass `M = α·Σ E(c+d)/|d|` is only needed when gravity
+    // is on. On the gravity-off path `scratch_mass` stays empty and is
     // never read, so the gravity-off cost (and the frozen baselines)
     // are untouched.
     if gravity != 0.0 {
-        refresh_mass(world, alpha);
+        refresh_mass(world, alpha, radius);
     }
 
     let world_seed = world.world_seed;
@@ -285,47 +286,91 @@ fn refresh_neighbor_energies(world: &mut SparseWorld) {
     par_or_seq_iter_mut!(snapshot, body);
 }
 
-/// Rebuild [`SparseWorld::scratch_mass`] — the gravitational mass
-/// `M(c) = gravity_alpha · Σ_{6 nbrs} E_nbr` for every cell, derived from
-/// the already-built [`SparseWorld::scratch_neighbor_energies`]. With
-/// cutoff radius R = 1 every neighbor is at distance `|d| = 1`, so the
-/// `1/|d|` potential kernel is the identity and `M` is just the
-/// (α-scaled) neighbor-energy sum.
+/// Build the gravitational stencil for cutoff radius `R`: every integer
+/// offset `d` with `0 < |d| ≤ R`, paired with its `1/r` kernel weight
+/// `1/|d|`. Offsets are emitted in a fixed `(dz, dy, dx)`-ascending order
+/// so the downstream mass sum is reproducible.
 ///
-/// **Exactness / determinism:** the six `u32` neighbor energies sum
-/// without overflow in `u64` (≤ 6·2³² < 2³⁵) and convert to `f64`
-/// exactly; the single `α·sum` multiply is one correctly-rounded step.
-/// The sum walks the fixed `Direction::ALL` array order, so the result is
-/// independent of iteration order — bit-identical sequential or parallel.
+/// Weights use only `sqrt` and `/`, both IEEE-754 correctly-rounded on
+/// every target, so the stencil — and the masses built from it — are
+/// bit-for-bit identical across native and wasm. `R ≤ 0` yields an empty
+/// stencil (mass everywhere `0`, i.e. gravity inert).
+fn gravity_stencil(radius: i32) -> Vec<(Coord, f64)> {
+    let r = radius.max(0);
+    let r2 = r * r;
+    let mut stencil = Vec::new();
+    for dz in -r..=r {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let d2 = dx * dx + dy * dy + dz * dz;
+                if d2 > 0 && d2 <= r2 {
+                    // `f64::from(i32)` is lossless; `sqrt` + `/` are
+                    // correctly-rounded → portable weight.
+                    let weight = 1.0 / f64::from(d2).sqrt();
+                    stencil.push((Coord::new(dx, dy, dz), weight));
+                }
+            }
+        }
+    }
+    stencil
+}
+
+/// Rebuild [`SparseWorld::scratch_mass`] — the gravitational potential
+/// `M(c) = gravity_alpha · Σ_{0<|d|≤R} E(c+d) / |d|`, evaluated with the
+/// [`gravity_stencil`] for the world's `gravity_radius`.
 ///
-/// Only called when [`SparseWorld::gravity`] is non-zero; a void coord
-/// never gets an entry, so [`compute_natural_rates`] reads its mass as
-/// `0.0` (gravity holds energy against the open boundary, see
-/// `docs/gravity-plan.md`).
-fn refresh_mass(world: &mut SparseWorld, alpha: f64) {
-    let neighbor_energies = &world.scratch_neighbor_energies;
-    let mass = &mut world.scratch_mass;
-    // Keyset sync against the neighbor-energy snapshot (itself synced to
-    // `world.cells` by `refresh_neighbor_energies`): drop stale, insert
-    // zero for new coords — same reuse pattern, no per-tick churn.
-    mass.retain(|coord, _| neighbor_energies.contains_key(coord));
-    mass.reserve(neighbor_energies.len().saturating_sub(mass.len()));
-    for coord in neighbor_energies.keys() {
-        mass.entry(*coord).or_default();
+/// **Keyset = occupied ∪ face-shell.** `M` is computed not only at every
+/// live cell but also at each *face neighbor* of a live cell, including
+/// void ones — because [`compute_natural_rates`] reads `M` at those
+/// face neighbors to decide flow, and a void point near distant mass has
+/// a real (non-zero) potential. Computing it here (rather than on the fly
+/// in the rate loop) is what lets that loop borrow `scratch_mass` while
+/// it mutably walks `world.cells`, with no aliasing.
+///
+/// **Determinism:** each cell's sum walks the stencil in its fixed order
+/// over `f64` values produced only by correctly-rounded ops, so the
+/// result is independent of cell iteration order — bit-identical
+/// sequential or parallel, native or wasm.
+///
+/// **Cost:** `O((N + shell)·R³)`. Only called when
+/// [`SparseWorld::gravity`] is non-zero.
+//
+// `suboptimal_flops`: the `acc += e*weight` accumulation must stay
+// separate ops — `mul_add`'s single rounding is not portable native↔wasm.
+#[allow(clippy::suboptimal_flops)]
+fn refresh_mass(world: &mut SparseWorld, alpha: f64, radius: i32) {
+    let stencil = gravity_stencil(radius);
+
+    // Keyset: every live cell plus its six face neighbors (the coords the
+    // rate loop will query `M` at). Cleared and rebuilt each tick; `clear`
+    // retains the backing capacity so there's no per-tick allocator churn.
+    {
+        let cells = &world.cells;
+        let mass = &mut world.scratch_mass;
+        mass.clear();
+        for coord in cells.keys() {
+            mass.entry(*coord).or_insert(0.0);
+            for &d in &Direction::ALL {
+                mass.entry(coord.neighbor(d)).or_insert(0.0);
+            }
+        }
     }
 
+    let cells = &world.cells;
+    let stencil = &stencil;
     let body = |coord: &Coord, m: &mut f64| {
-        let row = neighbor_energies
-            .get(coord)
-            .copied()
-            .unwrap_or([0; Direction::COUNT]);
-        let sum: u64 = row.iter().map(|&e| u64::from(e)).sum();
-        #[allow(clippy::cast_precision_loss)] // sum < 2^35, exact in f64
-        let mass_value = alpha * sum as f64;
-        *m = mass_value;
+        let mut acc = 0.0_f64;
+        for (off, weight) in stencil {
+            let nc = Coord::new(coord.x + off.x, coord.y + off.y, coord.z + off.z);
+            let e = cells.get(&nc).map_or(0, Cell::energy);
+            // Plain `+ x*w`, never `mul_add`: FMA's single rounding is not
+            // portable native↔wasm and would break reproducibility.
+            acc += f64::from(e) * weight;
+        }
+        *m = alpha * acc;
     };
 
-    par_or_seq_iter_mut!(mass, body);
+    par_or_seq_iter_mut!(&mut world.scratch_mass, body);
 }
 
 /// Per-cell, per-direction slot copies collected from the outflow phase.
@@ -1873,8 +1918,44 @@ mod gravity_unit_tests {
     //! `world.scratch_mass` (`pub(crate)`), which the external
     //! integration tests in `tests/tick_gravity.rs` cannot touch.
 
-    use super::{compute_natural_rates, gamma_pow, pressure_pi};
+    use super::{compute_natural_rates, gamma_pow, gravity_stencil, pressure_pi};
     use crate::{Coord, SparseWorld};
+
+    // ----- gravity_stencil: the 1/r kernel offsets ---------------------
+
+    #[test]
+    fn stencil_radius_one_is_the_six_unit_faces() {
+        let s = gravity_stencil(1);
+        assert_eq!(s.len(), 6, "R=1 reaches only the six |d|=1 faces");
+        assert!(
+            s.iter().all(|&(_, w)| w == 1.0),
+            "unit faces have weight 1/1"
+        );
+    }
+
+    #[test]
+    fn stencil_radius_two_has_the_full_shell_with_inverse_distance_weights() {
+        let s = gravity_stencil(2);
+        // |d|²∈{1,2,3,4}: 6 faces + 12 edges + 8 corners + 6 axis-2 = 32.
+        assert_eq!(s.len(), 32);
+        // A face (|d|=1 → w=1), a face-diagonal (|d|=√2 → w=1/√2), and an
+        // axis-2 offset (|d|=2 → w=1/2) carry the inverse-distance weight.
+        let weight_of = |dx, dy, dz| {
+            s.iter()
+                .find(|&&(o, _)| o == Coord::new(dx, dy, dz))
+                .map(|&(_, w)| w)
+                .unwrap()
+        };
+        assert_eq!(weight_of(1, 0, 0), 1.0);
+        assert_eq!(weight_of(1, 1, 0), 1.0 / 2.0_f64.sqrt());
+        assert_eq!(weight_of(2, 0, 0), 0.5);
+    }
+
+    #[test]
+    fn stencil_is_empty_for_nonpositive_radius() {
+        assert!(gravity_stencil(0).is_empty());
+        assert!(gravity_stencil(-3).is_empty());
+    }
 
     // ----- gamma_pow: the portable exponent chains --------------------
 

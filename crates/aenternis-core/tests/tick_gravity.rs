@@ -89,11 +89,13 @@ fn gravity_makes_a_cell_emit_toward_higher_local_mass() {
 
 #[test]
 fn gravity_suppresses_outflow_into_the_void() {
-    // H(300) — O(100) — void. Without gravity O emits 100*0.15 = 15 into
-    // the void on +x. With gravity, O has mass-bearing neighbor H so
-    // M_O = alpha*300 while the void has M = 0; the gravity term
-    // 0.1*(0 - M_O) pulls the drive down, so O leaks *less* into the
-    // void. A sign flip would make it leak *more*.
+    // H(300) — O(100) — void(2,0,0). Without gravity O emits 100*0.15 = 15
+    // into the void on +x. With gravity (radius 1): O's mass is
+    // M_O = alpha*E_H = 0.1*300 = 30, while the void point (2,0,0) has the
+    // smaller potential M = alpha*E_O = 0.1*100 = 10 (its only mass-bearing
+    // neighbor is O). Since M_O > M_void the gravity term 0.1*(10 - 30)
+    // pulls the outward drive down, so O leaks *less* into the void. A sign
+    // flip would make it leak *more*.
     let build = |gravity: f64, alpha: f64| {
         let mut w = SparseWorld::new(11);
         w.gravity = gravity;
@@ -108,8 +110,8 @@ fn gravity_suppresses_outflow_into_the_void() {
     let with = build(0.1, 0.1);
 
     assert_eq!(without, 15, "100 * 0.15 = 15 into the void without gravity");
-    // drive = 15 + 0 + 0.1*(0 - 0.1*300) = 15 - 3 = 12 → rate 12.
-    assert_eq!(with, 12, "gravity must hold energy back from the void");
+    // drive = 15 + 0 + 0.1*(10 - 30) = 15 - 2 = 13 → rate 13.
+    assert_eq!(with, 13, "gravity must hold energy back from the void");
     assert!(with < without);
 }
 
@@ -167,6 +169,36 @@ fn pressure_is_a_difference_not_a_sum_between_equal_neighbors() {
     assert_eq!(b.rates[Direction::Xn.index()], 0);
 }
 
+// ----- long-range reach (R > 1) ----------------------------------------------
+
+#[test]
+fn larger_radius_pulls_harder_toward_distant_mass() {
+    // A heavy mass at the origin and a light test cell three cells away
+    // along +x, with void in between. The test cell's emission *toward*
+    // the mass (its Xn face) should grow with the cutoff radius: at R=1
+    // the mass is out of reach, at R≥3 the cell's stencil spans the gap
+    // and it feels the pull. Radiation into the void is identical in both
+    // runs, so any increase is the long-range gravity term.
+    let toward_mass = |radius: i32| {
+        let mut w = SparseWorld::new(0x6203);
+        w.gravity = 0.3;
+        w.gravity_alpha = 0.1;
+        w.gravity_radius = radius;
+        w.insert_with_memory(Coord::new(0, 0, 0), &[1; 2000]); // heavy mass
+        w.insert_with_memory(Coord::new(3, 0, 0), &[1; 100]); // test cell
+        compute_natural_rates(&mut w, 0.15);
+        w.get(Coord::new(3, 0, 0)).unwrap().rates[Direction::Xn.index()]
+    };
+
+    let near = toward_mass(1);
+    let far = toward_mass(4);
+    assert!(
+        far > near,
+        "a larger cutoff radius must increase pull toward distant mass \
+         (R=1 → {near}, R=4 → {far})"
+    );
+}
+
 // ----- conservation ----------------------------------------------------------
 
 #[test]
@@ -192,6 +224,31 @@ fn conservation_holds_with_pressure_over_many_ticks() {
         step(&mut w, 0.15, 1);
         assert_eq!(w.total_energy(), e0, "pressure must conserve energy");
     }
+}
+
+#[test]
+fn conservation_and_determinism_hold_at_long_range() {
+    // Long-range gravity (R=3) must still conserve energy every tick and
+    // reproduce byte-for-byte from the seed.
+    let run = || {
+        let mut w = SparseWorld::big_bang(0x1010, 30_000);
+        w.gravity = 0.2;
+        w.gravity_alpha = 0.05;
+        w.gravity_radius = 3;
+        let e0 = w.total_energy();
+        for _ in 0..25 {
+            step(&mut w, 0.15, 1);
+            assert_eq!(
+                w.total_energy(),
+                e0,
+                "long-range gravity must conserve energy"
+            );
+        }
+        let mut fp: Vec<(Coord, u32)> = w.iter().map(|(c, cell)| (*c, cell.energy())).collect();
+        fp.sort_unstable();
+        fp
+    };
+    assert_eq!(run(), run(), "long-range gravity must be reproducible");
 }
 
 #[test]

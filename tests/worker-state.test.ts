@@ -23,6 +23,7 @@ describe('DEFAULT_STATE', () => {
       moveThreshold: 2.0,
       gravity: 0.0,
       gravityAlpha: 0.0,
+      gravityRadius: 1,
       pressure: 0.0,
       pressureGamma: 2.0,
       pressureEref: 1.0,
@@ -56,6 +57,7 @@ describe('stateFromInit', () => {
     const s = stateFromInit(baseInit);
     expect(s.gravity).toBe(DEFAULT_STATE.gravity);
     expect(s.gravityAlpha).toBe(DEFAULT_STATE.gravityAlpha);
+    expect(s.gravityRadius).toBe(DEFAULT_STATE.gravityRadius);
     expect(s.pressure).toBe(DEFAULT_STATE.pressure);
     expect(s.pressureGamma).toBe(DEFAULT_STATE.pressureGamma);
     expect(s.pressureEref).toBe(DEFAULT_STATE.pressureEref);
@@ -67,6 +69,7 @@ describe('stateFromInit', () => {
       ...baseInit,
       gravity: 0.2,
       gravityAlpha: 0.05,
+      gravityRadius: 4,
       pressure: 0.03,
       pressureGamma: 2.5,
       pressureEref: 8,
@@ -74,6 +77,7 @@ describe('stateFromInit', () => {
     });
     expect(s.gravity).toBe(0.2);
     expect(s.gravityAlpha).toBe(0.05);
+    expect(s.gravityRadius).toBe(4);
     expect(s.pressure).toBe(0.03);
     expect(s.pressureGamma).toBe(2.5);
     expect(s.pressureEref).toBe(8);
@@ -88,6 +92,7 @@ describe('applyConfig', () => {
     moveThreshold: 1.5,
     gravity: 0.1,
     gravityAlpha: 0.04,
+    gravityRadius: 2,
     pressure: 0.02,
     pressureGamma: 2.0,
     pressureEref: 4.0,
@@ -133,6 +138,7 @@ describe('applyConfig', () => {
     const s = applyConfig(before, baseCfg);
     expect(s.gravity).toBe(before.gravity);
     expect(s.gravityAlpha).toBe(before.gravityAlpha);
+    expect(s.gravityRadius).toBe(before.gravityRadius);
     expect(s.pressure).toBe(before.pressure);
     expect(s.pressureGamma).toBe(before.pressureGamma);
     expect(s.pressureEref).toBe(before.pressureEref);
@@ -144,6 +150,7 @@ describe('applyConfig', () => {
       ...baseCfg,
       gravity: 0.3,
       gravityAlpha: 0.06,
+      gravityRadius: 5,
       pressure: 0.05,
       pressureGamma: 3.0,
       pressureEref: 16,
@@ -151,6 +158,7 @@ describe('applyConfig', () => {
     });
     expect(s.gravity).toBe(0.3);
     expect(s.gravityAlpha).toBe(0.06);
+    expect(s.gravityRadius).toBe(5);
     expect(s.pressure).toBe(0.05);
     expect(s.pressureGamma).toBe(3.0);
     expect(s.pressureEref).toBe(16);

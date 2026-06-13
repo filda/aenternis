@@ -22,6 +22,7 @@ export interface InitMsg {
   // omitted fields fall back to the engine defaults (gravity/pressure off).
   readonly gravity?: number;
   readonly gravityAlpha?: number;
+  readonly gravityRadius?: number;
   readonly pressure?: number;
   readonly pressureGamma?: number;
   readonly pressureEref?: number;
@@ -36,6 +37,7 @@ export interface ConfigMsg {
   readonly moveThreshold?: number;
   readonly gravity?: number;
   readonly gravityAlpha?: number;
+  readonly gravityRadius?: number;
   readonly pressure?: number;
   readonly pressureGamma?: number;
   readonly pressureEref?: number;

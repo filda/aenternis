@@ -123,6 +123,15 @@ pub struct SparseWorld {
     /// neighborhood mass `M`. Default `0.0`.
     pub gravity_alpha: f64,
 
+    /// Cutoff radius `R` for the gravitational potential
+    /// `M(c) = gravity_alpha · Σ_{0<|d|≤R} E(c+d) / |d|` (a `1/r` kernel,
+    /// so the force falls off as `~1/r²`). `R = 1` reduces to the six
+    /// face neighbors (a purely local density); larger `R` lets distant
+    /// mass attract across voids — genuine long-range gravity — at an
+    /// `O(N·R³)` cost. Default `1`. Inactive while [`Self::gravity`] is
+    /// `0.0`. See `docs/gravity-plan.md`.
+    pub gravity_radius: i32,
+
     /// Pressure amplitude — the outward counter-force that grows with
     /// density. Enters the drive as `Π(E_c) − Π(E_nbr)` where
     /// `Π(E) = pressure · eref · (E/eref)^γ`. Default `0.0`.
@@ -309,6 +318,7 @@ impl SparseWorld {
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
             gravity: 0.0,
             gravity_alpha: 0.0,
+            gravity_radius: 1,
             pressure: 0.0,
             pressure_gamma: Self::DEFAULT_PRESSURE_GAMMA,
             pressure_eref: Self::DEFAULT_PRESSURE_EREF,

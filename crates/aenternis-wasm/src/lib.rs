@@ -298,6 +298,24 @@ impl World {
         self.inner.gravity_alpha
     }
 
+    /// Set the gravity cutoff radius `R` (default `1`). `R = 1` is local
+    /// (six face neighbors); larger `R` gives genuine long-range
+    /// attraction across voids at an `O(N·R³)` cost. See
+    /// `docs/gravity-plan.md`.
+    #[wasm_bindgen(js_name = setGravityRadius)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_gravity_radius(&mut self, radius: i32) {
+        self.inner.gravity_radius = radius;
+    }
+
+    /// Current gravity cutoff radius `R`.
+    #[wasm_bindgen(getter, js_name = gravityRadius)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn gravity_radius(&self) -> i32 {
+        self.inner.gravity_radius
+    }
+
     /// Set the pressure amplitude (default `0.0` = off).
     #[wasm_bindgen(js_name = setPressure)]
     #[allow(clippy::missing_const_for_fn)]

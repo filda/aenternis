@@ -170,21 +170,33 @@ tam, kde už VM a `active_outflow` žijí.
 ## Stav implementace (2026-06-13)
 
 ✅ **Hotovo, brána zelená** (`./check` ALL GREEN + `cargo mutants` na nových
-funkcích v `tick.rs` a na `snap_gamma`: 0 missed; jeden dokumentovaný equivalent
-mutant `< → <=` ve `.cargo/mutants.toml`).
+funkcích v `tick.rs` a na `snap_gamma`: 0 missed; dokumentované equivalent
+mutanty ve `.cargo/mutants.toml`: `< → <=` u mutace a `+ → -` u offsetů v
+`refresh_mass`, ten druhý je ekvivalentní symetrií stencilu).
 
 - **Gravitace + tlak** vstupují jako členy do per-směrové rate v
   `compute_natural_rates` (`tick.rs`): `drive = coeff·(E_c−E_nbr) + (Π(E_c)−Π(E_nbr))
   + gravity·(M_nbr−M_c)`, pak stávající `proportional_clamp`. Konzervace i invariant
   `energy == mem_len` beze změny.
-  - **Dosah R=1** (první milník): `M(c) = gravity_alpha·Σ E_nbr` se redukuje na součet
-    existující řady `scratch_neighbor_energies` → ~nulová přidaná cena, žádná O(N²)
-    struktura. Void coord ⇒ `M=0` (akrece drží energii proti úniku do voidu).
-    Širší dosah (cutoff R / Barnes–Hut) odložen, až měření ukáže potřebu.
+  - **Konfigurovatelný dosah `R` (`gravity_radius`, default 1).**
+    `M(c) = gravity_alpha·Σ_{0<|d|≤R} E(c+d)/|d|` přes předpočítaný **stencil**
+    (offsety + váhy `1/|d|`, jen `sqrt`/`/` ⇒ portable; pevné pořadí ⇒ determinismus).
+    `R=1` = lokální (6 stěnových sousedů); `R>1` dává **skutečnou přitažlivost přes
+    void** — energie se táhne dohromady přes vzdálenost (měřeno: počet buněk klesá
+    R=1→10k, R=3→5k, R=6→3k při 60k energie; viz vizuál konsolidace). Cena `O(N·R³)`.
+  - **`M` se počítá i ve voidu** (na „shellu" = stěnoví sousedi obsazených buněk),
+    protože rate loop tam čte potenciál a void bod blízko vzdálené hmoty má reálný
+    nenulový potenciál — to je nutné pro přitažlivost přes mezeru. `scratch_mass` je
+    proto klíčován na occupied ∪ shell, aby rate loop mohl číst `scratch_mass`, zatímco
+    mutuje `world.cells` (žádný borrow konflikt). Pozn.: tím se oproti úplně prvnímu
+    R=1 milníku (void→0) změnilo void-suppression chování — legitimní vylepšení modelu,
+    ne re-bless baseline (ty drží na `gravity=0`).
   - **Nulové defaulty = nulový re-bless.** `gravity=0 && pressure=0` bere zamrzlou
     fast-path (textově předgravitační kód) → všechny baseline (bit-parita,
     konzervace, determinismus) prošly **beze změny**. Aktivní cesta používá explicitní
     `if drive > 0.0`, nikdy `max(0,drive)` (jinak by ujídala RNG draw a desynchronizovala proud).
+  - **UI default `R=3`** (sweet spot: nejvyšší koncentrace ~21 %, silná konsolidace,
+    v sweepu nejnižší cena — méně buněk vyváží větší stencil).
 - **Tlak `Π(E)=pressure·eref·(E/eref)^γ`** — γ omezeno na **portable hodnoty
   `{1, 1.5, 2, 2.5, 3}`** počítané přes `*`/`sqrt` (IEEE correctly-rounded ⇒
   bit-for-bit reprodukovatelné native↔wasm). Libovolné γ by vyžadovalo `powf`
@@ -199,11 +211,11 @@ mutant `< → <=` ve `.cargo/mutants.toml`).
   v proudu (žádná per-slot doména). `base_mutation_rate=0` ⇒ strict no-op (žádné RNG).
   Coupling na `E` (ne `M`) drží fázi self-contained; coupling na `M`/kombinaci je
   ladicí knob ponechaný otevřený.
-- **Plumbing**: `SparseWorld` pole (`gravity`, `gravity_alpha`, `pressure`,
-  `pressure_gamma`, `pressure_eref`, `base_mutation_rate`, vše default 0/neutral)
-  → WASM settery/gettery → `protocol.ts`/`worker-state.ts`/`worker-handler.ts` →
-  slidery v `index.html` + listenery v `web/main.ts`.
+- **Plumbing**: `SparseWorld` pole (`gravity`, `gravity_alpha`, `gravity_radius`,
+  `pressure`, `pressure_gamma`, `pressure_eref`, `base_mutation_rate`, vše default
+  0/neutral/R=1) → WASM settery/gettery → `protocol.ts`/`worker-state.ts`/
+  `worker-handler.ts` → slidery v `index.html` + listenery v `web/main.ts`.
 
-**Odloženo (beze změny plánu):** dosah R>1 (cutoff/Barnes–Hut — až profiling ukáže,
-že úzké hrdlo není VM); libovolné γ přes `powf` (mimo reprodukovatelný režim);
+**Odloženo (beze změny plánu):** Barnes–Hut / strom (O(N log N) — cutoff `R` zatím
+stačí, úzké hrdlo zůstává VM); libovolné γ přes `powf` (mimo reprodukovatelný režim);
 coupling mutace na `M` vs kombinaci; native-server vrstva gravitace (zatím jen WASM viewer).

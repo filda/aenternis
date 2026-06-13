@@ -62,6 +62,7 @@ interface RuntimeConfig {
   moveThreshold: number;
   gravity: number;
   gravityAlpha: number;
+  gravityRadius: number;
   pressure: number;
   pressureGamma: number;
   pressureEref: number;
@@ -151,6 +152,7 @@ export function bootstrap(): void {
     // are UI starting points only.
     gravity: 0.12,
     gravityAlpha: 0.05,
+    gravityRadius: 3,
     pressure: 0.2,
     pressureGamma: 2.0,
     pressureEref: 8.0,
@@ -184,6 +186,8 @@ export function bootstrap(): void {
     gravityVal: requireEl('gravityVal', HTMLSpanElement),
     gravityAlpha: requireEl('gravityAlpha', HTMLInputElement),
     gravityAlphaVal: requireEl('gravityAlphaVal', HTMLSpanElement),
+    gravityRadius: requireEl('gravityRadius', HTMLInputElement),
+    gravityRadiusVal: requireEl('gravityRadiusVal', HTMLSpanElement),
     pressure: requireEl('pressure', HTMLInputElement),
     pressureVal: requireEl('pressureVal', HTMLSpanElement),
     pressureGamma: requireEl('pressureGamma', HTMLInputElement),
@@ -316,6 +320,7 @@ export function bootstrap(): void {
       moveThreshold: config.moveThreshold,
       gravity: config.gravity,
       gravityAlpha: config.gravityAlpha,
+      gravityRadius: config.gravityRadius,
       pressure: config.pressure,
       pressureGamma: config.pressureGamma,
       pressureEref: config.pressureEref,
@@ -336,6 +341,7 @@ export function bootstrap(): void {
       moveThreshold: config.moveThreshold,
       gravity: config.gravity,
       gravityAlpha: config.gravityAlpha,
+      gravityRadius: config.gravityRadius,
       pressure: config.pressure,
       pressureGamma: config.pressureGamma,
       pressureEref: config.pressureEref,
@@ -958,6 +964,11 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   dom.gravityAlpha.addEventListener('input', () => {
     config.gravityAlpha = parseFloat(dom.gravityAlpha.value) || 0.0;
     dom.gravityAlphaVal.textContent = config.gravityAlpha.toFixed(2);
+    sendConfig();
+  });
+  dom.gravityRadius.addEventListener('input', () => {
+    config.gravityRadius = parseInt(dom.gravityRadius.value, 10) || 1;
+    dom.gravityRadiusVal.textContent = String(config.gravityRadius);
     sendConfig();
   });
   dom.pressure.addEventListener('input', () => {

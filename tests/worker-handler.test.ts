@@ -26,6 +26,7 @@ function makeMockWorld(): WorldHandle {
     setMoveThreshold: vi.fn(),
     setGravity: vi.fn(),
     setGravityAlpha: vi.fn(),
+    setGravityRadius: vi.fn(),
     setPressure: vi.fn(),
     setPressureGamma: vi.fn(),
     setPressureEref: vi.fn(),
@@ -131,6 +132,7 @@ describe('createWorkerHandler — init', () => {
       ...baseInit,
       gravity: 0.2,
       gravityAlpha: 0.05,
+      gravityRadius: 4,
       pressure: 0.03,
       pressureGamma: 2.5,
       pressureEref: 8,
@@ -138,6 +140,7 @@ describe('createWorkerHandler — init', () => {
     });
     expect(h.world.setGravity).toHaveBeenCalledWith(0.2);
     expect(h.world.setGravityAlpha).toHaveBeenCalledWith(0.05);
+    expect(h.world.setGravityRadius).toHaveBeenCalledWith(4);
     expect(h.world.setPressure).toHaveBeenCalledWith(0.03);
     expect(h.world.setPressureGamma).toHaveBeenCalledWith(2.5);
     expect(h.world.setPressureEref).toHaveBeenCalledWith(8);
@@ -148,6 +151,7 @@ describe('createWorkerHandler — init', () => {
     const h = makeHarness();
     h.handler.handleMessage(baseInit);
     expect(h.world.setGravity).toHaveBeenCalledWith(0.0);
+    expect(h.world.setGravityRadius).toHaveBeenCalledWith(1);
     expect(h.world.setPressure).toHaveBeenCalledWith(0.0);
     expect(h.world.setPressureGamma).toHaveBeenCalledWith(2.0);
     expect(h.world.setPressureEref).toHaveBeenCalledWith(1.0);
@@ -245,6 +249,7 @@ describe('createWorkerHandler — config', () => {
       k: 1,
       gravity: 0.25,
       gravityAlpha: 0.06,
+      gravityRadius: 4,
       pressure: 0.04,
       pressureGamma: 3.0,
       pressureEref: 16,
@@ -252,6 +257,7 @@ describe('createWorkerHandler — config', () => {
     });
     expect(h.world.setGravity).toHaveBeenCalledWith(0.25);
     expect(h.world.setGravityAlpha).toHaveBeenCalledWith(0.06);
+    expect(h.world.setGravityRadius).toHaveBeenCalledWith(4);
     expect(h.world.setPressure).toHaveBeenCalledWith(0.04);
     expect(h.world.setPressureGamma).toHaveBeenCalledWith(3.0);
     expect(h.world.setPressureEref).toHaveBeenCalledWith(16);

@@ -11,6 +11,7 @@ export interface WorkerSimState {
   readonly moveThreshold: number;
   readonly gravity: number;
   readonly gravityAlpha: number;
+  readonly gravityRadius: number;
   readonly pressure: number;
   readonly pressureGamma: number;
   readonly pressureEref: number;
@@ -26,6 +27,7 @@ export const DEFAULT_STATE: WorkerSimState = Object.freeze({
   moveThreshold: 2.0,
   gravity: 0.0,
   gravityAlpha: 0.0,
+  gravityRadius: 1,
   pressure: 0.0,
   pressureGamma: 2.0,
   pressureEref: 1.0,
@@ -41,6 +43,7 @@ export function stateFromInit(msg: InitMsg): WorkerSimState {
     moveThreshold: msg.moveThreshold ?? DEFAULT_STATE.moveThreshold,
     gravity: msg.gravity ?? DEFAULT_STATE.gravity,
     gravityAlpha: msg.gravityAlpha ?? DEFAULT_STATE.gravityAlpha,
+    gravityRadius: msg.gravityRadius ?? DEFAULT_STATE.gravityRadius,
     pressure: msg.pressure ?? DEFAULT_STATE.pressure,
     pressureGamma: msg.pressureGamma ?? DEFAULT_STATE.pressureGamma,
     pressureEref: msg.pressureEref ?? DEFAULT_STATE.pressureEref,
@@ -61,6 +64,7 @@ export function applyConfig(state: WorkerSimState, msg: ConfigMsg): WorkerSimSta
     moveThreshold: pick(msg.moveThreshold, state.moveThreshold),
     gravity: pick(msg.gravity, state.gravity),
     gravityAlpha: pick(msg.gravityAlpha, state.gravityAlpha),
+    gravityRadius: pick(msg.gravityRadius, state.gravityRadius),
     pressure: pick(msg.pressure, state.pressure),
     pressureGamma: pick(msg.pressureGamma, state.pressureGamma),
     pressureEref: pick(msg.pressureEref, state.pressureEref),
