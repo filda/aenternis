@@ -11,4 +11,4 @@ pub mod sparse;
 pub use arena::Arena;
 pub(crate) use cells::Cells;
 
-pub use crate::world::sparse::{MemoryReport, SparseWorld};
+pub use crate::world::sparse::{Base, MemoryReport, SparseWorld};

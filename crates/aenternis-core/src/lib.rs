@@ -22,6 +22,8 @@
 pub mod apportion;
 pub mod cell;
 pub mod coord;
+pub mod genesis;
+pub mod macros;
 pub mod parallel;
 pub mod rng;
 pub mod tick;
@@ -30,6 +32,7 @@ pub mod world;
 
 pub use crate::cell::Cell;
 pub use crate::coord::{Coord, Direction};
+pub use crate::genesis::GenesisConfig;
 pub use crate::rng::Rng;
 pub use crate::vm::Opcode;
-pub use crate::world::{Arena, SparseWorld};
+pub use crate::world::{Arena, Base, SparseWorld};

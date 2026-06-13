@@ -35,6 +35,7 @@
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
+use crate::genesis::{generate_into, GenesisConfig};
 use crate::rng::cell_seed;
 use crate::world::{Arena, Cells};
 use crate::{Cell, Coord, Direction, Rng};
@@ -256,6 +257,21 @@ pub struct SparseWorld {
     pub(crate) bbox_dirty: bool,
 }
 
+/// How the origin cell's whole memory is filled at big bang (see
+/// `docs/genesis-plan.md`, A6). Orthogonal to the optional player
+/// `overlay` prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base {
+    /// Deterministic `xorshift32` noise (the legacy fill). Under the
+    /// opcode fold every byte is still an executable instruction, so this
+    /// is "active chaos", not inert — kept for baselines and tests.
+    Noise,
+    /// Procedural macro genesis: a seed-driven weighted stream of macros
+    /// over the whole memory (`crate::genesis`). The information-bearing
+    /// default for new worlds.
+    Macros,
+}
+
 impl SparseWorld {
     /// Default value for [`SparseWorld::move_threshold`].
     pub const DEFAULT_MOVE_THRESHOLD: f32 = 2.0;
@@ -349,54 +365,88 @@ impl SparseWorld {
     /// a cell with zero energy does not exist by the world invariant.
     #[must_use]
     pub fn big_bang(world_seed: u64, energy: u32) -> Self {
-        Self::big_bang_with_program(world_seed, energy, &[])
+        Self::big_bang_with(world_seed, energy, Base::Noise, &[])
+    }
+
+    /// Big bang whose origin cell is seeded by the procedural genesis
+    /// generator ([`crate::genesis`]) instead of raw noise: the whole
+    /// memory is a seed-driven weighted stream of macros. This is the
+    /// information-bearing default for new worlds — see
+    /// `docs/genesis-plan.md`.
+    #[must_use]
+    pub fn big_bang_macros(world_seed: u64, energy: u32) -> Self {
+        Self::big_bang_with(world_seed, energy, Base::Macros, &[])
     }
 
     /// Big bang with a programmer-supplied prefix written into the origin
     /// cell's memory. The first `min(program.len(), energy)` slots are
-    /// taken verbatim from `program`; the remaining slots (if `energy >
-    /// program.len()`) are filled from the per-cell-at-tick RNG stream.
+    /// taken verbatim from `program`; the remaining slots are filled from
+    /// the per-cell `xorshift32` noise stream.
     ///
     /// The RNG is **not** advanced for slots covered by the program, so
-    /// for a fixed seed, `big_bang_with_program(seed, n, &[a, b, c])`
-    /// and `big_bang_with_program(seed, n, &[d, e, f])` produce
-    /// identical memory at indices `3..n` — the program prefix replaces,
-    /// it doesn't consume entropy.
-    ///
-    /// `program.len() > energy` truncates: extra slots are discarded.
-    /// An empty `program` is exactly equivalent to [`SparseWorld::big_bang`].
+    /// for a fixed seed and program length the tail is identical
+    /// regardless of program content — the prefix replaces, it doesn't
+    /// consume entropy. `program.len() > energy` truncates. Equivalent to
+    /// [`big_bang_with`](Self::big_bang_with) with [`Base::Noise`].
     #[must_use]
     pub fn big_bang_with_program(world_seed: u64, energy: u32, program: &[u32]) -> Self {
+        Self::big_bang_with(world_seed, energy, Base::Noise, program)
+    }
+
+    /// Build a big-bang world from an explicit `(base, overlay)` genesis
+    /// (see `docs/genesis-plan.md`, A6). The whole memory is filled by
+    /// `base`; then `overlay` (the player's program, if any) is written
+    /// verbatim over `[0, min(overlay.len(), energy))`, leaving the rest
+    /// of the base fill untouched.
+    ///
+    /// With [`Base::Noise`] + `overlay` this reproduces
+    /// [`big_bang_with_program`](Self::big_bang_with_program); with
+    /// [`Base::Macros`] the tail beyond the overlay is generated program
+    /// rather than noise, so passively emitted slices carry real code.
+    ///
+    /// The macro generator uses [`GenesisConfig::default`]; callers that
+    /// need custom knobs build memory via
+    /// [`crate::genesis::generate_into`] and
+    /// [`insert_with_memory`](Self::insert_with_memory).
+    #[must_use]
+    pub fn big_bang_with(world_seed: u64, energy: u32, base: Base, overlay: &[u32]) -> Self {
         // Pre-allocate the arena to exactly the world's energy — by
-        // conservation, total `mem_len` across all cells never
-        // exceeds `energy`, so this is the upper bound and the arena
-        // never has to grow during `step`.
+        // conservation, total `mem_len` never exceeds `energy`, so the
+        // arena never has to grow during `step`.
         let mut world = Self::with_capacity(world_seed, energy);
         if energy == 0 {
             return world;
         }
 
-        // `origin_tag = cell_seed(seed, x, y, z)` (the seed value
-        // itself), and `cell.rng = Rng::new(seed)` is a separate
-        // xorshift32 stream from that same seed — the tag is *not* the
-        // first draw, it's the seed value.
+        // `origin_tag = cell_seed(seed, ORIGIN)` is the seed value
+        // itself (not the first draw); it seeds both the noise/genesis
+        // tape and the cell's identity tag.
         let origin_tag = cell_seed(world_seed, Coord::ORIGIN);
-        let mut noise_rng = Rng::new(origin_tag);
-
-        // Allocate the origin cell's full energy run in the arena
-        // and fill it slot-by-slot: program prefix first, then the
-        // RNG suffix. Doing the fill in place (rather than building
-        // a `Vec<u32>` and copying it in) keeps the construction
-        // cost at `O(energy)` with one allocation total — the
-        // arena's, which we already paid above.
         let energy_usize = energy as usize;
-        let n_program = program.len().min(energy_usize);
+        let n_overlay = overlay.len().min(energy_usize);
         let mem_start = world.arena.alloc(energy);
         {
             let slice = world.arena.slice_mut(mem_start, energy);
-            slice[..n_program].copy_from_slice(&program[..n_program]);
-            for slot in slice.iter_mut().skip(n_program) {
-                *slot = noise_rng.next_u32();
+            match base {
+                // Prefix verbatim, fresh RNG fills the tail. The RNG is
+                // not advanced over the prefix — same length → same tail
+                // regardless of prefix content (legacy contract).
+                Base::Noise => {
+                    slice[..n_overlay].copy_from_slice(&overlay[..n_overlay]);
+                    let mut noise_rng = Rng::new(origin_tag);
+                    for slot in slice.iter_mut().skip(n_overlay) {
+                        *slot = noise_rng.next_u32();
+                    }
+                }
+                // Generate the whole memory from the seed tape, then
+                // overlay the prefix. The tail `[n_overlay, energy)` is
+                // generated independently of the overlay, so it stays
+                // identical regardless of prefix ("comparable background").
+                Base::Macros => {
+                    let mut tape = Rng::new(origin_tag);
+                    generate_into(slice, &mut tape, &GenesisConfig::default());
+                    slice[..n_overlay].copy_from_slice(&overlay[..n_overlay]);
+                }
             }
         }
 

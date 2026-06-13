@@ -1,0 +1,152 @@
+; Aenternis v1 macro library — branch-free dataflow macros for seeded genesis.
+; Source of truth for both the genesis generator and the UI snippet inserter.
+; See docs/genesis-plan.md (sections "Taxonomie maker — v1", "Formát makra").
+;
+; Format:
+;   ; @macro NAME weight=W tags=T1,T2     — start a macro
+;   ; @param NAME TYPE                    — declare a parameter (TYPE ∈ DIR|ADDR|CONST)
+;   <body lines>                          — assembler, {param} holes, no jumps/labels in v1
+;
+; A {param} hole is filled by the generator from the seed tape (A5):
+;   DIR   → draw % DIRS        ADDR → draw % window A        CONST → draw (raw u32)
+;
+; Weight tiers: HIGH=5, MED=3, LOW=1. The `spread` tag marks the fertility knob.
+
+; --- Bitwise gadgets (HIGH) — synthesize values/addresses/opcodes from bits ---
+
+; @macro and weight=5 tags=bit
+; @param a ADDR
+; @param b ADDR
+  and {a}, {b}
+
+; @macro or weight=5 tags=bit
+; @param a ADDR
+; @param b ADDR
+  or {a}, {b}
+
+; @macro xor weight=5 tags=bit
+; @param a ADDR
+; @param b ADDR
+  xor {a}, {b}
+
+; @macro not weight=5 tags=bit
+; @param a ADDR
+  not {a}
+
+; @macro shl weight=5 tags=bit
+; @param a ADDR
+; @param b ADDR
+  shl {a}, {b}
+
+; @macro shr weight=5 tags=bit
+; @param a ADDR
+; @param b ADDR
+  shr {a}, {b}
+
+; --- Immediate (HIGH) — seed working data/constants ---
+
+; @macro set weight=5 tags=data
+; @param a ADDR
+; @param v CONST
+  set {a}, {v}
+
+; --- Replicator / igniter (MED, spread = fertility knob) ---
+
+; @macro replicate weight=3 tags=spread
+; @param d DIR
+; @param src ADDR
+  setp {d}, {src}
+
+; @macro ignite weight=3 tags=spread
+; @param d DIR
+; @param i CONST
+  port {d}, {i}
+
+; --- Counter / clock (MED) ---
+
+; @macro tick_up weight=3 tags=clock
+; @param a ADDR
+  inc {a}
+
+; @macro tick_down weight=3 tags=clock
+; @param a ADDR
+  dec {a}
+
+; --- Arithmetic (MED) ---
+
+; @macro acc_add weight=3 tags=arith
+; @param a ADDR
+; @param b ADDR
+  add {a}, {b}
+
+; @macro acc_sub weight=3 tags=arith
+; @param a ADDR
+; @param b ADDR
+  sub {a}, {b}
+
+; --- Copy (MED) ---
+
+; @macro move weight=3 tags=copy
+; @param a ADDR
+; @param b ADDR
+  copy {a}, {b}
+
+; --- Sensor (MED) — only environmental input ---
+
+; @macro sense weight=3 tags=sense
+; @param d DIR
+; @param a ADDR
+  senergy {d}, {a}
+
+; @macro sense_mix weight=2 tags=sense
+; @param d DIR
+; @param a ADDR
+; @param b ADDR
+  senergy {d}, {a}
+  add {b}, {a}
+
+; --- Appearance (MED) — lineage visible in the viewer ---
+
+; @macro warpaint weight=3 tags=mark
+; @param v CONST
+  paint {v}
+
+; --- Exotic arithmetic (LOW) — div/mod by zero = 0 (safe) ---
+
+; @macro acc_mul weight=1 tags=arith
+; @param a ADDR
+; @param b ADDR
+  mul {a}, {b}
+
+; @macro acc_div weight=1 tags=arith
+; @param a ADDR
+; @param b ADDR
+  div {a}, {b}
+
+; @macro acc_mod weight=1 tags=arith
+; @param a ADDR
+; @param b ADDR
+  mod {a}, {b}
+
+; --- Indirect addressing (LOW) — data-dependent behavior without branches ---
+
+; @macro load_indirect weight=1 tags=indirect
+; @param a ADDR
+; @param b ADDR
+  ldi {a}, {b}
+
+; @macro store_indirect weight=1 tags=indirect
+; @param a ADDR
+; @param b ADDR
+  sti {a}, {b}
+
+; --- Identity / pointer-read (LOW) ---
+
+; @macro callsign weight=1 tags=mark
+; @param a ADDR
+  sid {a}
+
+; @macro read_ptr weight=1 tags=ptr
+; @param d DIR
+; @param a ADDR
+  getp {d}, {a}

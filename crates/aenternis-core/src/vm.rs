@@ -196,6 +196,62 @@ impl Opcode {
         Self::Jp,
         Self::Jn,
     ];
+
+    /// Number of operand slots this opcode consumes after its own slot
+    /// (`length - 1`). Each operand is exactly one slot, so an `n`-arg
+    /// instruction is `n + 1` slots wide.
+    #[must_use]
+    pub const fn arg_count(self) -> u32 {
+        self.length() - 1
+    }
+
+    /// Canonical lowercase mnemonic, matching the `OPCODES` map in
+    /// `src/asm.ts` (which mirrors this — `asm.ts` is a UI helper, this
+    /// is the source of truth). Used by the macro expander
+    /// ([`crate::macros`]) to parse assembler-syntax macro bodies.
+    #[must_use]
+    pub const fn mnemonic(self) -> &'static str {
+        match self {
+            Self::Nop => "nop",
+            Self::Set => "set",
+            Self::Copy => "copy",
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Inc => "inc",
+            Self::Dec => "dec",
+            Self::Jmp => "jmp",
+            Self::Jz => "jz",
+            Self::Setp => "setp",
+            Self::Getp => "getp",
+            Self::Port => "port",
+            Self::Senergy => "senergy",
+            Self::Jne => "jne",
+            Self::Je => "je",
+            Self::Ldi => "ldi",
+            Self::Sti => "sti",
+            Self::Setpv => "setpv",
+            Self::Sid => "sid",
+            Self::Paint => "paint",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Xor => "xor",
+            Self::Not => "not",
+            Self::Shl => "shl",
+            Self::Shr => "shr",
+            Self::Mul => "mul",
+            Self::Div => "div",
+            Self::Mod => "mod",
+            Self::Jp => "jp",
+            Self::Jn => "jn",
+        }
+    }
+
+    /// Resolve a lowercase mnemonic to its opcode. Inverse of
+    /// [`Opcode::mnemonic`]; `None` for an unknown mnemonic.
+    #[must_use]
+    pub fn from_mnemonic(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|op| op.mnemonic() == name)
+    }
 }
 
 /// Decode and execute the instruction at `cell.pc`, advancing the

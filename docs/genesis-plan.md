@@ -125,98 +125,203 @@ makra (data)            ──┐
   jednu kanonickou/výchozí instanci; nezávislý generátor je jen *jiný konzument
   téže knihovny*.
 
-### Formát makra
+### Formát makra (A4, rozhodnuto)
 
-Assembler syntaxe (stejný jazyk jako dnešní presety) + tenká vrstva: **deklarace
-parametrů, váha, tagy, placeholdery.** Návrh:
+**Metadata v `;`-komentářích, tělo = čistý assembler** (stejný jazyk jako presety).
+Jeden soubor `crates/aenternis-core/macros/v1.aenm`, embedovaný `include_str!`,
+parsovaný jednou. Makra oddělená hlavičkou `; @macro`:
 
 ```
-; macro: replicator      weight: 3      tags: spread
-; param dir  : DIR                      ; 0..DIRS-1
-; param home : ADDR                     ; adresa v paměti
-  setp {dir}, {home}
+; v1 macro library — bezskoková dataflow makra pro seedovanou genesi.
+; Formát:  ; @macro NÁZEV weight=W tags=T1,T2
+;          ; @param NÁZEV TYP          (TYP ∈ DIR | ADDR | CONST)
+;          <tělo: assembler, díry {param}, ve v1 bez skoků a labelů>
+
+; @macro xor weight=5 tags=bit
+; @param a ADDR
+; @param b ADDR
+  xor {a}, {b}
+
+; @macro set weight=5 tags=data
+; @param a ADDR
+; @param v CONST
+  set {a}, {v}
+
+; @macro replicate weight=3 tags=spread
+; @param d DIR
+; @param src ADDR
+  setp {d}, {src}
+
+; @macro sense_mix weight=2 tags=sense
+; @param d DIR
+; @param a ADDR
+; @param b ADDR
+  senergy {d}, {a}
+  add {b}, {a}
 ```
 
-- **Typy parametrů:** `DIR` (směr 0..DIRS−1), `ADDR` (adresa; modulární adresace
-  dělá *jakoukoli* hodnotu bezpečnou), `CONST` (libovolný u32). Případně `HERE`
-  (offset začátku tohoto makra v globálním programu — pro self-referenci
-  replikátoru, generátor ho zná).
-- **Lokální labely** uvnitř makra; generátor je při expanzi posune o aktuální
-  globální offset. Žádný globální `loop:` spine není potřeba — PC se po dosažení
-  `memSize` zabalí na 0 (`vm.md`), takže *wrap sám je smyčka*; při K=1 PC stejně
-  proběhne skoro celou paměť za tick. Skok-makra dělají vnitřní strukturu.
+- **Tělo je skoro validní program** — s dosazenými parametry jde zkopírovat do
+  textarey a spustit / ověřit „sám něco dělá". Existující comment-stripper v
+  `asm.ts` metadata ignoruje. Drží to „makro = mrňavý preset", žádný cizí formát.
+- **Parser triviální:** `; @macro` zahájí makro, `; @param` přidá parametr, ostatní
+  řádky jsou tělo.
+- **v1 typy parametrů: jen `DIR` (0..DIRS−1), `ADDR` (modulární adresace dělá
+  *jakoukoli* hodnotu bezpečnou), `CONST` (libovolný u32).** Sémantiku vzorkování
+  z pásky definuje A5. **Labely a `HERE` → v2** — bezskokovost je činí zbytečnými
+  (replikátor `setp dir,{addr}` funguje s libovolnou adresou, protože celá paměť je
+  kód, R2; `HERE` je užitečné až s dopřednými skoky).
+- **Multi-line composite makra povolena** (`sense_mix` výše) — **nositel lokálního
+  chování**; makro není jen 1 instrukce.
+- **Žádný globální `loop:` spine ani skok-makra** — viz „Řídicí tok" níže; v1 makra
+  jsou bezskoková (rovná), opakování zařídí tick + PC-wrap.
 - **Váha** řídí pravděpodobnost losu; **tagy** (`spread`, `clock`, `bit`, …) jsou
   pro laditelné přeskupení vah (R3 „plodnost" = váhový multiplikátor tagu
   `spread`).
 
-### Taxonomie maker (návrh k ořezání)
+### Řídicí tok — tick *je* smyčka (A3, rozhodnuto)
 
-Každé makro „sám něco dělá". Existující `PRESETS` (counter, self_xp, self_omni,
-beacon, quine_core, projectile) se přirozeně stávají makry s fixními/parametrickými
-hodnotami — kontrola, že formát je dost expresivní.
+Při K=1 je `instrukcí = energy = memSize`, takže PC za jeden tick proběhne (zhruba)
+**celou paměť** a na konci se zabalí na 0 (`vm.md`). **Opakování tedy zařídí hranice
+ticku + PC-wrap — žádná globální páteř ani `jmp loop` není potřeba.** Presety
+používaly `jmp loop`, protože to byly malé ruční programy; v whole-memory genesis je
+to zbytečné (replikátor `setp dir,{addr}` je rovná instrukce, override se znovu
+nastaví každý tick, jak jím PC proteče).
 
-| Rodina | Makra (opkódy) | Role | Tag |
-|--------|----------------|------|-----|
-| **Replikátory** | `setp {dir}, {home}` | drží core ve směru → šíření | `spread` |
-| **Igniter / projektil** | `port {dir}, {i}` | aktivní outflow → pohyb/boj | `spread` |
-| **Hodiny / čítač** | `inc {a}` / `dec {a}` | vnitřní stav, čas | `clock` |
-| **Aritmetika** | `add/sub/mul {a},{b}` | kombinace slotů | `arith` |
-| **Bitové gadgety** | `xor/and/or/shl/shr/not` | **syntéza adres/opkódů z bitů** | `bit` |
-| **Kopírky** | `copy {a},{b}`, `ldi/sti` | přesun dat, self-reference | `copy` |
-| **Senzor-reakce** | `senergy {dir},{a}` + gated `port` | reakce na okolí (predátor) | `sense` |
-| **Identita / barva** | `sid {a}`, `paint {v}` | lineage/vzhled — **vidět ve viewru** | `mark` |
-| **Pointer-math** | `getp`/`setpv` | čtení layoutu, výpočet reprodukce | `ptr` |
+Z toho plyne **v1 = bezskokový dataflow genom**:
 
-Životaschopný „zárodek organismu" = replikátor + čítač + senzorem gatovaný port.
-**Bitové gadgety mají nejvyšší hodnotu pro emergenci** (`opcodes-plan.md`): dovolí
-programu *syntetizovat* hodnoty, adresy i opkódy z bitů — to je přesně, co
-umožňuje vznik smysluplného kódu z kombinací.
+- **`jmp` ven nadobro** — skok na seedem náhodnou adresu uvězní PC v malé smyčce →
+  degenerovaný „spinner", co protočí pár slotů `floor(E/K)`× a zbytek paměti nikdy
+  nespustí. To zabíjí smysl „celá paměť je aktivní".
+- **Podmíněné skoky (`jz/jne/je/jp/jn`) odloženy do v2** — absolutní cíl mod memSize
+  je rovněž past. Datová závislost přitom *nemizí*: nese ji **nepřímá adresace**
+  (`ldi`/`sti` — adresa závisí na datech ⇒ chování závisí na datech, bez větvení).
+- Skoky stejně vstoupí do populace **mutací** (překlopení bitu vyrobí skok-opkód) a
+  hráčovými programy. Evoluční příběh: genesis zaseje bezskokové dataflow organismy,
+  evoluce teprve objeví řídicí tok. v2 první krok = *omezený dopředný* podmíněný skok
+  (cíl = offset + malá konstanta, nemůže uvěznit PC).
+
+### Taxonomie maker — v1 (rozhodnuto)
+
+Každé makro „sám něco dělá" a (v1) je **bezskokové**. Existující `PRESETS`
+(counter, self_xp, …) se přirozeně stávají makry — ale jejich `jmp loop` v genesi
+odpadá (tick je smyčka), takže např. `counter` = pouhé `inc {a}`.
+
+Verdikt a váhová úroveň pro v1 (HIGH > MED > LOW; OUT = negeneruje se):
+
+| Rodina | Makra | v1 | Váha | Tag | Proč |
+|--------|-------|----|----|----|------|
+| **Bitové gadgety** | `and/or/xor/not/shl/shr` | ✅ | **HIGH** | `bit` | nejvyšší hodnota pro emergenci — syntéza adres/opkódů z bitů, hladká fitness krajina |
+| **set (immediate)** | `set {a},{v}` | ✅ | HIGH | `data` | zasadí konstanty/pracovní data |
+| **Replikátory** | `setp {dir},{addr}` | ✅ | MED | `spread` | jediný způsob šíření programu; bezskokový |
+| **Igniter** | `port {dir},{i}` | ✅ | MED | `spread` | aktivní outflow → pohyb/boj/zážeh |
+| **Čítač** | `inc {a}` / `dec {a}` | ✅ | MED | `clock` | levný vnitřní stav, „čas" |
+| **Aritmetika** | `add/sub {a},{b}` | ✅ | MED | `arith` | kombinace slotů |
+| **Kopírky** | `copy {a},{b}` | ✅ | MED | `copy` | přesun dat |
+| **Senzor** | `senergy {dir},{a}` | ✅ | MED | `sense` | jediný vstup z okolí; uloží energii souseda do paměti |
+| **Barva** | `paint {v}` | ✅ | MED | `mark` | **lineage je vidět ve viewru** — pozorování emergence |
+| **Aritmetika (exotická)** | `mul/div/mod {a},{b}` | ✅ | LOW | `arith` | div/mod nulou = 0 (bezpečné) |
+| **Nepřímá adresace** | `ldi/sti {a},{b}` | ✅ | LOW | `indirect` | datová závislost **bez větví** (náhrada za skoky), self-mod |
+| **Identita** | `sid {a}` | ✅ | LOW | `mark` | vlastní origin_tag do paměti (self-recognition/quine) |
+| **Pointer-read** | `getp {dir},{a}` | ✅ | LOW | `ptr` | čtení vlastního layoutu (introspekce vlastní = OK) |
+| **setpv** | `setpv {dir},{a}` | ⛔→v2 | — | — | runtime-počítaný setp; pokročilé |
+| **Skoky** | `jmp` | ⛔ | — | — | uvězní PC → degenerovaný spinner |
+| | `jz/jne/je/jp/jn` | ⛔→v2 | — | — | absolutní cíl = past; vstoupí mutací; v2 = omezený dopředný |
+| **nop** | `nop` | ⛔ | — | — | přesně to, čemu se vyhýbáme oproti šumu |
+
+**Bitové gadgety + `set` na HIGH** je záměr: tam žije „syntéza hodnot z bitů" i
+hladká fitness krajina pro mutaci. **`spread` tag** (setp+port) je „plodnost" knob
+(R3/A2). Životaschopný zárodek = replikátor + čítač + senzor zapsaný do paměti, co
+pak krmí port přes aritmetiku/nepřímou adresaci (bez větvení).
 
 ### Generátor v1 (algoritmus)
 
 ```
 genesis(seed, energy) -> Vec<u32> délky přesně `energy`:
-    tape = Rng::new(cell_seed(seed, ORIGIN))     // genomová páska
+    tape = Rng::new(cell_seed(seed, ORIGIN))     // genomová páska (= dnešní šum RNG)
     out  = Vec s kapacitou energy
     while out.len() < energy:
-        m      = vyber_vážené_makro(tape, library)        // dekód: tag váhy → makro
-        params = navzorkuj_parametry(tape, m, out.len())  // DIR/ADDR/CONST/HERE
-        slots  = expand(m, params)                         // fragment → Vec<u32>
+        m      = vyber_vážené_makro(tape, cfg)    // draw % Σweight → váhový kbelík
+        params = navzorkuj_parametry(tape, m, cfg)// viz A5 níže
+        slots  = expand(m, params)                 // fragment → Vec<u32>
         připoj slots do out, ořízni poslední makro na `energy`  // částečný plátek = OK (R2)
     return out
 ```
 
-- **Determinismus:** čistá funkce `(seed, energy)`. Stejný seed → stejná paměť.
+- **Determinismus:** čistá funkce `(seed, energy, cfg)`. Stejný seed → stejná paměť.
 - **Konzervace:** generátor jen plní *počáteční* paměť; `energy == mem_len`
   triviálně platí (stejně jako u dnešního šumu). Žádný runtime invariant se
   nedotýká.
 - **Bezpečnost vůči VM:** každé makro expanduje na platné instrukce; pod fold
   dekodérem je navíc *každý* byte platný, takže i oříznutý poslední fragment je
   bezpečný.
-- **Vzorkování adres:** modulární adresace dělá libovolný u32 bezpečným; volitelně
-  biasovat `ADDR` k nízkým adresám (stabilní jádro), `HERE` = aktuální offset.
+
+### Vzorkování ze seed-pásky (A5, rozhodnuto)
+
+**Páska** = posloupnost u32 z `Rng::new(cell_seed(seed, ORIGIN))` (týž PRNG, co dnes
+plní šum). Generátor ji čte zleva doprava; každé rozhodnutí utrhne **jednu u32**
+(žádné bit-packing — páska se po genesi zahodí, runtime mutace jede na slotech, ne
+na pásce ⇒ hustota kódování nehraje roli). Mapování `draw → hodnota`:
+
+| Rozhodnutí | Mapování |
+|------------|----------|
+| výběr makra | `draw % Σweight` → váhový kbelík (váhy `spread`-maker škálované „plodností") |
+| `DIR` | `draw % DIRS` |
+| `ADDR` | `draw % A` |
+| `CONST` | `draw` (uniform u32) |
+
+**Klíč je `A` — velikost sdíleného pracovního okna, default `A = 256` (absolutně).**
+`ADDR % memSize` (memSize ~1 M) by bylo **sterilní**: dvě makra by skoro nikdy
+nesáhla na týž slot → žádná interakce, jen nezávislé čmárání. Okno `[0, A)` dělá
+sdílený „registr file": ~1 M slotů kódu pracuje nad společnou ~256slotovou oblastí
+→ teprve to umožní výpočet. Že okno leží na nízkých adresách, kde je i kód, znamená
+**self-modifying soup** — vítaná emergentní vlastnost (fold drží vše platné), v1 se
+neřeší.
+
+**`A`, váhy, „plodnost", rozdělení `CONST` jsou všechno knoby *generátoru* (`cfg`),
+ne vlastnosti VM ani maker.** Makro deklaruje jen *typ* (`ADDR`) a zůstává
+přenositelné; VM zná jen modulární adresaci přes memSize. Jiný generátor smí
+vzorkovat ze stejné knihovny úplně jinak. Společná ladicí plocha emergence:
+
+| Knob (`cfg`) | Řídí |
+|--------------|------|
+| váhy maker | četnost rodin v proudu |
+| „plodnost" (×`spread`) | jak často replikátor/port → šíření |
+| okno `A` (default 256) | velikost sdíleného pracovního setu → míra interakce/výpočtu |
+| granularita pásky | fixně 1 u32 / rozhodnutí |
+| rozdělení `CONST` | uniform u32 |
 
 ### Zasazení do `big_bang`
 
 Dnešní API má tři režimy fillu schované za dvěma funkcemi. Návrh je sjednotit do
 **explicitního režimu genesis**:
 
+**Dvě ortogonální osy** (A6, rozhodnuto), ne tři enum varianty:
+
 ```rust
-enum Genesis<'a> {
-    Noise,             // dnešní RNG fill — zůstává pro baseline/testy
-    Program(&'a [u32]),// autorský prefix + šumový ocas (dnešní big_bang_with_program)
-    Macros,            // NOVÉ: aperiodický stream maker přes celou paměť
-}
-// big_bang(seed, energy) == Genesis::Noise; big_bang_with_program == Genesis::Program
+enum Base { Noise, Macros }            // čím se naplní CELÁ paměť (default Macros)
+struct Genesis<'a> { base: Base, overlay: Option<&'a [u32]> }  // overlay = hráčův prefix
 ```
 
-- **`Macros` se stává výchozím režimem světa** (frontend Reset, WASM `World.new`),
-  protože nahrazuje umělý šum bohatším startem (`gravity-plan.md`). `Noise`
-  **zůstává** pro baseline a šumové invariantní testy (analogie: `step_diffusion`
-  vedle `step`).
-- **Hráčův program** (exogenní vstup, `gravity-plan.md` novost #2) má přednost:
-  `Program(prefix)` přepíše začátek; otevřená otázka, zda zbytek dofiltrovat
-  šumem (dnes) nebo makry (`Program` + `Macros` ocas) — viz „Otevřené otázky".
+Base se vygeneruje pro `[0, energy)`, **hráčův `overlay` se zapíše od adresy 0 přes
+`[0, len)`, zbytek (base) zůstává nedotčený.** Matice pokrývá dnešek i nový default:
+
+| base | overlay | = |
+|------|---------|---|
+| Noise | — | dnešní `big_bang` (baseline/testy) |
+| Noise | prefix | dnešní `big_bang_with_program` |
+| **Macros** | — | **nový default světa** (Reset, WASM `World.new`) |
+| **Macros** | prefix | **doporučený hráčův režim** |
+
+- **Default base = `Macros`** — nahrazuje umělý šum bohatším startem
+  (`gravity-plan.md`); `Noise` zůstává jako legacy/test toggle (analogie
+  `step_diffusion` vedle `step`).
+- **Overlay nahrazuje, nespotřebovává pásku** (jako dnes RNG): ocas `[len, energy)`
+  je byte-identický bez ohledu na prefix → zachová „porovnatelné pozadí".
+- **Macro ocas i pod hráčem** (R2 znovu): pasivní emise jde z konce paměti; se
+  šumovým ocasem by replikátor v prefixu šířil šum, s makro ocasem rozumný kód.
+- **Hráč makra *needituje přes generátor*** — jen si je ručně zkopíruje do zdrojáku
+  (jako presety). Knihovna maker tak pohání **dva nezávislé konzumenty**: generátor
+  (base fill) a UI „vkládač snippetů" (rozšíří `PRESETS` dropdown).
 
 ## Vztah k foldu, mutaci a evoluci (proč to celé drží pohromadě)
 
@@ -279,14 +384,8 @@ algoritmická změna → mutační testování je součást brány).
 - **Kalibrace vah** je hlavní ladicí páka emergence (analogie „pořadí opkódů" v
   `opcodes-plan.md`). Příliš málo `spread` → mrtvé vesmíry; příliš mnoho → jen
   triviální replikátory bez vnitřní práce. Zajímavá zóna je úzký pás.
-- **Interakce s hráčovým programem.** Prefix `Program` + co dál: šumový ocas
-  (dnes) vs makro ocas? Makro ocas je konzistentnější s R2, ale mění sémantiku
-  dnešního `big_bang_with_program`.
-- **Vzorkování `ADDR`.** Uniformně (modulární, bezpečné) vs bias k nízkým adresám
-  (stabilní jádro). Ovlivní, jak často makra píšou do „programové" vs „datové"
-  zóny.
-- **Self-reference (`HERE`).** Stačí offset začátku makra, nebo je užitečný i
-  odkaz na globální start programu (silnější replikátor)?
+- **Velikost okna `A`** (A5, default 256) je — vedle vah — hlavní empirická páka:
+  malé okno = chaotický stomp, velké = řidší interakce. Ladit spolu s vahami.
 - **Cross-verze.** Změna knihovny maker / vah mění programy pro daný seed — stejný
   caveat jako verzování ISA (`plan.md` 2026-05-13: replay platí *uvnitř* verze).
   Zdokumentovat „verzi genesis".
@@ -304,6 +403,30 @@ algoritmická změna → mutační testování je součást brány).
   je to jen druhý konec téhož „period" knobu (aperiodické = P→∞).
 - **Mutační operátory nad genomem.** To je `gravity-plan.md` (hustotně vázaná
   mutace), ne genesis. Genesis jen vyrobí seedovaný start a nechá dveře otevřené.
+- **Skoky a `setpv` v genesi (→ v2).** v1 je bezskokový dataflow genom (viz „Řídicí
+  tok"). První v2 krok = *omezený dopředný* podmíněný skok (cíl = offset + malá
+  konstanta, nemůže uvěznit PC); `jmp` zůstává ven nadobro. `setpv` (runtime setp)
+  taktéž v2.
+
+## Stav implementace
+
+**Increment 1 — Rust jádro (hotovo, `./check` zelený + `cargo mutants` bez mezer):**
+
+- `vm.rs`: `Opcode::mnemonic` / `from_mnemonic` / `arg_count` (zdroj pravdy pro expander).
+- `src/macros/v1.aenm`: knihovna ~24 maker dle taxonomie v1 (bezskoková).
+- `src/macros.rs`: parser formátu (`; @macro`/`; @param`/tělo) + kanonický expander
+  (podmnožina assembleru), `library()` přes `OnceLock`.
+- `src/genesis.rs`: `GenesisConfig { window=256, fertility=1.0 }` + `generate_into`
+  (vážený stream přes celou paměť, vzorkování ze seed-pásky dle A5).
+- `world/sparse.rs`: `Base { Noise, Macros }` + `big_bang_with(seed, energy, base,
+  overlay)`; `big_bang` / `big_bang_with_program` jsou tenké wrappery (zachované
+  chování), nové `big_bang_macros`.
+- Testy: unit (macros + genesis) + `tests/genesis.rs` (determinismus, celá paměť,
+  konzervace, overlay tail-identity, zpětná kompatibilita šumu).
+
+**Increment 2 — integrace (zbývá):** WASM binding pro `Base::Macros` jako default
+`World.new`; TS parita expanderu + UI „vkládač snippetů" místo/vedle `PRESETS`
+(makra = dva konzumenti, A6). Jádro je samostatně kompletní a otestované.
 
 ## Návaznost
 

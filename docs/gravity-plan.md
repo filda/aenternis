@@ -41,11 +41,14 @@ Samostatná JS reimplementace (hustá 3D mřížka, float), tři síly jako tok 
 stěny. Výsledky (200 taktů, 32³, ověřeno headless):
 
 - **Konzervace přesná** (`sum + leaked = E_total` na nulu), žádné NaN.
-- **Void hranice je hlavní úskalí.** S voidem energie radiuje ke kraji a utíká →
-  ze šumu mizí energie a třesk zůstane jako jedna chladnoucí koule. **Na toru se
-  třesk sám roztříští** (~3400 shluků i s výchozími silami, 0 % ztrát). V
-  produkčním (sparse/void) světě tedy struktury vznikají hůř — viz „Otevřené
-  otázky".
+- **Rozptyl je úskalí, ne ztráta energie.** Pozor na terminologii: prototyp 11 byl
+  *konečná* mřížka, kde energie na voidové hranici opravdu opouštěla simulaci
+  (`sum + leaked = E_total`). **Produkční sparse svět je ale neohraničený a energii
+  zachovává přesně** — `total_energy` je konstantní invariant (testováno každý tick).
+  Nic „nemizí" a nikam „neutíká". Skutečný problém je **rozptyl/ředění**: difuze
+  rozprostírá energii do stále většího objemu, takže hustota všude klesá a struktury
+  se nemají z čeho tvořit. Gravitace proti tomu energii sbírá do shluků. (Torus i
+  „leak" byly jen prototypové pomůcky konečné mřížky a dál se neuvažují.)
 - **Škála shluků se ladí silou gravitace** vůči radiaci: slabá gravitace → mnoho
   mírných shluků; silná gravitace / slabá radiace → méně, ale hustších a
   hmotnějších.
@@ -149,9 +152,11 @@ gravitace). Fyzika (difuze + gravitace + tlak) je jen prostředí.
   kolapsu, dražší).
 - **VM je reálné úzké hrdlo, ne gravitace.** `floor(E/K)` instrukcí v hustém
   třeskovém bodě je brutální; perf strop bude tady.
-- **Void vs torus v produkci.** Sparse svět je otevřený (leak do voidu), takže
-  struktury vznikají hůř než na toru prototypu 11. Zvážit, zda gravitační dosah
-  a síla stačí, aby energii posbíraly dřív, než uteče.
+- **Rozptyl vs koncentrace v neohraničeném světě.** Energie je zachována (nic
+  neutíká, `total_energy` konstantní), ale difuze ji ředí do rostoucího objemu.
+  Otázka: stačí gravitační dosah a síla, aby energii sbíraly do struktur rychleji,
+  než ji difuze rozptýlí na tenký rovnoměrný oblak? (Empiricky ano — koncentrace
+  ~2–3× nad čistou difuzí; ladění parametrů to má posílit.)
 - **Kalibrace rychlosti mutace (error threshold, Eigen).** Málo → žádná novost
   (zamrzne); moc → ztráta dědičnosti (struktury degradují rychleji, než se
   reprodukují). Zajímavá zóna je úzký pás — hlavní knob k ladění.
@@ -209,8 +214,32 @@ mutanty ve `.cargo/mutants.toml`: `< → <=` u mutace a `+ → -` u offsetů v
   mění hodnotu, ne počet slotů ⇒ energie konzervována. RNG: jeden proud na buňku,
   doména `DENSITY_MUTATION_RNG_DOMAIN=3` (disjunktní od 0/1/2), pozice slotu = pozice
   v proudu (žádná per-slot doména). `base_mutation_rate=0` ⇒ strict no-op (žádné RNG).
-  Coupling na `E` (ne `M`) drží fázi self-contained; coupling na `M`/kombinaci je
-  ladicí knob ponechaný otevřený.
+
+  **Dohodnutý design couplingu (2026-06-13, čeká na implementaci až s genesí):**
+  - **Couplovat na `E`** (lokální hustota = hmota, buňka = jednotkový objem), **ne na
+    `M`** (potenciál). „Kolik hmoty je tady", ne „tah vzdálené hmoty".
+  - **Tvar saturující, dva parametry:** `p_flip = mutation_strength · E/(E+K)` (ne
+    lineární — lineární přes 6 řádů `E` mutuje appreciable jen úplnou špičku).
+    - `mutation_strength` (0..1, **default 0 = vypnuto** → strict no-op, drží
+      zero-default) = strop/intenzita výhně. `strength=1` → jádro až ~100 %.
+    - `mutation_half_density = K` = hustota, kde mutace dosáhne 50 %.
+    Tvar dá, co chceme: `E<~2`→~0 (1slotový program nic nedělá), roste, `E≫K`→~strength.
+  - **`K` vysoké** — nad hráčovou entitou (řádově tisíce E ⇒ jemné), takže silně
+    mutuje až gravitací nahuštěné husté jádro. Startovní odhad `K≈40 000`
+    (E=3000→~7 %, E=1 M→~96 % při strength=1); **přesně experimentálně** až poběží
+    genesis+selekce (Eigenův práh).
+  - **Důsledek:** gravitace tím **rozhoduje, KDE se evoluce děje** — rozptýlené/
+    hráčovy entity jsou v klidné stabilní zóně, gravitační doly = mutagenní kotle.
+    Filozofie „klidná periferie", ne „všechno vře".
+  - **Granularita 1 bit/slot/tick** zůstává (hladká fitness krajina pod foldem); i
+    `p=100 %` je tedy „každý slot přijde o 1 bit z 32", ne okamžitý scramble — plné
+    zrandomizování až po ~desítkách ticků. Pořadí geneze→vyzáření→mutace dá genesis
+    čistý první běh + emisi.
+  - **Stav kódu (čeká na genesi):** zatím jeden parametr `base_mutation_rate`
+    s lineárním `min(base·E,1)`. Při zapnutí mutace s genesí nahradit dvěma poli
+    (`mutation_strength`, `mutation_half_density`) a tvarem `strength·E/(E+K)` —
+    plus WASM/TS/UI plumbing a přepis mutačních testů (pinují lineární tvar).
+    Udělat **jednou** při kalibraci `K`, ne teď naslepo. Gate: hotová genesis.
 - **Plumbing**: `SparseWorld` pole (`gravity`, `gravity_alpha`, `gravity_radius`,
   `pressure`, `pressure_gamma`, `pressure_eref`, `base_mutation_rate`, vše default
   0/neutral/R=1) → WASM settery/gettery → `protocol.ts`/`worker-state.ts`/
@@ -219,3 +248,23 @@ mutanty ve `.cargo/mutants.toml`: `< → <=` u mutace a `+ → -` u offsetů v
 **Odloženo (beze změny plánu):** Barnes–Hut / strom (O(N log N) — cutoff `R` zatím
 stačí, úzké hrdlo zůstává VM); libovolné γ přes `powf` (mimo reprodukovatelný režim);
 coupling mutace na `M` vs kombinaci; native-server vrstva gravitace (zatím jen WASM viewer).
+
+## Ladicí poznámka: víc center = fluktuace × gravitace (2026-06-13)
+
+Headless sonda (šumové pole — **jen testovací nástroj**, produkční start je **vždy
+big-bang**) potvrdila roli gravitace jako **zesilovače density-perturbací**:
+
+- **Bez perturbací** (hladký jednobodový big-bang mrak) → gravitace dá **jedno
+  centrum** (mrak se jen zhušťuje). Mapa rovnováhy záření↔gravitace: gravitace je
+  hlavní knob škály (slabá → měkký mrak, silná → těsná kapka), radiace `coeff`
+  sekundárně rozšiřuje. Koncentrace top1% saturuje (~20 %, clamp), rozlišuje počet
+  buněk (konsolidace).
+- **S perturbacemi** → **fragmentace na víc center** (gravitační nestabilita).
+  Režim z fragmentace: silná gravitace (g≈1.6+), **malé R=2** (jemná škála — menší R
+  = víc menších center), slabá radiace (coeff≈0.1), nízký tlak; pole velké vůči R.
+
+**Závěr pro produkci:** perturbace nemá dodávat umělý šum, ale **genesis (bohatý
+seedovaný počáteční program) + mutace** — analogie **fluktuací v reliktním záření**,
+které gravitace zesílí do struktury. Pořadí prací: **nejdřív genesis + mutace**
+(zdroj fluktuací), **pak kalibrace gravitačních hodnot** k big-bang startu (teď
+předčasné — závisí na velikosti perturbací). Obrázky: `reports/gravity-vis/`.
