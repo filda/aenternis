@@ -208,46 +208,66 @@ mutanty ve `.cargo/mutants.toml`: `< → <=` u mutace a `+ → -` u offsetů v
   (není correctly-rounded, last-ULP drift native↔wasm by mohl přehodit
   `stochastic_floor` a rozejít dva světy) → mimo rozsah; `snap_gamma` ve WASM vrstvě
   zaokrouhlí vstup na nejbližší podporovanou hodnotu.
-- **Hustotně vázaná mutace** — `apply_density_coupled_mutation` po `outflow_phase_inplace`,
-  před `end_of_tick`. Per slot `p_flip = min(base_mutation_rate·E, 1)` (hustota = E,
-  buňka = jednotkový objem ⇒ hustá jádra = mutagenní kotle), překlopení `slot ^= 1<<bit`
-  mění hodnotu, ne počet slotů ⇒ energie konzervována. RNG: jeden proud na buňku,
-  doména `DENSITY_MUTATION_RNG_DOMAIN=3` (disjunktní od 0/1/2), pozice slotu = pozice
-  v proudu (žádná per-slot doména). `base_mutation_rate=0` ⇒ strict no-op (žádné RNG).
-
-  **Dohodnutý design couplingu (2026-06-13, čeká na implementaci až s genesí):**
-  - **Couplovat na `E`** (lokální hustota = hmota, buňka = jednotkový objem), **ne na
-    `M`** (potenciál). „Kolik hmoty je tady", ne „tah vzdálené hmoty".
-  - **Tvar saturující, dva parametry:** `p_flip = mutation_strength · E/(E+K)` (ne
-    lineární — lineární přes 6 řádů `E` mutuje appreciable jen úplnou špičku).
-    - `mutation_strength` (0..1, **default 0 = vypnuto** → strict no-op, drží
-      zero-default) = strop/intenzita výhně. `strength=1` → jádro až ~100 %.
-    - `mutation_half_density = K` = hustota, kde mutace dosáhne 50 %.
-    Tvar dá, co chceme: `E<~2`→~0 (1slotový program nic nedělá), roste, `E≫K`→~strength.
-  - **`K` vysoké** — nad hráčovou entitou (řádově tisíce E ⇒ jemné), takže silně
-    mutuje až gravitací nahuštěné husté jádro. Startovní odhad `K≈40 000`
-    (E=3000→~7 %, E=1 M→~96 % při strength=1); **přesně experimentálně** až poběží
-    genesis+selekce (Eigenův práh).
-  - **Důsledek:** gravitace tím **rozhoduje, KDE se evoluce děje** — rozptýlené/
-    hráčovy entity jsou v klidné stabilní zóně, gravitační doly = mutagenní kotle.
-    Filozofie „klidná periferie", ne „všechno vře".
-  - **Granularita 1 bit/slot/tick** zůstává (hladká fitness krajina pod foldem); i
-    `p=100 %` je tedy „každý slot přijde o 1 bit z 32", ne okamžitý scramble — plné
-    zrandomizování až po ~desítkách ticků. Pořadí geneze→vyzáření→mutace dá genesis
-    čistý první běh + emisi.
-  - **Stav kódu (čeká na genesi):** zatím jeden parametr `base_mutation_rate`
-    s lineárním `min(base·E,1)`. Při zapnutí mutace s genesí nahradit dvěma poli
-    (`mutation_strength`, `mutation_half_density`) a tvarem `strength·E/(E+K)` —
-    plus WASM/TS/UI plumbing a přepis mutačních testů (pinují lineární tvar).
-    Udělat **jednou** při kalibraci `K`, ne teď naslepo. Gate: hotová genesis.
+- **Hustotně vázaná mutace** — ✅ implementováno (2026-06-13, po genesi).
+  `apply_density_coupled_mutation` po `outflow_phase_inplace`, před `end_of_tick`.
+  Per slot `p_flip = mutation_strength · E/(E+K)` (saturující, ne lineární),
+  překlopení `slot ^= 1<<bit` mění hodnotu, ne počet slotů ⇒ energie konzervována.
+  RNG: jeden proud na buňku, doména `DENSITY_MUTATION_RNG_DOMAIN=3` (disjunktní od
+  0/1/2), pozice slotu = pozice v proudu. `mutation_strength=0` ⇒ strict no-op
+  (žádné RNG) → zero-default drží.
+  - **Couplováno na `E`** (lokální hustota = hmota), ne na `M` (potenciál).
+  - **Dva parametry:** `mutation_strength` (0..1, default 0 = off, = strop/intenzita;
+    `strength=1` → jádro až ~100 %) a `mutation_half_density = K` (default 40 000 =
+    hustota, kde `p` dosáhne `strength/2`; `K=0` → `p=strength` nezávisle na hustotě).
+    Tvar: `E≪K`→~0 (1slotový program nic nedělá), roste, `E≫K`→~strength.
+  - **`K` vysoké** (nad hráčovou entitou ~tisíce E ⇒ jemné) ⇒ silně mutuje až
+    gravitací nahuštěné husté jádro. `K≈40 000` je startovní odhad; **přesnou hodnotu
+    nakalibrovat experimentálně** až poběží selekce (Eigenův práh). Důsledek:
+    **gravitace rozhoduje, KDE se evoluce děje** (klidná periferie, husté doly =
+    mutagenní kotle).
+  - **1 bit/slot/tick** (hladká fitness krajina pod foldem); i `p=100 %` je „každý
+    slot −1 bit z 32", plné zrandomizování až po ~desítkách ticků. Pořadí
+    geneze→vyzáření→mutace dá genesis čistý první běh + emisi.
+  - Všechny ops `+`/`*`/`/` correctly-rounded ⇒ reprodukovatelné native↔wasm.
+    `cargo mutants` na funkci: 16/16 caught (+ dokumentovaný equivalent `< → <=`).
 - **Plumbing**: `SparseWorld` pole (`gravity`, `gravity_alpha`, `gravity_radius`,
-  `pressure`, `pressure_gamma`, `pressure_eref`, `base_mutation_rate`, vše default
-  0/neutral/R=1) → WASM settery/gettery → `protocol.ts`/`worker-state.ts`/
-  `worker-handler.ts` → slidery v `index.html` + listenery v `web/main.ts`.
+  `pressure`, `pressure_gamma`, `pressure_eref`, `mutation_strength`,
+  `mutation_half_density`, vše default 0/neutral/R=1) → WASM settery/gettery →
+  `protocol.ts`/`worker-state.ts`/`worker-handler.ts` → slidery v `index.html` +
+  listenery v `web/main.ts`.
 
 **Odloženo (beze změny plánu):** Barnes–Hut / strom (O(N log N) — cutoff `R` zatím
 stačí, úzké hrdlo zůstává VM); libovolné γ přes `powf` (mimo reprodukovatelný režim);
 coupling mutace na `M` vs kombinaci; native-server vrstva gravitace (zatím jen WASM viewer).
+
+## Kalibrace mutace (2026-06-13)
+
+Headless kalibrace celého systému (genesis `big_bang_macros` + gravitace + tlak +
+mutace; obrázky v `reports/gravity-vis/calib-*`). Zjištění:
+
+- **Celý systém funguje pohromadě:** genesis program se šíří (1 buňka → tisíce),
+  gravitace drží strukturu, mutace ji drží naživu. Bez mutace `max_E` zamrzne
+  (přetlumená rovnováha); s mutací jádro churnuje (nezamrzá).
+- **`K` je čistý tradeoff živost ↔ jemnost hráče, na všech škálách.** Důvod
+  (nečekaný): **mutace sama brání jádrům zhustnout** — bez mutace jádro dorostlo
+  na ~11 k E (při 300 k energie), se zapnutou mutací se drží ~1,2 k (tug-of-war:
+  gravitace hustí, mutace rozbíjí). Jádra tedy zůstávají na hráčské úrovni a
+  separaci „husté jádro horké / hráč jemný" **přes `K` samotné nelze** dosáhnout.
+  Pravá „mutagenní kotle" by chtěla gravitaci tak silnou, aby jádra zhustila
+  navzdory mutaci — hlubší gravitační režim, **odloženo**.
+- **Zvoleno (viewer default): `mutation_strength = 1`, `K = 15 000`** — živé
+  (peak churn cv≈0,20), hráčova ~tisíce-E entita ještě přežije (`p≈0,17`).
+  Struktura (top1% ~14 %) drží napříč `K` (gravitace měkké jádro udrží).
+  Alternativy: `K=6000` (nejživější, hráč se vaří `p≈0,33`), `K=40000` (jemné,
+  málo živé). Engine default zůstává `strength=0` (off); `K=15000` je jen
+  viewer-config default.
+- **Genesis napojena do vieweru (2026-06-13):** WASM `World::new` →
+  `big_bang_macros`, `World::newWithProgram` → `big_bang_with(Base::Macros, program)`
+  (makro-genesis + volitelný hráčův prefix). Viewer tedy běží na makro-genesi;
+  `Base::Noise` zůstává v core API pro baseline/testy. `GenesisConfig` (window,
+  fertility) zatím na defaultu — do UI nevystaveno.
+- **Pozn.:** gravitační hodnoty samotné (`g=0.12/R3/pressure0.2/eref8`) zatím
+  neladěny — samostatný krok.
 
 ## Ladicí poznámka: víc center = fluktuace × gravitace (2026-06-13)
 

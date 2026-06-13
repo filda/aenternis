@@ -151,15 +151,27 @@ pub struct SparseWorld {
     /// [`Self::pressure`] is `0.0`.
     pub pressure_eref: f64,
 
-    /// Density-coupled mutation rate — the per-slot, per-tick bit-flip
-    /// probability *per unit of local energy density*. The actual flip
-    /// probability for a cell of energy `E` is `(base_mutation_rate · E)`
-    /// clamped to `1.0`, so denser cells (gravity wells) mutate more —
-    /// the "mutagenic cauldrons" of `docs/gravity-plan.md`. A bit flip
-    /// changes a slot's *value*, never the slot count, so energy is
-    /// conserved. **Default `0.0`**: the mutation phase is then a strict
-    /// no-op (no RNG drawn), leaving all existing baselines unchanged.
-    pub base_mutation_rate: f64,
+    /// Density-coupled mutation ceiling. The per-slot, per-tick bit-flip
+    /// probability for a cell of energy `E` is
+    /// `mutation_strength · E / (E + mutation_half_density)` — a saturating
+    /// curve: ~0 for a tiny cell (a 1-slot program does nothing anyway),
+    /// rising toward `mutation_strength` as density grows. So gravity
+    /// wells (dense cores) become the "mutagenic cauldrons" of
+    /// `docs/gravity-plan.md` while dispersed / player-scale cells stay
+    /// gentle. A bit flip changes a slot's *value*, never the slot count,
+    /// so energy is conserved. **Default `0.0` = off**: the mutation phase
+    /// is then a strict no-op (no RNG drawn), leaving all baselines
+    /// unchanged. Expected range `[0, 1]` (`1` = up to ~100 % at the core).
+    pub mutation_strength: f64,
+
+    /// Half-saturation density `K` for the mutation curve: the cell energy
+    /// at which the flip probability reaches `mutation_strength / 2`.
+    /// **High** (default `40_000`) so only gravity-concentrated dense cores
+    /// mutate hard and a player's few-thousand-energy entity stays gentle.
+    /// `K = 0` makes the flip probability density-independent (`= strength`
+    /// for any non-empty cell). Inactive while [`Self::mutation_strength`]
+    /// is `0.0`. See `docs/gravity-plan.md`.
+    pub mutation_half_density: f64,
 
     /// Per-tick scratch: neighbor-energy snapshot indexed by cell coord.
     /// Built once at the start of [`crate::tick::step`] and shared
@@ -284,6 +296,12 @@ impl SparseWorld {
     /// Default reference energy `eref` for [`SparseWorld::pressure_eref`].
     pub const DEFAULT_PRESSURE_EREF: f64 = 1.0;
 
+    /// Default half-saturation density `K` for
+    /// [`SparseWorld::mutation_half_density`]. High so only dense cores
+    /// mutate appreciably; `mutation_strength` defaults to `0` (off), so
+    /// this only bites once a caller turns mutation on.
+    pub const DEFAULT_MUTATION_HALF_DENSITY: f64 = 40_000.0;
+
     /// Build an empty world. No cells exist yet; the caller is responsible
     /// for inserting any initial state (typically via [`big_bang`](Self::big_bang)).
     /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
@@ -338,7 +356,8 @@ impl SparseWorld {
             pressure: 0.0,
             pressure_gamma: Self::DEFAULT_PRESSURE_GAMMA,
             pressure_eref: Self::DEFAULT_PRESSURE_EREF,
-            base_mutation_rate: 0.0,
+            mutation_strength: 0.0,
+            mutation_half_density: Self::DEFAULT_MUTATION_HALF_DENSITY,
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
             scratch_mass: FxHashMap::with_hasher(FxBuildHasher),
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),

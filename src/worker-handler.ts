@@ -39,7 +39,8 @@ export interface WorldHandle {
   setPressure(p: number): void;
   setPressureGamma(g: number): void;
   setPressureEref(e: number): void;
-  setBaseMutationRate(r: number): void;
+  setMutationStrength(s: number): void;
+  setMutationHalfDensity(k: number): void;
   step(coeff: number, k: number): void;
   cellsSnapshotView(): Uint32Array;
   boundingBox(): Int32Array;
@@ -157,7 +158,8 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     w.setPressure(s.pressure);
     w.setPressureGamma(s.pressureGamma);
     w.setPressureEref(s.pressureEref);
-    w.setBaseMutationRate(s.baseMutationRate);
+    w.setMutationStrength(s.mutationStrength);
+    w.setMutationHalfDensity(s.mutationHalfDensity);
   }
 
   // Both `send*` helpers take the live `World` as an argument rather
@@ -261,8 +263,11 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
         if (typeof msg.pressure === 'number') world.setPressure(state.pressure);
         if (typeof msg.pressureGamma === 'number') world.setPressureGamma(state.pressureGamma);
         if (typeof msg.pressureEref === 'number') world.setPressureEref(state.pressureEref);
-        if (typeof msg.baseMutationRate === 'number') {
-          world.setBaseMutationRate(state.baseMutationRate);
+        if (typeof msg.mutationStrength === 'number') {
+          world.setMutationStrength(state.mutationStrength);
+        }
+        if (typeof msg.mutationHalfDensity === 'number') {
+          world.setMutationHalfDensity(state.mutationHalfDensity);
         }
       }
       return;

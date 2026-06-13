@@ -376,9 +376,14 @@
         <span class="value" id="pressureErefVal">8</span>
       </div>
       <div class="row">
-        <label>mutation</label>
-        <input id="baseMutationRate" type="range" min="0.0" max="0.01" step="0.0001" value="0.0">
-        <span class="value" id="baseMutationRateVal">0.0000</span>
+        <label>mut_strength</label>
+        <input id="mutationStrength" type="range" min="0.0" max="1.0" step="0.01" value="1.0">
+        <span class="value" id="mutationStrengthVal">1.00</span>
+      </div>
+      <div class="row">
+        <label>mut_K (½)</label>
+        <input id="mutationHalfDensity" type="range" min="0" max="200000" step="1000" value="15000">
+        <span class="value" id="mutationHalfDensityVal">15000</span>
       </div>
       </div>
     </details>

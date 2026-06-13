@@ -233,6 +233,74 @@ hladká fitness krajina pro mutaci. **`spread` tag** (setp+port) je „plodnost"
 (R3/A2). Životaschopný zárodek = replikátor + čítač + senzor zapsaný do paměti, co
 pak krmí port přes aritmetiku/nepřímou adresaci (bez větvení).
 
+### Composity — návrh (v1.1, neimplementováno)
+
+v1 knihovna vyšla **moc atomická**: 23 z 24 maker je jednoinstrukčních (jediný
+composite je `sense_mix`), protože taxonomie A1 enumerovala po opkódových rodinách.
+To je proti původnímu zadání („drobné bloky, co **samy něco dělají**"). v1.1 přidá
+vrstvu **behaviorálních composites**.
+
+Klíč, proč composite „dělá" a slepené atomiky ne: **uvnitř sdílí parametr** →
+vnitřní dataflow (jeden krok zapíše, druhý čte). Návrh (sémantika ověřena proti
+`vm.md`; vše bezskokové, konzervaci-bezpečné):
+
+| Makro | Tělo | Sdílí | Co dělá | Tag |
+|-------|------|-------|---------|-----|
+| `scatter` | `setp {d},{home}` ; `port {d},{i}` | `d` | replikuj **a** vystřel do téhož směru | spread |
+| `synth` | `set {a},{v}` ; `shl {a},{sh}` ; `or {acc},{a}` | `a` | syntéza hodnoty z bitů (vlož → posuň → slij) | bit |
+| `mix_const` | `set {a},{v}` ; `xor {acc},{a}` | `a` | přimíchej konstantu do akumulátoru | bit |
+| `mask` | `set {m},{v}` ; `and {acc},{m}` | `m` | postav masku a aplikuj ji | bit |
+| `load_via` | `set {ptr},{addr}` ; `ldi {dst},{ptr}` | `ptr` | nepřímé čtení ze syntetizované adresy (self-ref) | indirect |
+| `store_via` | `set {ptr},{addr}` ; `sti {ptr},{val}` | `ptr` | self-modifying zápis na spočtenou adresu | indirect |
+| `probe_acc` | `senergy {d},{a}` ; `add {acc},{a}` | `a` | čti energii souseda a akumuluj (dnešní `sense_mix`) | sense |
+| `probe_scale` | `senergy {d},{a}` ; `shl {acc},{a}` | `a` | soused moduluje bitový posun akumulátoru | sense |
+| `count_acc` | `inc {ctr}` ; `add {acc},{ctr}` | `ctr` | tikni hodiny a akumuluj je | clock |
+
+Pozn. typů: `shl a,b` posouvá o `mem[b]&31` ⇒ `{sh}`/`{a}` jsou **ADDR**, ne CONST;
+`ldi a,b`=`mem[a]=mem[mem[b]]`; `sti a,b`=`mem[mem[a]]=mem[b]`; `setp d,v` bere `v`
+jako adresu. Bez `setpv`/skoků (ty zůstávají v2 — `setpv`-driven composity jako
+`getp`/`compute`/`setpv` jsou pozdější páka).
+
+**Plán knihovny v1.1:** dvě vrstvy — composity (váhy MED–HIGH = většina proudu) +
+atomiky jako *spojovací tkáň / surovina* (váha 1–2). Čistě **datová** změna v
+`v1.aenm`: parser/expander/generátor se nemění (composity = víc řádků těla a víc
+sdílených `{param}`, což už podporujeme), jen znovu projet `./check` + scoped
+`cargo mutants`. Přesné váhy jsou empirická páka (ladit spolu s oknem `A`).
+
+### Composity — pokročilá vrstva (v2)
+
+Hlubší „geny", odložené do v2 — buď proto, že jdou jen *stochasticky* (cílenou
+verzi odemkne až v2 opkód), nebo protože jsou to celá organismová chování, co
+patří až po odladění v1.1.
+
+**Strop v1, který tahle vrstva naráží:** bez skoků a `setpv` nelze řídit daty
+akce s immediate operandem (`port {i}`, `paint {v}`, `setp d,{v}`). Jediný most
+*výpočet → akce* ve v1 je **`sti` do kódu = self-modifying code** (`sti a,b` =
+`mem[mem[a]]=mem[b]`; cíl v okně `A` se překrývá s kódem ⇒ přepíše vlastní
+program). To umí v1, ale jen **stochasticky** (zapíše do náhodného blízkého slotu
+kódu) — *cílená* sebemodifikace potřebuje relativní adresaci (`HERE`, v2).
+
+| Makro | Tělo | Co dělá | Závisí na |
+|-------|------|---------|-----------|
+| `hash_step` | `xor {h},{x}` ; `shl {h},{s}` ; `add {h},{x}` | hash/PRNG mixovací krok (syntéza strukturované hodnoty) | nic navíc (technicky v1-proveditelné) |
+| `self_patch` | `set {p},{tgt}` ; `senergy {d},{e}` ; `sti {p},{e}` | přepíše slot kódu energií souseda → program se učí z okolí | stochastické v1; cílené přes `HERE` (v2) |
+| `aim` | `set {p},{opnd}` ; `senergy {d},{e}` ; `sti {p},{e}` | zapíše senzor do *operandu* jiné instrukce → datově řízená akce bez `setpv` | spolehlivě cílené až s `HERE` (v2) |
+| `forager` (agent-gen) | `senergy {d},{e}` ; `add {acc},{e}` ; `xor {acc},{e}` ; `sti {p},{acc}` ; `setp {d},{home}` ; `port {d},{i}` | malý organismus: kouká kam se šíří, namixuje to do kódu, replikuje+střílí tím směrem (sdílí `d`,`e`,`acc`) | celé chování — až po v1.1 |
+
+**v2 opkódové odemčení**, které tuhle vrstvu pozvedne ze stochastické na cílenou
+(navazuje na „Mimo rozsah" → skoky/`setpv`):
+- **`setpv d a`** (pointer = `mem[a]`) → **datově řízená reprodukce**: směr/pozice
+  šíření spočtené z dat/senzoru, ne losované.
+- **`HERE` / relativní adresace** → **cílené metaprogramování**: přepiš *konkrétní*
+  operand/instrukci, ne náhodný slot.
+- **Omezený dopředný podmíněný skok** → **podmíněné chování** uvnitř makra (např.
+  „když soused slabší, vystřel"), co dnes bezskokovost nedovolí.
+
+**Výhrady (proč až v2):** delší tělo = víc ořezů na konci paměti a **nižší
+diverzita**, když se převáží → komplexní geny patří jako *vzácné koření s vyšší
+hodnotou*, ne většina proudu. A skutečný skok v expresivitě (cílené, podmíněné,
+data→reprodukce) stojí na v2 opkódech, které jsou vědomě odložené.
+
 ### Generátor v1 (algoritmus)
 
 ```

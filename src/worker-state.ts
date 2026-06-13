@@ -15,7 +15,8 @@ export interface WorkerSimState {
   readonly pressure: number;
   readonly pressureGamma: number;
   readonly pressureEref: number;
-  readonly baseMutationRate: number;
+  readonly mutationStrength: number;
+  readonly mutationHalfDensity: number;
 }
 
 /** Default state. Matches the fall-back values used in the original
@@ -31,7 +32,8 @@ export const DEFAULT_STATE: WorkerSimState = Object.freeze({
   pressure: 0.0,
   pressureGamma: 2.0,
   pressureEref: 1.0,
-  baseMutationRate: 0.0,
+  mutationStrength: 0.0,
+  mutationHalfDensity: 40_000,
 });
 
 /** Reducer: applies an `init` message to produce the initial state.
@@ -47,7 +49,8 @@ export function stateFromInit(msg: InitMsg): WorkerSimState {
     pressure: msg.pressure ?? DEFAULT_STATE.pressure,
     pressureGamma: msg.pressureGamma ?? DEFAULT_STATE.pressureGamma,
     pressureEref: msg.pressureEref ?? DEFAULT_STATE.pressureEref,
-    baseMutationRate: msg.baseMutationRate ?? DEFAULT_STATE.baseMutationRate,
+    mutationStrength: msg.mutationStrength ?? DEFAULT_STATE.mutationStrength,
+    mutationHalfDensity: msg.mutationHalfDensity ?? DEFAULT_STATE.mutationHalfDensity,
   };
 }
 
@@ -68,6 +71,7 @@ export function applyConfig(state: WorkerSimState, msg: ConfigMsg): WorkerSimSta
     pressure: pick(msg.pressure, state.pressure),
     pressureGamma: pick(msg.pressureGamma, state.pressureGamma),
     pressureEref: pick(msg.pressureEref, state.pressureEref),
-    baseMutationRate: pick(msg.baseMutationRate, state.baseMutationRate),
+    mutationStrength: pick(msg.mutationStrength, state.mutationStrength),
+    mutationHalfDensity: pick(msg.mutationHalfDensity, state.mutationHalfDensity),
   };
 }

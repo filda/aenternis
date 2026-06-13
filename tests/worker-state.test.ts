@@ -27,7 +27,8 @@ describe('DEFAULT_STATE', () => {
       pressure: 0.0,
       pressureGamma: 2.0,
       pressureEref: 1.0,
-      baseMutationRate: 0.0,
+      mutationStrength: 0.0,
+      mutationHalfDensity: 40_000,
     });
   });
 
@@ -61,7 +62,8 @@ describe('stateFromInit', () => {
     expect(s.pressure).toBe(DEFAULT_STATE.pressure);
     expect(s.pressureGamma).toBe(DEFAULT_STATE.pressureGamma);
     expect(s.pressureEref).toBe(DEFAULT_STATE.pressureEref);
-    expect(s.baseMutationRate).toBe(DEFAULT_STATE.baseMutationRate);
+    expect(s.mutationStrength).toBe(DEFAULT_STATE.mutationStrength);
+    expect(s.mutationHalfDensity).toBe(DEFAULT_STATE.mutationHalfDensity);
   });
 
   it('uses the provided gravity/pressure fields when given', () => {
@@ -73,7 +75,8 @@ describe('stateFromInit', () => {
       pressure: 0.03,
       pressureGamma: 2.5,
       pressureEref: 8,
-      baseMutationRate: 0.001,
+      mutationStrength: 0.001,
+      mutationHalfDensity: 25_000,
     });
     expect(s.gravity).toBe(0.2);
     expect(s.gravityAlpha).toBe(0.05);
@@ -81,7 +84,8 @@ describe('stateFromInit', () => {
     expect(s.pressure).toBe(0.03);
     expect(s.pressureGamma).toBe(2.5);
     expect(s.pressureEref).toBe(8);
-    expect(s.baseMutationRate).toBe(0.001);
+    expect(s.mutationStrength).toBe(0.001);
+    expect(s.mutationHalfDensity).toBe(25_000);
   });
 });
 
@@ -96,7 +100,8 @@ describe('applyConfig', () => {
     pressure: 0.02,
     pressureGamma: 2.0,
     pressureEref: 4.0,
-    baseMutationRate: 0.0005,
+    mutationStrength: 0.0005,
+    mutationHalfDensity: 30_000,
   };
 
   const baseCfg: ConfigMsg = {
@@ -142,7 +147,8 @@ describe('applyConfig', () => {
     expect(s.pressure).toBe(before.pressure);
     expect(s.pressureGamma).toBe(before.pressureGamma);
     expect(s.pressureEref).toBe(before.pressureEref);
-    expect(s.baseMutationRate).toBe(before.baseMutationRate);
+    expect(s.mutationStrength).toBe(before.mutationStrength);
+    expect(s.mutationHalfDensity).toBe(before.mutationHalfDensity);
   });
 
   it('updates gravity/pressure fields when provided', () => {
@@ -154,7 +160,8 @@ describe('applyConfig', () => {
       pressure: 0.05,
       pressureGamma: 3.0,
       pressureEref: 16,
-      baseMutationRate: 0.002,
+      mutationStrength: 0.002,
+      mutationHalfDensity: 12_345,
     });
     expect(s.gravity).toBe(0.3);
     expect(s.gravityAlpha).toBe(0.06);
@@ -162,7 +169,8 @@ describe('applyConfig', () => {
     expect(s.pressure).toBe(0.05);
     expect(s.pressureGamma).toBe(3.0);
     expect(s.pressureEref).toBe(16);
-    expect(s.baseMutationRate).toBe(0.002);
+    expect(s.mutationStrength).toBe(0.002);
+    expect(s.mutationHalfDensity).toBe(12_345);
   });
 
   it('updates gravity to 0 when explicitly set to 0 (turning gravity off)', () => {

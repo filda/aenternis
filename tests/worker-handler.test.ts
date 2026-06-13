@@ -30,7 +30,8 @@ function makeMockWorld(): WorldHandle {
     setPressure: vi.fn(),
     setPressureGamma: vi.fn(),
     setPressureEref: vi.fn(),
-    setBaseMutationRate: vi.fn(),
+    setMutationStrength: vi.fn(),
+    setMutationHalfDensity: vi.fn(),
     step: vi.fn(),
     cellsSnapshotView: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
     boundingBox: vi.fn(() => new Int32Array([0, 0, 0, 1, 1, 1])),
@@ -136,7 +137,8 @@ describe('createWorkerHandler — init', () => {
       pressure: 0.03,
       pressureGamma: 2.5,
       pressureEref: 8,
-      baseMutationRate: 0.001,
+      mutationStrength: 0.4,
+      mutationHalfDensity: 25_000,
     });
     expect(h.world.setGravity).toHaveBeenCalledWith(0.2);
     expect(h.world.setGravityAlpha).toHaveBeenCalledWith(0.05);
@@ -144,7 +146,8 @@ describe('createWorkerHandler — init', () => {
     expect(h.world.setPressure).toHaveBeenCalledWith(0.03);
     expect(h.world.setPressureGamma).toHaveBeenCalledWith(2.5);
     expect(h.world.setPressureEref).toHaveBeenCalledWith(8);
-    expect(h.world.setBaseMutationRate).toHaveBeenCalledWith(0.001);
+    expect(h.world.setMutationStrength).toHaveBeenCalledWith(0.4);
+    expect(h.world.setMutationHalfDensity).toHaveBeenCalledWith(25_000);
   });
 
   it('applies the engine default gravity/pressure/mutation when init omits them', () => {
@@ -155,7 +158,8 @@ describe('createWorkerHandler — init', () => {
     expect(h.world.setPressure).toHaveBeenCalledWith(0.0);
     expect(h.world.setPressureGamma).toHaveBeenCalledWith(2.0);
     expect(h.world.setPressureEref).toHaveBeenCalledWith(1.0);
-    expect(h.world.setBaseMutationRate).toHaveBeenCalledWith(0.0);
+    expect(h.world.setMutationStrength).toHaveBeenCalledWith(0.0);
+    expect(h.world.setMutationHalfDensity).toHaveBeenCalledWith(40_000);
   });
 
   it('emits an initial snapshot with transferable buffers', () => {
@@ -253,7 +257,8 @@ describe('createWorkerHandler — config', () => {
       pressure: 0.04,
       pressureGamma: 3.0,
       pressureEref: 16,
-      baseMutationRate: 0.003,
+      mutationStrength: 0.6,
+      mutationHalfDensity: 50_000,
     });
     expect(h.world.setGravity).toHaveBeenCalledWith(0.25);
     expect(h.world.setGravityAlpha).toHaveBeenCalledWith(0.06);
@@ -261,7 +266,8 @@ describe('createWorkerHandler — config', () => {
     expect(h.world.setPressure).toHaveBeenCalledWith(0.04);
     expect(h.world.setPressureGamma).toHaveBeenCalledWith(3.0);
     expect(h.world.setPressureEref).toHaveBeenCalledWith(16);
-    expect(h.world.setBaseMutationRate).toHaveBeenCalledWith(0.003);
+    expect(h.world.setMutationStrength).toHaveBeenCalledWith(0.6);
+    expect(h.world.setMutationHalfDensity).toHaveBeenCalledWith(50_000);
   });
 
   it('forwards gravity of 0 to turn it back off (truthy guard regression)', () => {

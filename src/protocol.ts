@@ -26,7 +26,8 @@ export interface InitMsg {
   readonly pressure?: number;
   readonly pressureGamma?: number;
   readonly pressureEref?: number;
-  readonly baseMutationRate?: number;
+  readonly mutationStrength?: number;
+  readonly mutationHalfDensity?: number;
   readonly program?: Uint32Array | readonly number[];
 }
 
@@ -41,7 +42,8 @@ export interface ConfigMsg {
   readonly pressure?: number;
   readonly pressureGamma?: number;
   readonly pressureEref?: number;
-  readonly baseMutationRate?: number;
+  readonly mutationStrength?: number;
+  readonly mutationHalfDensity?: number;
 }
 
 export interface RunningMsg {

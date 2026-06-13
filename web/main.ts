@@ -66,7 +66,8 @@ interface RuntimeConfig {
   pressure: number;
   pressureGamma: number;
   pressureEref: number;
-  baseMutationRate: number;
+  mutationStrength: number;
+  mutationHalfDensity: number;
 }
 
 interface BackendChoice {
@@ -156,7 +157,14 @@ export function bootstrap(): void {
     pressure: 0.2,
     pressureGamma: 2.0,
     pressureEref: 8.0,
-    baseMutationRate: 0.0,
+    // Calibration (2026-06-13): livelier default — mutation on, K=15000.
+    // K is a pure liveliness↔player-gentleness tradeoff (mutation self-limits
+    // core density, so the dense-cauldron separation can't be reached by K
+    // alone — that needs a much stronger-gravity regime). K=15000 = lively
+    // (peak churn cv≈0.20) with a player's few-thousand-E entity still
+    // survivable (p≈0.17). See docs/gravity-plan.md.
+    mutationStrength: 1.0,
+    mutationHalfDensity: 15_000,
   };
 
   // ----- DOM lookup ----------------------------------------------------------
@@ -194,8 +202,10 @@ export function bootstrap(): void {
     pressureGammaVal: requireEl('pressureGammaVal', HTMLSpanElement),
     pressureEref: requireEl('pressureEref', HTMLInputElement),
     pressureErefVal: requireEl('pressureErefVal', HTMLSpanElement),
-    baseMutationRate: requireEl('baseMutationRate', HTMLInputElement),
-    baseMutationRateVal: requireEl('baseMutationRateVal', HTMLSpanElement),
+    mutationStrength: requireEl('mutationStrength', HTMLInputElement),
+    mutationStrengthVal: requireEl('mutationStrengthVal', HTMLSpanElement),
+    mutationHalfDensity: requireEl('mutationHalfDensity', HTMLInputElement),
+    mutationHalfDensityVal: requireEl('mutationHalfDensityVal', HTMLSpanElement),
     trackerEnabled: requireEl('trackerEnabled', HTMLInputElement),
     trailLen: requireEl('trailLen', HTMLInputElement),
     trailLenVal: requireEl('trailLenVal', HTMLSpanElement),
@@ -324,7 +334,8 @@ export function bootstrap(): void {
       pressure: config.pressure,
       pressureGamma: config.pressureGamma,
       pressureEref: config.pressureEref,
-      baseMutationRate: config.baseMutationRate,
+      mutationStrength: config.mutationStrength,
+      mutationHalfDensity: config.mutationHalfDensity,
       program,
     };
     channel.postMessage(init);
@@ -345,7 +356,8 @@ export function bootstrap(): void {
       pressure: config.pressure,
       pressureGamma: config.pressureGamma,
       pressureEref: config.pressureEref,
-      baseMutationRate: config.baseMutationRate,
+      mutationStrength: config.mutationStrength,
+      mutationHalfDensity: config.mutationHalfDensity,
     };
     channel.postMessage(cfg);
   }
@@ -986,9 +998,14 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     dom.pressureErefVal.textContent = String(Math.round(config.pressureEref));
     sendConfig();
   });
-  dom.baseMutationRate.addEventListener('input', () => {
-    config.baseMutationRate = parseFloat(dom.baseMutationRate.value) || 0.0;
-    dom.baseMutationRateVal.textContent = config.baseMutationRate.toFixed(4);
+  dom.mutationStrength.addEventListener('input', () => {
+    config.mutationStrength = parseFloat(dom.mutationStrength.value) || 0.0;
+    dom.mutationStrengthVal.textContent = config.mutationStrength.toFixed(2);
+    sendConfig();
+  });
+  dom.mutationHalfDensity.addEventListener('input', () => {
+    config.mutationHalfDensity = parseInt(dom.mutationHalfDensity.value, 10) || 0;
+    dom.mutationHalfDensityVal.textContent = String(config.mutationHalfDensity);
     sendConfig();
   });
   dom.trackerEnabled.addEventListener('change', () => {

@@ -51,7 +51,7 @@
     feature(alloc_error_hook)
 )]
 
-use aenternis_core::{tick, SparseWorld};
+use aenternis_core::{tick, Base, SparseWorld};
 #[cfg(target_arch = "wasm32")]
 use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
@@ -196,7 +196,11 @@ impl World {
     #[must_use]
     pub fn new(seed: u32, energy: u32) -> Self {
         Self {
-            inner: SparseWorld::big_bang(u64::from(seed), energy),
+            // Macro genesis (`docs/genesis-plan.md`) is the production
+            // default: the origin cell's whole memory is a seed-driven
+            // weighted stream of macros — information-bearing, not noise.
+            // `Base::Noise` stays for baselines/tests via the core API.
+            inner: SparseWorld::big_bang_macros(u64::from(seed), energy),
             // `snapshot_buf` grows on demand via `Vec::reserve`
             // inside `fill_snapshot_buf`. Pre-reserving to
             // `energy * STRIDE` (~24 MB at E = 1 M) tempted us in
@@ -212,20 +216,23 @@ impl World {
         }
     }
 
-    /// Construct a new world with a programmer-supplied prefix written
-    /// into the origin cell's memory. The first `min(program.length,
-    /// energy)` slots are taken verbatim from `program`, the rest from
-    /// the deterministic per-cell RNG.
+    /// Construct a new world on the **macro-genesis** base with a
+    /// programmer-supplied prefix overlaid on the origin cell's memory.
+    /// The whole memory is first generated from the seed tape (macro
+    /// genesis); then the first `min(program.length, energy)` slots are
+    /// overwritten verbatim by `program`. The generated tail past the
+    /// prefix is independent of the prefix, so it stays identical
+    /// regardless of the program supplied.
     ///
-    /// Matches prototype 9's `bigBang(eTotal, programSlots)` semantics:
-    /// program-covered slots do not advance the RNG, so the suffix
-    /// generated from `(seed, energy)` is identical regardless of the
-    /// program supplied.
+    /// This is the production viewer path — an empty `program` gives pure
+    /// macro genesis; a non-empty one seeds the start with the player's
+    /// code. (`Base::Noise` + program remains in the core API for
+    /// baselines.)
     #[wasm_bindgen(js_name = newWithProgram)]
     #[must_use]
     pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
         Self {
-            inner: SparseWorld::big_bang_with_program(u64::from(seed), energy, program),
+            inner: SparseWorld::big_bang_with(u64::from(seed), energy, Base::Macros, program),
             // See `World::new` for the rationale on not pre-reserving.
             snapshot_buf: Vec::new(),
             inspect_buf: Vec::new(),
@@ -367,22 +374,40 @@ impl World {
         self.inner.pressure_eref
     }
 
-    /// Set the density-coupled mutation rate (default `0.0` = off). The
+    /// Set the mutation strength / ceiling (default `0.0` = off). The
     /// per-slot bit-flip probability for a cell of energy `E` is
-    /// `min(rate · E, 1)`, so denser cells mutate more. `0.0` makes the
-    /// mutation phase a strict no-op. See `docs/gravity-plan.md`.
-    #[wasm_bindgen(js_name = setBaseMutationRate)]
+    /// `strength · E / (E + half_density)` — a saturating curve, so dense
+    /// gravity wells mutate most while sparse cells stay gentle. `0.0`
+    /// makes the mutation phase a strict no-op. See `docs/gravity-plan.md`.
+    #[wasm_bindgen(js_name = setMutationStrength)]
     #[allow(clippy::missing_const_for_fn)]
-    pub fn set_base_mutation_rate(&mut self, rate: f64) {
-        self.inner.base_mutation_rate = rate;
+    pub fn set_mutation_strength(&mut self, strength: f64) {
+        self.inner.mutation_strength = strength;
     }
 
-    /// Current density-coupled mutation rate.
-    #[wasm_bindgen(getter, js_name = baseMutationRate)]
+    /// Current mutation strength.
+    #[wasm_bindgen(getter, js_name = mutationStrength)]
     #[must_use]
     #[allow(clippy::missing_const_for_fn)]
-    pub fn base_mutation_rate(&self) -> f64 {
-        self.inner.base_mutation_rate
+    pub fn mutation_strength(&self) -> f64 {
+        self.inner.mutation_strength
+    }
+
+    /// Set the mutation half-saturation density `K` — the energy at which
+    /// the flip probability reaches `strength / 2`. High = only dense
+    /// cores mutate hard. See `docs/gravity-plan.md`.
+    #[wasm_bindgen(js_name = setMutationHalfDensity)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_mutation_half_density(&mut self, half_density: f64) {
+        self.inner.mutation_half_density = half_density;
+    }
+
+    /// Current mutation half-saturation density `K`.
+    #[wasm_bindgen(getter, js_name = mutationHalfDensity)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn mutation_half_density(&self) -> f64 {
+        self.inner.mutation_half_density
     }
 
     /// Total energy summed across every cell. Conserved across ticks

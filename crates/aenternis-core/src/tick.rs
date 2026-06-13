@@ -1729,14 +1729,18 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 /// slot count, so the `energy == mem_len` invariant — and total energy —
 /// is preserved exactly; only the *content* (program) drifts.
 ///
-/// **Density coupling.** The per-slot flip probability for a cell of
-/// energy `E` is `p = min(base_mutation_rate · E, 1)`. Energy is density
-/// (a cell is a unit volume), so the dense cores that gravity builds
-/// become "mutagenic cauldrons" — the evolutionary engine of the world.
-/// Coupling on the cell's own energy keeps the phase self-contained
-/// (no dependency on the gravity-only `scratch_mass`); coupling on the
-/// gravitational potential `M` instead is a documented future tuning
-/// knob (`docs/gravity-plan.md`, "coupling mutace: na E vs M").
+/// **Density coupling (saturating).** The per-slot flip probability for a
+/// cell of energy `E` is
+/// `p = mutation_strength · E / (E + mutation_half_density)` — a saturating
+/// curve, not linear: ~0 for a tiny cell (a 1-slot program does nothing),
+/// rising toward `mutation_strength` as density grows, reaching half at
+/// `E = mutation_half_density`. With that half-density set high, only the
+/// dense cores gravity builds become "mutagenic cauldrons" while dispersed
+/// / player-scale cells stay gentle — gravity thus decides *where*
+/// evolution happens. Energy is density (a cell is a unit volume), so this
+/// couples on the cell's own energy: self-contained (no dependency on the
+/// gravity-only `scratch_mass`). All ops are `+`/`*`/`/` (correctly
+/// rounded) → reproducible native↔wasm. See `docs/gravity-plan.md`.
 ///
 /// **Determinism.** One RNG stream per cell, keyed
 /// `(world_seed, tick, coord, DENSITY_MUTATION_RNG_DOMAIN)` — a domain
@@ -1746,22 +1750,23 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 /// rate stream at index 0). Reproducible across runs and independent of
 /// cell iteration order, since each cell mutates only its own slots.
 ///
-/// **No-op at zero rate.** `base_mutation_rate == 0.0` returns before
-/// seeding any RNG, so the phase is byte-for-byte absent from the tick —
-/// existing baselines stay valid with mutation off.
+/// **No-op when off.** `mutation_strength == 0.0` returns before seeding
+/// any RNG, so the phase is byte-for-byte absent from the tick — existing
+/// baselines stay valid with mutation off.
 ///
 /// Runs sequentially: it needs `&mut world.arena` (a single shared
 /// buffer), which can't be split across a parallel cell walk. Mutation is
 /// cheap next to the outflow phase; a collect-then-apply parallel variant
 /// is only worth it if profiling later says so.
 //
-// `float_cmp`: `base_mutation_rate == 0.0` is a deliberate exact off-switch.
+// `float_cmp`: `mutation_strength == 0.0` is a deliberate exact off-switch.
 #[allow(clippy::float_cmp)]
 pub fn apply_density_coupled_mutation(world: &mut SparseWorld) {
-    let base_rate = world.base_mutation_rate;
-    if base_rate == 0.0 {
+    let strength = world.mutation_strength;
+    if strength == 0.0 {
         return;
     }
+    let half_density = world.mutation_half_density;
     let world_seed = world.world_seed;
     let tick = world.tick;
     // Disjoint field borrows: read each cell's range, mutate arena slots.
@@ -1772,9 +1777,11 @@ pub fn apply_density_coupled_mutation(world: &mut SparseWorld) {
         if energy == 0 {
             continue;
         }
-        // Per-slot flip probability rises linearly with local density and
-        // is clamped to a valid probability.
-        let p_flip = (base_rate * f64::from(energy)).min(1.0);
+        // Saturating density coupling: p = strength · E / (E + K). `+`/`*`/
+        // `/` are correctly rounded → portable; `E + K > 0` (E ≥ 1) so no
+        // division by zero even at K = 0 (which gives p = strength).
+        let e = f64::from(energy);
+        let p_flip = strength * e / (e + half_density);
         let mut rng = Rng::for_cell_at_tick(world_seed, tick, *coord, DENSITY_MUTATION_RNG_DOMAIN);
         for slot in arena.slice_mut(cell.mem_start, cell.mem_len).iter_mut() {
             if rng.next_f64() < p_flip {
