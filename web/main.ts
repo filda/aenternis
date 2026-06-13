@@ -151,9 +151,9 @@ export function bootstrap(): void {
     // into the top 1 % of cells here — clear structure, no runaway. The
     // engine-side SparseWorld defaults stay 0 (frozen baselines); these
     // are UI starting points only.
-    gravity: 0.12,
+    gravity: 0.3,
     gravityAlpha: 0.05,
-    gravityRadius: 3,
+    gravityRadius: 4,
     pressure: 0.2,
     pressureGamma: 2.0,
     pressureEref: 8.0,

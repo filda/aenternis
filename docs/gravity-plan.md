@@ -266,8 +266,16 @@ mutace; obrázky v `reports/gravity-vis/calib-*`). Zjištění:
   (makro-genesis + volitelný hráčův prefix). Viewer tedy běží na makro-genesi;
   `Base::Noise` zůstává v core API pro baseline/testy. `GenesisConfig` (window,
   fertility) zatím na defaultu — do UI nevystaveno.
-- **Pozn.:** gravitační hodnoty samotné (`g=0.12/R3/pressure0.2/eref8`) zatím
-  neladěny — samostatný krok.
+- **Gravitace doladěna (2026-06-14, viewer default `g=0.3, R=4`)** — sweep `g×R`
+  s plným systémem (genesis + mutace s=1/K=15000). Klíčové: **z jednoho big-bangu
+  vzniká vždy JEDNO dominantní jádro** (+ halo + pár satelitů), ne víc nezávislých
+  center — mrak je souvislý, gravitace ho stáhne k těžišti; ani malé `R` ho
+  nefragmentuje. (Víc center by chtělo rozprostřené pole = test-only; uživatel
+  potvrdil „vždy big bang".) Silnější `g`/větší `R` jádro zhušťuje a přidává
+  satelity. `g=0.3/R=4` = výrazné husté jádro, ještě ne přesublimované
+  (top1% ~13.5 %), nejvíc buněk/živé z testovaných. `alpha=0.05, pressure=0.2,
+  γ=2, eref=8` beze změny. Engine default `gravity=0` (off) drží; tohle je
+  viewer-config default. Obrázky: `reports/gravity-vis/gtune-*`.
 
 ## Ladicí poznámka: víc center = fluktuace × gravitace (2026-06-13)
 
