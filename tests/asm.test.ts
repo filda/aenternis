@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { OPCODES, DIRECTIONS, resolveOperand, assemble } from '../src/asm.ts';
 
 describe('OPCODES table', () => {
-  it('has 20 entries matching the Rust VM (Opcode::COUNT)', () => {
-    expect(Object.keys(OPCODES)).toHaveLength(20);
+  it('has 31 entries matching the Rust VM (Opcode::COUNT)', () => {
+    expect(Object.keys(OPCODES)).toHaveLength(31);
   });
 
   it('opcode codes are unique', () => {

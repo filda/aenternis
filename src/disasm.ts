@@ -5,14 +5,13 @@
 // optional PC marker. Used by the inspector to render the memory tail
 // as a program listing instead of (or alongside) the raw hex dump.
 //
-// Variable-length instructions: a known opcode consumes `1 + args`
-// slots. If the opcode is unknown (> 0x13, the VM's `Opcode::MAX`) or the
-// instruction would overrun the slot array, the slot is rendered as a
-// single `raw 0x…`
-// line. This is more conservative than the VM (which treats unknown
-// opcodes as nop) — for a static listing, "raw" honestly conveys "I
-// don't know what this is", which matches how the suffix slots (RNG
-// noise after the user's program prefix) actually look.
+// Variable-length instructions: an opcode consumes `1 + args` slots.
+// The VM's decode is total — every low byte folds onto a real opcode via
+// `byte % COUNT` — so the disassembler mirrors that fold and there is no
+// "unknown opcode" case. The only `raw 0x…` fallback is a *truncated
+// tail*: an instruction whose operands would overrun the slot array
+// (e.g. the last slot of a dump being a 3-slot opcode). That honestly
+// conveys "these bytes can't be a complete instruction here".
 //
 // PC marker: if `options.pc` is supplied and falls anywhere inside the
 // slot range of an instruction (`[i, i + 1 + args)`), that line is
@@ -45,6 +44,11 @@ const OPS_BY_CODE: ReadonlyMap<number, DecodedOp> = (() => {
   return map;
 })();
 
+/** Number of defined opcodes. The VM decode folds any byte onto a real
+ *  opcode via `byte % COUNT` (contiguous `0..COUNT-1` opcode space), so
+ *  the disassembler mirrors that fold to show what actually executes. */
+const OPCODE_COUNT = OPS_BY_CODE.size;
+
 export interface DisasmOptions {
   /** Program-counter slot index. Lines whose instruction range contains
    *  this index are prefixed with `> `. */
@@ -72,7 +76,8 @@ export function disassemble(slots: ArrayLike<number>, options: DisasmOptions = {
   while (i < slots.length) {
     // Loop bounds guarantee slots[i] is defined.
     const slot = slots[i]! >>> 0;
-    const opcode = slot & 0xff;
+    // Mirror the VM's total decode: fold the low byte onto a real opcode.
+    const opcode = (slot & 0xff) % OPCODE_COUNT;
     const op = OPS_BY_CODE.get(opcode);
     const addr = i.toString(16).padStart(4, '0');
 

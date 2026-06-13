@@ -9,9 +9,9 @@
 //!
 //! This module provides:
 //!
-//! - [`Opcode`] — enum over the 20 currently defined opcodes
-//! - [`Opcode::decode`] — slot → optional opcode (unknown = `None`,
-//!   which the executor treats as `nop`)
+//! - [`Opcode`] — enum over the 31 currently defined opcodes
+//! - [`Opcode::decode`] — slot → opcode, total via the `byte % COUNT`
+//!   fold (every byte decodes to a real opcode; Z80-density)
 //! - [`Opcode::length`] — instruction width in slots, drives PC advance
 //! - [`execute_instruction`] — single-step interpreter for one opcode
 //!
@@ -26,12 +26,15 @@
 use crate::world::arena::Arena;
 use crate::{Cell, Direction};
 
-/// One of the 20 defined Aenternis opcodes.
+/// One of the 31 defined Aenternis opcodes.
 ///
 /// The discriminants match the slot encoding (low byte == opcode), so
-/// `opcode as u8` is the canonical wire representation. New opcodes are
-/// added by extending the enum *and* the `decode` / `length` matches —
-/// `clippy::needless_match` keeps them in sync at compile time.
+/// `opcode as u8` is the canonical wire representation. Discriminants are
+/// **contiguous `0..COUNT-1` and append-only** — `decode` relies on this
+/// to fold any byte onto a variant via `ALL[byte % COUNT]`, and the
+/// append-only rule keeps existing programs stable across additions
+/// (see `docs/opcodes-plan.md`). New opcodes extend the enum, `decode`'s
+/// backing `ALL` array, and the `length` match together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum Opcode {
@@ -75,46 +78,54 @@ pub enum Opcode {
     Sid = 0x12,
     /// `paint v` — `appearance = v`. 2 slots.
     Paint = 0x13,
+    /// `and a b` — `mem[a] &= mem[b]`. 3 slots.
+    And = 0x14,
+    /// `or a b` — `mem[a] |= mem[b]`. 3 slots.
+    Or = 0x15,
+    /// `xor a b` — `mem[a] ^= mem[b]`. 3 slots.
+    Xor = 0x16,
+    /// `not a` — `mem[a] = !mem[a]` (bitwise complement). 2 slots.
+    Not = 0x17,
+    /// `shl a b` — `mem[a] <<= (mem[b] mod 32)`. 3 slots.
+    Shl = 0x18,
+    /// `shr a b` — `mem[a] >>= (mem[b] mod 32)` (logical). 3 slots.
+    Shr = 0x19,
+    /// `mul a b` — `mem[a] = (mem[a] * mem[b]) mod 2^32`. 3 slots.
+    Mul = 0x1A,
+    /// `div a b` — `mem[a] = mem[b]==0 ? 0 : mem[a] / mem[b]` (unsigned). 3 slots.
+    Div = 0x1B,
+    /// `mod a b` — `mem[a] = mem[b]==0 ? 0 : mem[a] % mem[b]` (unsigned). 3 slots.
+    Mod = 0x1C,
+    /// `jp a t` — if `(mem[a] as i32) > 0` then `PC = t`. 3 slots.
+    Jp = 0x1D,
+    /// `jn a t` — if `(mem[a] as i32) < 0` then `PC = t`. 3 slots.
+    Jn = 0x1E,
 }
 
 impl Opcode {
-    /// Number of opcode variants (currently `20`).
-    pub const COUNT: u8 = 20;
+    /// Number of opcode variants (currently `31`).
+    pub const COUNT: u8 = 31;
 
-    /// Highest valid opcode value (currently `0x13`).
-    pub const MAX: u8 = 0x13;
+    /// Highest valid opcode value (currently `0x1E`).
+    pub const MAX: u8 = 0x1E;
 
     /// Decode the lowest byte of a slot into an opcode.
     ///
-    /// Returns `None` for unknown bytes (`> MAX`). The executor treats
-    /// unknown as `nop` (PC advance by 1), but distinguishing the two
-    /// at decode time helps tooling — a disassembler may print the raw
-    /// byte in hex rather than misleadingly listing it as `nop`.
+    /// **Total** — every one of the 256 byte values maps to a valid
+    /// opcode via the fold `byte % COUNT`. Opcodes occupy a contiguous
+    /// `0..COUNT-1` range, so the modulo always lands on a real variant
+    /// (`Self::ALL[byte % COUNT]`). This is the Z80-density mechanism:
+    /// random noise always decodes to *something* executable rather than
+    /// mostly `nop`, which is what lets meaningful programs emerge from a
+    /// big-bang of noise.
+    ///
+    /// Bytes `< COUNT` are unchanged by the fold (`b % COUNT == b`), so
+    /// every assembled instruction keeps its meaning even as new opcodes
+    /// are appended later — provided opcodes stay contiguous and
+    /// append-only. See `docs/opcodes-plan.md`.
     #[must_use]
-    pub const fn decode(slot: u32) -> Option<Self> {
-        match slot & 0xFF {
-            0x00 => Some(Self::Nop),
-            0x01 => Some(Self::Set),
-            0x02 => Some(Self::Copy),
-            0x03 => Some(Self::Add),
-            0x04 => Some(Self::Sub),
-            0x05 => Some(Self::Inc),
-            0x06 => Some(Self::Dec),
-            0x07 => Some(Self::Jmp),
-            0x08 => Some(Self::Jz),
-            0x09 => Some(Self::Setp),
-            0x0A => Some(Self::Getp),
-            0x0B => Some(Self::Port),
-            0x0C => Some(Self::Senergy),
-            0x0D => Some(Self::Jne),
-            0x0E => Some(Self::Je),
-            0x0F => Some(Self::Ldi),
-            0x10 => Some(Self::Sti),
-            0x11 => Some(Self::Setpv),
-            0x12 => Some(Self::Sid),
-            0x13 => Some(Self::Paint),
-            _ => None,
-        }
+    pub const fn decode(slot: u32) -> Self {
+        Self::ALL[(slot as u8 % Self::COUNT) as usize]
     }
 
     /// Instruction width in slots. The executor advances `PC` by this
@@ -123,7 +134,7 @@ impl Opcode {
     pub const fn length(self) -> u32 {
         match self {
             Self::Nop => 1,
-            Self::Inc | Self::Dec | Self::Jmp | Self::Sid | Self::Paint => 2,
+            Self::Inc | Self::Dec | Self::Jmp | Self::Sid | Self::Paint | Self::Not => 2,
             Self::Set
             | Self::Copy
             | Self::Add
@@ -136,7 +147,17 @@ impl Opcode {
             | Self::Jne
             | Self::Ldi
             | Self::Sti
-            | Self::Setpv => 3,
+            | Self::Setpv
+            | Self::And
+            | Self::Or
+            | Self::Xor
+            | Self::Shl
+            | Self::Shr
+            | Self::Mul
+            | Self::Div
+            | Self::Mod
+            | Self::Jp
+            | Self::Jn => 3,
             Self::Je => 4,
         }
     }
@@ -163,6 +184,17 @@ impl Opcode {
         Self::Setpv,
         Self::Sid,
         Self::Paint,
+        Self::And,
+        Self::Or,
+        Self::Xor,
+        Self::Not,
+        Self::Shl,
+        Self::Shr,
+        Self::Mul,
+        Self::Div,
+        Self::Mod,
+        Self::Jp,
+        Self::Jn,
     ];
 }
 
@@ -180,16 +212,18 @@ impl Opcode {
 /// **Empty cells** (`memory.len() == 0`) are a no-op — there is no
 /// program to run. Callers don't need to special-case them.
 ///
-/// **Unknown opcodes** (low byte > [`Opcode::MAX`]) act as `nop` —
-/// PC advances by 1 slot. This is a defensive default: random noise
-/// in memory must never crash the VM.
+/// **Every byte is executable.** [`Opcode::decode`] is total — a low
+/// byte `>= COUNT` folds onto a real opcode (`byte % COUNT`) rather than
+/// acting as `nop`. Random noise in memory therefore always runs *some*
+/// instruction; the VM still never crashes, because every opcode is
+/// memory-safe under modular addressing and wrapping arithmetic.
 ///
 /// All addresses are taken modulo `memory.len()` (modular addressing,
 /// never out of bounds). All arithmetic is wrapping. The `port` opcode
 /// uses `wrapping_add` to accumulate into `active_outflow` — the wrap
 /// is intentional, not undefined behavior; rogue programs that drive a
 /// face's outflow past `u32::MAX` just wrap around.
-#[allow(clippy::too_many_lines)] // 20 opcodes per match; splitting hurts more than it helps
+#[allow(clippy::too_many_lines)] // 31 opcodes per match; splitting hurts more than it helps
 pub fn execute_instruction(
     cell: &mut Cell,
     arena: &mut Arena,
@@ -202,11 +236,10 @@ pub fn execute_instruction(
     let pc_u = cell.pc as usize;
     let opcode_slot = cell.memory_slot(arena, pc_u % mem_size);
 
-    let Some(op) = Opcode::decode(opcode_slot) else {
-        // Unknown opcode → nop, advance by 1.
-        cell.pc = ((pc_u + 1) % mem_size) as u32;
-        return;
-    };
+    // `decode` is total — every byte folds onto a real opcode, so there is
+    // no "unknown → nop" fallback. A byte `>= COUNT` executes as its folded
+    // opcode `byte % COUNT`.
+    let op = Opcode::decode(opcode_slot);
 
     let length = op.length() as usize;
 
@@ -349,6 +382,91 @@ pub fn execute_instruction(
         }
         Opcode::Paint => {
             cell.appearance = arg1;
+        }
+
+        Opcode::And => {
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs & rhs);
+        }
+        Opcode::Or => {
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs | rhs);
+        }
+        Opcode::Xor => {
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs ^ rhs);
+        }
+        Opcode::Not => {
+            let dst = (arg1 as usize) % mem_size;
+            let v = cell.memory_slot(arena, dst);
+            cell.set_memory_slot(arena, dst, !v);
+        }
+        Opcode::Shl => {
+            // `wrapping_shl` masks the shift amount by 32 (i.e. `mem[b] % 32`),
+            // matching the `& 31` in the spec and never panicking on `>= 32`.
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.wrapping_shl(rhs));
+        }
+        Opcode::Shr => {
+            // Logical (unsigned) shift right; `wrapping_shr` masks by 32.
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.wrapping_shr(rhs));
+        }
+        Opcode::Mul => {
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.wrapping_mul(rhs));
+        }
+        Opcode::Div => {
+            // Division by zero yields 0 — the VM has no trap mechanism, so a
+            // defined deterministic result is required. See `docs/opcodes-plan.md`.
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.checked_div(rhs).unwrap_or(0));
+        }
+        Opcode::Mod => {
+            // Modulo by zero yields 0 (same rationale as `div`).
+            let src = (arg2 as usize) % mem_size;
+            let dst = (arg1 as usize) % mem_size;
+            let lhs = cell.memory_slot(arena, dst);
+            let rhs = cell.memory_slot(arena, src);
+            cell.set_memory_slot(arena, dst, lhs.checked_rem(rhs).unwrap_or(0));
+        }
+        Opcode::Jp => {
+            // Signed `> 0` without an `as i32` cast (MSRV 1.85 predates
+            // `u32::cast_signed`): positive two's-complement means the sign
+            // bit is clear and the value is non-zero.
+            let probe = (arg1 as usize) % mem_size;
+            let v = cell.memory_slot(arena, probe);
+            if v != 0 && v < 0x8000_0000 {
+                jump_to = Some((arg2 as usize) % mem_size);
+            }
+        }
+        Opcode::Jn => {
+            // Signed `< 0`: the two's-complement sign bit is set.
+            let probe = (arg1 as usize) % mem_size;
+            if cell.memory_slot(arena, probe) >= 0x8000_0000 {
+                jump_to = Some((arg2 as usize) % mem_size);
+            }
         }
     }
 

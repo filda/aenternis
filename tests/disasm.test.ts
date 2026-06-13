@@ -71,13 +71,12 @@ describe('disassemble — known opcodes', () => {
     expect(disassemble([OPCODES.paint!.code, 0xCAFE])).toBe('  0000: paint 0xcafe');
   });
 
-  it('renders planned-but-unimplemented sensors (0x14–0x16) as raw', () => {
-    // sinflow/sself/srate are specified in docs/vm.md but the VM stops at
-    // 0x13 (Opcode::MAX). The disassembler must not invent mnemonics the
-    // VM cannot run — in real memory these low bytes are RNG noise.
-    expect(disassemble([0x14])).toBe('  0000: raw 0x00000014');
-    expect(disassemble([0x15])).toBe('  0000: raw 0x00000015');
-    expect(disassemble([0x16])).toBe('  0000: raw 0x00000016');
+  it('renders the bitwise/arith opcodes added for opcode density', () => {
+    // 0x14–0x1e are real opcodes now (and, or, xor, not, …, jp, jn).
+    // Given enough slots they render as mnemonics.
+    expect(disassemble([OPCODES.and!.code, 3, 4])).toBe('  0000: and 3, 4');
+    expect(disassemble([OPCODES.not!.code, 5])).toBe('  0000: not 5');
+    expect(disassemble([OPCODES.jp!.code, 1, 2])).toBe('  0000: jp 1, 2');
   });
 
   it('hex/decimal boundary at 10', () => {
@@ -91,14 +90,17 @@ describe('disassemble — known opcodes', () => {
   });
 });
 
-describe('disassemble — raw fallback', () => {
-  it('renders unknown opcodes (> 0x13) as raw', () => {
-    expect(disassemble([0xFF])).toBe('  0000: raw 0x000000ff');
-    expect(disassemble([0x17])).toBe('  0000: raw 0x00000017');
+describe('disassemble — fold + raw fallback', () => {
+  it('folds a high byte onto its real opcode (byte % COUNT)', () => {
+    // No "unknown opcode" exists post-fold: 0xff & 0xff = 255; 255 % 31 = 7
+    // = jmp (1 arg). With a following slot it renders the folded mnemonic.
+    expect(disassemble([0xFF, 0])).toBe('  0000: jmp 0');
+    // 0x20 = 32; 32 % 31 = 1 = set (2 args).
+    expect(disassemble([0x20, 5, 9])).toBe('  0000: set 5, 9');
   });
 
   it('renders a truncated tail as raw', () => {
-    // set expects 2 args but only one slot follows.
+    // set expects 2 args but only one slot follows → cannot complete.
     const slots = [OPCODES.set!.code, 42];
     const lines = disassemble(slots).split('\n');
     expect(lines).toEqual([
@@ -107,10 +109,10 @@ describe('disassemble — raw fallback', () => {
     ]);
   });
 
-  it('does not consume args across an unknown opcode boundary', () => {
-    // 0xFF unknown → consumed as raw, then jmp 0 starts at 0001.
-    const slots = [0xFF, OPCODES.jmp!.code, 0];
-    expect(disassemble(slots)).toBe('  0000: raw 0x000000ff\n  0001: jmp 0');
+  it('renders a high-arg opcode at the dump tail as raw (truncated)', () => {
+    // je needs 3 args; alone it cannot complete, so it renders raw rather
+    // than reading past the end of the slot array.
+    expect(disassemble([OPCODES.je!.code])).toBe('  0000: raw 0x0000000e');
   });
 });
 
@@ -137,10 +139,11 @@ describe('disassemble — PC marker', () => {
     expect(out).toBe('  0000: nop');
   });
 
-  it('PC on a raw slot marks just that line', () => {
-    const slots = [0xFF, 0xFE];
+  it('PC on a truncated (raw) slot marks just that line', () => {
+    // je (3 args) twice at the tail → both truncate to raw; pc=1 marks 2nd.
+    const slots = [OPCODES.je!.code, OPCODES.je!.code];
     const out = disassemble(slots, { pc: 1 });
-    expect(out).toBe('  0000: raw 0x000000ff\n> 0001: raw 0x000000fe');
+    expect(out).toBe('  0000: raw 0x0000000e\n> 0001: raw 0x0000000e');
   });
 
   it('PC = 0 is correctly identified as the first instruction', () => {

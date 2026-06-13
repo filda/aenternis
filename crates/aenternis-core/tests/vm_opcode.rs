@@ -2,11 +2,11 @@
 //!
 //! Three properties verified:
 //!
-//! 1. **Decoding** — every defined byte maps to its expected opcode;
-//!    every undefined byte returns `None`; the upper 24 bits of a slot
-//!    are ignored during decode.
+//! 1. **Decoding** — every defined byte (`< COUNT`) maps to its expected
+//!    opcode unchanged; every byte `>= COUNT` folds onto a real opcode via
+//!    `byte % COUNT`; the upper 24 bits of a slot are ignored during decode.
 //! 2. **Length** — instruction widths match the table in `docs/vm.md`.
-//! 3. **Surface** — `Opcode::ALL` lists all 20 variants in numeric
+//! 3. **Surface** — `Opcode::ALL` lists all 31 variants in numeric
 //!    order, `COUNT` and `MAX` are consistent.
 
 use aenternis_core::Opcode;
@@ -36,24 +36,47 @@ fn decode_returns_correct_opcode_for_every_defined_byte() {
         (0x11, Opcode::Setpv),
         (0x12, Opcode::Sid),
         (0x13, Opcode::Paint),
+        (0x14, Opcode::And),
+        (0x15, Opcode::Or),
+        (0x16, Opcode::Xor),
+        (0x17, Opcode::Not),
+        (0x18, Opcode::Shl),
+        (0x19, Opcode::Shr),
+        (0x1A, Opcode::Mul),
+        (0x1B, Opcode::Div),
+        (0x1C, Opcode::Mod),
+        (0x1D, Opcode::Jp),
+        (0x1E, Opcode::Jn),
     ];
     for (byte, expected) in pairs {
         assert_eq!(
             Opcode::decode(u32::from(byte)),
-            Some(expected),
+            expected,
             "decode({byte:#x}) mismatch"
         );
     }
 }
 
 #[test]
-fn decode_returns_none_for_undefined_bytes() {
-    for byte in (Opcode::MAX + 1)..=0xFF {
+fn decode_folds_high_bytes_into_opcode_space() {
+    // `decode` is total: bytes `>= COUNT` fold onto a real opcode via
+    // `byte % COUNT`, which is exactly `Opcode::ALL[byte % COUNT]`.
+    for byte in 0u16..=0xFF {
+        let folded = Opcode::ALL[(byte % u16::from(Opcode::COUNT)) as usize];
         assert_eq!(
             Opcode::decode(u32::from(byte)),
-            None,
-            "expected None for undefined byte {byte:#x}"
+            folded,
+            "decode({byte:#x}) should fold to ALL[{byte:#x} % COUNT]"
         );
+    }
+}
+
+#[test]
+fn decode_bytes_below_count_are_identity() {
+    // The fold leaves `b < COUNT` unchanged (`b % COUNT == b`), which is
+    // the backward-compatibility guarantee for assembled programs.
+    for byte in 0..Opcode::COUNT {
+        assert_eq!(Opcode::decode(u32::from(byte)) as u8, byte);
     }
 }
 
@@ -63,13 +86,17 @@ fn decode_ignores_upper_24_bits_of_slot() {
     // upper bits but a known opcode in the low byte must decode the
     // same as the bare opcode.
     let slot = 0xDEAD_BE00u32 | 0x05; // upper data + Inc
-    assert_eq!(Opcode::decode(slot), Some(Opcode::Inc));
+    assert_eq!(Opcode::decode(slot), Opcode::Inc);
 
     let slot = 0xFFFF_FF00u32 | 0x13; // upper data + Paint
-    assert_eq!(Opcode::decode(slot), Some(Opcode::Paint));
+    assert_eq!(Opcode::decode(slot), Opcode::Paint);
 
-    let slot = 0xCAFE_BA00u32 | 0xAB; // upper data + undefined low byte
-    assert_eq!(Opcode::decode(slot), None);
+    // High low-byte folds: 0xAB % 31 = 0x12 = Sid. Upper bits irrelevant.
+    let slot = 0xCAFE_BA00u32 | 0xAB;
+    assert_eq!(
+        Opcode::decode(slot),
+        Opcode::ALL[(0xAB % Opcode::COUNT) as usize]
+    );
 }
 
 // ----- length -----
@@ -98,6 +125,17 @@ fn lengths_match_vm_spec() {
         (Opcode::Setpv, 3),
         (Opcode::Sid, 2),
         (Opcode::Paint, 2),
+        (Opcode::And, 3),
+        (Opcode::Or, 3),
+        (Opcode::Xor, 3),
+        (Opcode::Not, 2),
+        (Opcode::Shl, 3),
+        (Opcode::Shr, 3),
+        (Opcode::Mul, 3),
+        (Opcode::Div, 3),
+        (Opcode::Mod, 3),
+        (Opcode::Jp, 3),
+        (Opcode::Jn, 3),
     ];
     for (op, expected_len) in cases {
         assert_eq!(op.length(), expected_len, "{op:?}.length()");
@@ -158,6 +196,6 @@ fn discriminant_round_trip_via_decode() {
     // For every variant: encode as u8, decode back, must match.
     for &op in &Opcode::ALL {
         let byte = op as u8;
-        assert_eq!(Opcode::decode(u32::from(byte)), Some(op));
+        assert_eq!(Opcode::decode(u32::from(byte)), op);
     }
 }

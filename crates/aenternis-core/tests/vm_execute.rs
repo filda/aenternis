@@ -35,14 +35,14 @@ fn empty_cell_is_a_noop() {
 }
 
 #[test]
-fn unknown_opcode_advances_pc_by_one() {
+fn high_byte_executes_folded_opcode() {
     let mut arena = Arena::with_capacity(64);
-    // 0xFF is well above `Opcode::MAX`. Decode → None → nop semantics.
-    let mut c = cell_with(&mut arena, &[0xFF, 99, 99]);
+    // Low byte 0x20 = 32; 32 % 31 = 1 = Set. The byte is above the defined
+    // range but `decode` is total, so it runs `set mem[4] = 0xAB`.
+    let mut c = cell_with(&mut arena, &[0x20, 4, 0xAB, 0, 0]);
     execute_instruction(&mut c, &mut arena, &VOID);
-    assert_eq!(c.pc, 1);
-    // Memory untouched.
-    assert_eq!(c.memory(&arena), &[0xFF, 99, 99][..]);
+    assert_eq!(c.memory(&arena)[4], 0xAB);
+    assert_eq!(c.pc, 3, "Set has length 3");
 }
 
 #[test]
@@ -376,13 +376,12 @@ fn port_uses_wrapping_add_on_active_outflow() {
 }
 
 #[test]
-fn unknown_high_byte_opcode_advances_pc_by_one() {
+fn byte_folding_to_nop_advances_pc_by_one() {
     let mut arena = Arena::with_capacity(64);
-    // Bytes above Opcode::MAX (= 0x13 / `paint`) act as unknown → nop,
-    // pc += 1. This used to be the `legacy_opcode_set` branch; it's
-    // hardcoded now since the VM ships a 9-B-parity opcode table.
+    // 0x1F = 31; 31 % 31 = 0 = Nop. The first byte past the defined range
+    // happens to fold back onto `nop`, advancing PC by 1 and touching nothing.
     let mut c = cell_with(&mut arena, &[0; 10]);
-    c.set_memory_slot(&mut arena, 5, 0x14); // would have been Sinflow before the cleanup
+    c.set_memory_slot(&mut arena, 5, 0x1F);
     c.set_memory_slot(&mut arena, 6, 0);
     c.set_memory_slot(&mut arena, 7, 9);
     c.pc = 5;
@@ -391,11 +390,170 @@ fn unknown_high_byte_opcode_advances_pc_by_one() {
     assert_eq!(c.memory(&arena)[9], 0);
 }
 
+// ----- bitwise -----
+
 #[test]
-fn unknown_opcode_decode_uses_low_byte_only() {
+fn and_masks_destination_with_source() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::And), 3, 4, 0b1100, 0b1010]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 0b1000);
+    assert_eq!(c.pc, 3);
+}
+
+#[test]
+fn or_combines_destination_with_source() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Or), 3, 4, 0b1100, 0b1010]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 0b1110);
+}
+
+#[test]
+fn xor_toggles_bits() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Xor), 3, 4, 0b1100, 0b1010]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 0b0110);
+}
+
+#[test]
+fn not_complements_all_bits() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Not), 2, 0x0F]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[2], 0xFFFF_FFF0);
+    assert_eq!(c.pc, 2);
+}
+
+// ----- shifts -----
+
+#[test]
+fn shl_shifts_left_by_source() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Shl), 3, 4, 1, 4]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 16);
+}
+
+#[test]
+fn shl_masks_shift_amount_modulo_32() {
+    let mut arena = Arena::with_capacity(64);
+    // 36 mod 32 = 4 → 1 << 4 = 16. Must not panic on >= 32.
+    let mut c = cell_with(&mut arena, &[op(Opcode::Shl), 3, 4, 1, 36]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 16);
+}
+
+#[test]
+fn shr_shifts_right_logically() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Shr), 3, 4, 0x8000_0000, 3]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    // Logical (unsigned) — high bit does not sign-extend.
+    assert_eq!(c.memory(&arena)[3], 0x1000_0000);
+}
+
+#[test]
+fn shr_masks_shift_amount_modulo_32() {
+    let mut arena = Arena::with_capacity(64);
+    // 35 mod 32 = 3.
+    let mut c = cell_with(&mut arena, &[op(Opcode::Shr), 3, 4, 0x80, 35]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 0x10);
+}
+
+// ----- mul / div / mod -----
+
+#[test]
+fn mul_wraps_modulo_2_to_32() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Mul), 3, 4, 0x8000_0000, 2]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    // 0x8000_0000 * 2 = 0x1_0000_0000 wraps to 0.
+    assert_eq!(c.memory(&arena)[3], 0);
+}
+
+#[test]
+fn div_truncates_toward_zero() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Div), 3, 4, 23, 5]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 4);
+}
+
+#[test]
+fn div_by_zero_yields_zero() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Div), 3, 4, 23, 0]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 0);
+}
+
+#[test]
+fn mod_returns_remainder() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Mod), 3, 4, 23, 5]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 3);
+}
+
+#[test]
+fn mod_by_zero_yields_zero() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Mod), 3, 4, 23, 0]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.memory(&arena)[3], 0);
+}
+
+// ----- signed conditional jumps -----
+
+#[test]
+fn jp_branches_on_positive() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Jp), 3, 4, 5, 0, 0]); // size 6, mem[3]=5
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.pc, 4);
+}
+
+#[test]
+fn jp_falls_through_on_zero_and_negative() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Jp), 3, 4, 0, 0, 0]); // mem[3]=0
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.pc, 3, "zero is not positive");
+
+    let mut c = cell_with(&mut arena, &[op(Opcode::Jp), 3, 4, u32::MAX, 0, 0]); // -1
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.pc, 3, "negative is not positive");
+}
+
+#[test]
+fn jn_branches_on_negative() {
+    let mut arena = Arena::with_capacity(64);
+    // mem[3] = 0xFFFF_FFFF = -1 as i32.
+    let mut c = cell_with(&mut arena, &[op(Opcode::Jn), 3, 4, u32::MAX, 0, 0]);
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.pc, 4);
+}
+
+#[test]
+fn jn_falls_through_on_zero_and_positive() {
+    let mut arena = Arena::with_capacity(64);
+    let mut c = cell_with(&mut arena, &[op(Opcode::Jn), 3, 4, 0, 0, 0]); // mem[3]=0
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.pc, 3, "zero is not negative");
+
+    let mut c = cell_with(&mut arena, &[op(Opcode::Jn), 3, 4, 7, 0, 0]); // positive
+    execute_instruction(&mut c, &mut arena, &VOID);
+    assert_eq!(c.pc, 3, "positive is not negative");
+}
+
+#[test]
+fn decode_uses_low_byte_only() {
     let mut arena = Arena::with_capacity(64);
     // Slot 0x0000_0105 decodes to Inc (low byte 0x05) — upper bits
-    // never promote a legal opcode into the unknown range.
+    // never change which opcode runs.
     let mut c = cell_with(&mut arena, &[0; 10]);
     c.set_memory_slot(&mut arena, 5, 0x0000_0105);
     c.set_memory_slot(&mut arena, 6, 9);
