@@ -32,7 +32,9 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::apportion::{apportion_with_shuffle, COMBINED_CLAMPED_RNG_DOMAIN};
+use crate::apportion::{
+    apportion_with_shuffle, COMBINED_CLAMPED_RNG_DOMAIN, DENSITY_MUTATION_RNG_DOMAIN,
+};
 use crate::cell::proportional_clamp;
 use crate::parallel::par_or_seq_iter_mut;
 use crate::{Cell, Coord, Direction, Rng, SparseWorld};
@@ -70,11 +72,34 @@ use rayon::prelude::*;
 /// Empty cells (`energy == 0`) get all-zero rates and are otherwise left
 /// alone. They normally would have been removed by [`SparseWorld::gc_empty`]
 /// before this point, but the function is tolerant if they're still around.
+//
+// `float_cmp`: the `gravity == 0.0 && pressure == 0.0` fast-path test is a
+// deliberate exact comparison of config values (never computed), so no
+// epsilon is wanted — `-0.0 == 0.0` holds and any non-zero turns the
+// active path on. `suboptimal_flops`: the `drive` sum must stay as separate
+// `*`/`+` ops. Fusing into `mul_add` (FMA) is a *single*-rounding op that is
+// not guaranteed portable native↔wasm, which would break the bit-for-bit
+// cross-host reproducibility contract this rate path depends on.
+#[allow(clippy::float_cmp, clippy::suboptimal_flops)]
 pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     refresh_neighbor_energies(world);
 
     // Pull Copy fields off the world so the per-cell closure below
     // doesn't hold a shared borrow during the (parallel) mutable phase.
+    let gravity = world.gravity;
+    let pressure = world.pressure;
+    let gamma = world.pressure_gamma;
+    let eref = world.pressure_eref;
+    let alpha = world.gravity_alpha;
+
+    // Gravitational mass `M = α·Σ E_nbr` is only needed when gravity is
+    // on. On the gravity-off path `scratch_mass` stays empty and is
+    // never read, so the gravity-off cost (and the frozen baselines)
+    // are untouched.
+    if gravity != 0.0 {
+        refresh_mass(world, alpha);
+    }
+
     let world_seed = world.world_seed;
     // Convention: the layout for step #N is computed at the end of
     // step #(N-1), *before* `world.tick` is incremented — so the
@@ -83,9 +108,10 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     // (see `tests/apply_outflow_bit_parity.rs`).
     let rng_tick = world.tick.saturating_sub(1);
     let snapshot = &world.scratch_neighbor_energies;
+    let mass_snapshot = &world.scratch_mass;
 
-    // Per-cell work: reads `snapshot` and `world_seed` / `rng_tick` /
-    // `coeff` only via shared captures, writes only into its own
+    // Per-cell work: reads `snapshot` / `mass_snapshot` and the `Copy`
+    // physics params only via shared captures, writes only into its own
     // `cell.rates`. Each cell's RNG is freshly seeded from
     // `(world_seed, rng_tick, coord)` — order of execution doesn't
     // affect the result, so this is safe to run in parallel without
@@ -101,17 +127,53 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             .copied()
             .unwrap_or([0; Direction::COUNT]);
         let mut rng = Rng::for_cell_at_tick(world_seed, rng_tick, *coord, 0);
-        for &d in &Direction::ALL {
-            let neighbor_energy = neighbor_energies[d.index()];
-            let rate = if my_energy > neighbor_energy {
-                let delta = my_energy - neighbor_energy;
-                // `coeff` is `f64`, so JS `Number(0.15)` flows through
-                // unchanged — no `f32(0.15)→f64` rounding artifact.
-                rng.stochastic_floor(f64::from(delta) * coeff)
-            } else {
-                0
-            };
-            cell.rates[d.index()] = rate;
+
+        // Exact `== 0.0` comparison is deliberate: these are config
+        // values set literally to zero, not computed, so no epsilon is
+        // wanted (and `-0.0 == 0.0` holds). The check is hoisted out of
+        // the hot loop by the optimizer.
+        if gravity == 0.0 && pressure == 0.0 {
+            // FROZEN FAST PATH — byte-for-byte the pre-gravity code.
+            // Any drift here re-blesses `apply_outflow_bit_parity.rs`,
+            // so this branch must stay textually identical.
+            for &d in &Direction::ALL {
+                let neighbor_energy = neighbor_energies[d.index()];
+                let rate = if my_energy > neighbor_energy {
+                    let delta = my_energy - neighbor_energy;
+                    // `coeff` is `f64`, so JS `Number(0.15)` flows
+                    // through unchanged — no `f32(0.15)→f64` artifact.
+                    rng.stochastic_floor(f64::from(delta) * coeff)
+                } else {
+                    0
+                };
+                cell.rates[d.index()] = rate;
+            }
+        } else {
+            // Active path: radiation (down the energy gradient) + pressure
+            // (outward, ∝ E^γ) + gravity (toward mass, can flow uphill).
+            let m_c = mass_snapshot.get(coord).copied().unwrap_or(0.0);
+            let pi_self = pressure_pi(my_energy, pressure, eref, gamma);
+            for &d in &Direction::ALL {
+                let neighbor_energy = neighbor_energies[d.index()];
+                let m_nbr = mass_snapshot
+                    .get(&coord.neighbor(d))
+                    .copied()
+                    .unwrap_or(0.0);
+                let pi_nbr = pressure_pi(neighbor_energy, pressure, eref, gamma);
+                let drive = coeff * (f64::from(my_energy) - f64::from(neighbor_energy))
+                    + (pi_self - pi_nbr)
+                    + gravity * (m_nbr - m_c);
+                // Explicit `drive > 0.0` guard — never `stochastic_floor(
+                // max(0.0, drive))`, which would consume an RNG draw on
+                // the `drive == 0` edge and desync the per-cell stream.
+                // This guard consumes exactly one draw iff `drive > 0.0`.
+                let rate = if drive > 0.0 {
+                    rng.stochastic_floor(drive)
+                } else {
+                    0
+                };
+                cell.rates[d.index()] = rate;
+            }
         }
         if cell.total_rate() > my_energy {
             proportional_clamp(&mut cell.rates, my_energy, world_seed, rng_tick, *coord);
@@ -119,6 +181,67 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     };
 
     par_or_seq_iter_mut!(&mut world.cells, body);
+}
+
+/// Pressure potential `Π(E) = pressure · eref · (E/eref)^γ` — the outward
+/// counter-force that grows with local density. Returns `0.0` when
+/// pressure is off, which also short-circuits the `(E/eref)` division
+/// (so `eref == 0` can't produce a stray `NaN` on the gravity-only path).
+///
+/// γ is evaluated via [`gamma_pow`], i.e. only through `*` and `sqrt`,
+/// both IEEE-754 correctly-rounded on every target — so `Π` is bit-for-bit
+/// reproducible across native and wasm. See `docs/gravity-plan.md`.
+//
+// `float_cmp`: `pressure == 0.0` is a deliberate exact off-switch test.
+// `suboptimal_flops`: keep `pressure * eref * pow` as plain multiplies —
+// `mul_add` would introduce a non-portable FMA rounding (see
+// `compute_natural_rates`).
+#[allow(clippy::float_cmp, clippy::suboptimal_flops)]
+fn pressure_pi(energy: u32, pressure: f64, eref: f64, gamma: f64) -> f64 {
+    if pressure == 0.0 {
+        return 0.0;
+    }
+    let x = f64::from(energy) / eref;
+    pressure * eref * gamma_pow(x, gamma)
+}
+
+/// `x^γ` for the portable set of polytropic indices
+/// `{1.0, 1.5, 2.0, 2.5, 3.0}`, built from multiply and `sqrt` only —
+/// both IEEE correctly-rounded, so the result is bit-identical on every
+/// target. Arbitrary γ would require `powf`, which is *not* correctly
+/// rounded (last-ULP differences native↔wasm could flip a
+/// `stochastic_floor` decision and silently diverge two worlds), so it is
+/// out of scope; the config layer snaps γ to a supported value.
+///
+/// An unsupported γ falls back to γ=2 (`x·x`): deterministic, portable,
+/// and a `debug_assert` flags it in test builds so a bad config is caught
+/// loudly rather than silently mis-evaluated.
+//
+// `float_cmp`: γ is matched against the exact portable values the config
+// layer snaps it to (see `snap_gamma` in `aenternis-wasm`), so exact `==`
+// is correct here — an epsilon match would blur adjacent indices.
+#[allow(clippy::float_cmp)]
+fn gamma_pow(x: f64, gamma: f64) -> f64 {
+    if gamma == 1.0 {
+        x
+    } else if gamma == 1.5 {
+        x * x.sqrt()
+    } else if gamma == 2.5 {
+        x * x * x.sqrt()
+    } else if gamma == 3.0 {
+        x * x * x
+    } else {
+        // γ == 2.0 (the default) lands here, as does any value the config
+        // layer failed to snap. Both evaluate `x²`; the `debug_assert`
+        // catches the latter loudly in test builds. Folding γ=2 into this
+        // arm (rather than a separate `else` after `debug_assert!(false)`)
+        // keeps the arithmetic reachable, so its mutants are caught.
+        debug_assert!(
+            gamma == 2.0,
+            "unsupported pressure_gamma {gamma} — config layer must snap to {{1, 1.5, 2, 2.5, 3}}"
+        );
+        x * x
+    }
 }
 
 /// Rebuild [`SparseWorld::scratch_neighbor_energies`] from the current
@@ -160,6 +283,49 @@ fn refresh_neighbor_energies(world: &mut SparseWorld) {
     };
 
     par_or_seq_iter_mut!(snapshot, body);
+}
+
+/// Rebuild [`SparseWorld::scratch_mass`] — the gravitational mass
+/// `M(c) = gravity_alpha · Σ_{6 nbrs} E_nbr` for every cell, derived from
+/// the already-built [`SparseWorld::scratch_neighbor_energies`]. With
+/// cutoff radius R = 1 every neighbor is at distance `|d| = 1`, so the
+/// `1/|d|` potential kernel is the identity and `M` is just the
+/// (α-scaled) neighbor-energy sum.
+///
+/// **Exactness / determinism:** the six `u32` neighbor energies sum
+/// without overflow in `u64` (≤ 6·2³² < 2³⁵) and convert to `f64`
+/// exactly; the single `α·sum` multiply is one correctly-rounded step.
+/// The sum walks the fixed `Direction::ALL` array order, so the result is
+/// independent of iteration order — bit-identical sequential or parallel.
+///
+/// Only called when [`SparseWorld::gravity`] is non-zero; a void coord
+/// never gets an entry, so [`compute_natural_rates`] reads its mass as
+/// `0.0` (gravity holds energy against the open boundary, see
+/// `docs/gravity-plan.md`).
+fn refresh_mass(world: &mut SparseWorld, alpha: f64) {
+    let neighbor_energies = &world.scratch_neighbor_energies;
+    let mass = &mut world.scratch_mass;
+    // Keyset sync against the neighbor-energy snapshot (itself synced to
+    // `world.cells` by `refresh_neighbor_energies`): drop stale, insert
+    // zero for new coords — same reuse pattern, no per-tick churn.
+    mass.retain(|coord, _| neighbor_energies.contains_key(coord));
+    mass.reserve(neighbor_energies.len().saturating_sub(mass.len()));
+    for coord in neighbor_energies.keys() {
+        mass.entry(*coord).or_default();
+    }
+
+    let body = |coord: &Coord, m: &mut f64| {
+        let row = neighbor_energies
+            .get(coord)
+            .copied()
+            .unwrap_or([0; Direction::COUNT]);
+        let sum: u64 = row.iter().map(|&e| u64::from(e)).sum();
+        #[allow(clippy::cast_precision_loss)] // sum < 2^35, exact in f64
+        let mass_value = alpha * sum as f64;
+        *m = mass_value;
+    };
+
+    par_or_seq_iter_mut!(mass, body);
 }
 
 /// Per-cell, per-direction slot copies collected from the outflow phase.
@@ -1511,6 +1677,69 @@ pub fn end_of_tick(world: &mut SparseWorld) {
     }
 }
 
+/// Density-coupled point mutation: flip random bits in cell memory.
+///
+/// The per-slot flip probability rises with local energy density (see
+/// `docs/gravity-plan.md`). A flip changes a slot's *value*, never the
+/// slot count, so the `energy == mem_len` invariant — and total energy —
+/// is preserved exactly; only the *content* (program) drifts.
+///
+/// **Density coupling.** The per-slot flip probability for a cell of
+/// energy `E` is `p = min(base_mutation_rate · E, 1)`. Energy is density
+/// (a cell is a unit volume), so the dense cores that gravity builds
+/// become "mutagenic cauldrons" — the evolutionary engine of the world.
+/// Coupling on the cell's own energy keeps the phase self-contained
+/// (no dependency on the gravity-only `scratch_mass`); coupling on the
+/// gravitational potential `M` instead is a documented future tuning
+/// knob (`docs/gravity-plan.md`, "coupling mutace: na E vs M").
+///
+/// **Determinism.** One RNG stream per cell, keyed
+/// `(world_seed, tick, coord, DENSITY_MUTATION_RNG_DOMAIN)` — a domain
+/// disjoint from the rate / clamp streams. Slots are walked in fixed
+/// index order, so each slot's draw is just its position in that single
+/// stream; the slot index is never itself a domain (which would alias the
+/// rate stream at index 0). Reproducible across runs and independent of
+/// cell iteration order, since each cell mutates only its own slots.
+///
+/// **No-op at zero rate.** `base_mutation_rate == 0.0` returns before
+/// seeding any RNG, so the phase is byte-for-byte absent from the tick —
+/// existing baselines stay valid with mutation off.
+///
+/// Runs sequentially: it needs `&mut world.arena` (a single shared
+/// buffer), which can't be split across a parallel cell walk. Mutation is
+/// cheap next to the outflow phase; a collect-then-apply parallel variant
+/// is only worth it if profiling later says so.
+//
+// `float_cmp`: `base_mutation_rate == 0.0` is a deliberate exact off-switch.
+#[allow(clippy::float_cmp)]
+pub fn apply_density_coupled_mutation(world: &mut SparseWorld) {
+    let base_rate = world.base_mutation_rate;
+    if base_rate == 0.0 {
+        return;
+    }
+    let world_seed = world.world_seed;
+    let tick = world.tick;
+    // Disjoint field borrows: read each cell's range, mutate arena slots.
+    let cells = &world.cells;
+    let arena = &mut world.arena;
+    for (coord, cell) in cells.iter() {
+        let energy = cell.energy();
+        if energy == 0 {
+            continue;
+        }
+        // Per-slot flip probability rises linearly with local density and
+        // is clamped to a valid probability.
+        let p_flip = (base_rate * f64::from(energy)).min(1.0);
+        let mut rng = Rng::for_cell_at_tick(world_seed, tick, *coord, DENSITY_MUTATION_RNG_DOMAIN);
+        for slot in arena.slice_mut(cell.mem_start, cell.mem_len).iter_mut() {
+            if rng.next_f64() < p_flip {
+                let bit = rng.next_u32() % 32;
+                *slot ^= 1u32 << bit;
+            }
+        }
+    }
+}
+
 /// Run the CPU phase: every cell executes `floor(energy / k)` instructions.
 ///
 /// `k` is the world-wide compute constant from `docs/mechanics.md`. The
@@ -1588,6 +1817,7 @@ pub fn step(world: &mut SparseWorld, coeff: f64, k: u32) {
     initialize(world, coeff);
     cpu_phase(world, k);
     outflow_phase_inplace(world);
+    apply_density_coupled_mutation(world);
     end_of_tick(world);
     world.gc_empty();
     world.rebuild_indices_if_dirty();
@@ -1633,4 +1863,104 @@ pub fn step_diffusion(world: &mut SparseWorld, coeff: f64) {
     world.gc_empty();
     world.rebuild_indices_if_dirty();
     world.tick = world.tick.saturating_add(1);
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)] // pins compare exactly-representable f64 results
+mod gravity_unit_tests {
+    //! Crate-private pins for the gravity/pressure helpers. These reach
+    //! into `pressure_pi`/`gamma_pow` (private fns) and
+    //! `world.scratch_mass` (`pub(crate)`), which the external
+    //! integration tests in `tests/tick_gravity.rs` cannot touch.
+
+    use super::{compute_natural_rates, gamma_pow, pressure_pi};
+    use crate::{Coord, SparseWorld};
+
+    // ----- gamma_pow: the portable exponent chains --------------------
+
+    #[test]
+    fn gamma_pow_evaluates_each_supported_index_exactly() {
+        let x = 4.0_f64; // sqrt(4) = 2, all results are exact integers
+        assert_eq!(gamma_pow(x, 1.0), 4.0);
+        assert_eq!(gamma_pow(x, 1.5), 8.0); // 4 * 2
+        assert_eq!(gamma_pow(x, 2.0), 16.0); // 4 * 4
+        assert_eq!(gamma_pow(x, 2.5), 32.0); // 4 * 4 * 2
+        assert_eq!(gamma_pow(x, 3.0), 64.0); // 4 * 4 * 4
+    }
+
+    // ----- pressure_pi: Π(E) = pressure · eref · (E/eref)^γ -----------
+
+    #[test]
+    fn pressure_pi_is_zero_when_pressure_off() {
+        // Off even with a degenerate eref = 0 (no stray div-by-zero NaN).
+        assert_eq!(pressure_pi(123, 0.0, 0.0, 2.0), 0.0);
+    }
+
+    #[test]
+    fn pressure_pi_matches_the_closed_form() {
+        // eref = 1: Π = pressure * (E^2). E=3, p=2 → 2 * 9 = 18.
+        assert_eq!(pressure_pi(3, 2.0, 1.0, 2.0), 18.0);
+        // eref = 2: x = E/eref = 2, Π = p*eref*x^2 = 2*2*4 = 16.
+        assert_eq!(pressure_pi(4, 2.0, 2.0, 2.0), 16.0);
+        // γ = 1 is linear in x: x = 5, Π = p*eref*x = 3*1*5 = 15.
+        assert_eq!(pressure_pi(5, 3.0, 1.0, 1.0), 15.0);
+    }
+
+    // ----- scratch_mass: M(c) = alpha · Σ neighbor energies -----------
+
+    #[test]
+    fn scratch_mass_is_alpha_times_the_neighbor_sum() {
+        // C at origin with two live neighbors (200 + 100) and four void
+        // faces → Σ = 300, so M_C = alpha * 300.
+        let mut w = SparseWorld::new(7);
+        w.gravity = 0.1; // non-zero so compute_natural_rates builds masses
+        w.gravity_alpha = 0.05;
+        w.insert_with_memory(Coord::new(-1, 0, 0), &[1; 200]);
+        w.insert_with_memory(Coord::new(0, 0, 0), &[1; 100]);
+        w.insert_with_memory(Coord::new(1, 0, 0), &[1; 100]);
+        compute_natural_rates(&mut w, 0.15);
+
+        let m_c = w.scratch_mass.get(&Coord::new(0, 0, 0)).copied().unwrap();
+        assert_eq!(m_c, 0.05 * 300.0);
+        // The far cell H has only C as a neighbor → M_H = alpha * 100.
+        let m_h = w.scratch_mass.get(&Coord::new(-1, 0, 0)).copied().unwrap();
+        assert_eq!(m_h, 0.05 * 100.0);
+    }
+
+    #[test]
+    fn scratch_mass_is_not_built_on_the_gravity_off_path() {
+        // gravity == 0 → fast path → scratch_mass stays empty (zero cost).
+        let mut w = SparseWorld::big_bang(7, 256);
+        compute_natural_rates(&mut w, 0.15);
+        assert!(w.scratch_mass.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod mutation_unit_tests {
+    //! Crate-private pin for the mutation RNG domain reservation.
+
+    use crate::apportion::{
+        COMBINED_CLAMPED_RNG_DOMAIN, DENSITY_MUTATION_RNG_DOMAIN, PROPORTIONAL_CLAMP_RNG_DOMAIN,
+    };
+    use crate::{Coord, Rng};
+
+    #[test]
+    fn mutation_domain_is_disjoint_from_the_rate_and_clamp_domains() {
+        // The mutation stream (domain 3) must not alias the rate (0),
+        // combined-clamp (1) or proportional-clamp (2) streams for the
+        // same (seed, tick, coord) — otherwise a slot-0 flip decision
+        // would correlate with that cell's diffusion draws.
+        const RATE_DOMAIN: u32 = 0;
+        assert_ne!(DENSITY_MUTATION_RNG_DOMAIN, RATE_DOMAIN);
+        assert_ne!(DENSITY_MUTATION_RNG_DOMAIN, COMBINED_CLAMPED_RNG_DOMAIN);
+        assert_ne!(DENSITY_MUTATION_RNG_DOMAIN, PROPORTIONAL_CLAMP_RNG_DOMAIN);
+
+        let (seed, tick, coord) = (0x1234_5678_u64, 9_u64, Coord::new(3, -2, 5));
+        let mut mutation = Rng::for_cell_at_tick(seed, tick, coord, DENSITY_MUTATION_RNG_DOMAIN);
+        let mut rate = Rng::for_cell_at_tick(seed, tick, coord, RATE_DOMAIN);
+        // First draws of the two streams must differ — the domain salt
+        // genuinely decorrelates them, not just the constant value.
+        assert_ne!(mutation.next_u32(), rate.next_u32());
+    }
 }

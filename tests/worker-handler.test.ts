@@ -24,6 +24,12 @@ function makeMockWorld(): WorldHandle {
   return {
     free: vi.fn(),
     setMoveThreshold: vi.fn(),
+    setGravity: vi.fn(),
+    setGravityAlpha: vi.fn(),
+    setPressure: vi.fn(),
+    setPressureGamma: vi.fn(),
+    setPressureEref: vi.fn(),
+    setBaseMutationRate: vi.fn(),
     step: vi.fn(),
     cellsSnapshotView: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
     boundingBox: vi.fn(() => new Int32Array([0, 0, 0, 1, 1, 1])),
@@ -119,6 +125,35 @@ describe('createWorkerHandler — init', () => {
     expect(h.world.setMoveThreshold).toHaveBeenCalledWith(2.5);
   });
 
+  it('applies the gravity/pressure setters to the new world', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({
+      ...baseInit,
+      gravity: 0.2,
+      gravityAlpha: 0.05,
+      pressure: 0.03,
+      pressureGamma: 2.5,
+      pressureEref: 8,
+      baseMutationRate: 0.001,
+    });
+    expect(h.world.setGravity).toHaveBeenCalledWith(0.2);
+    expect(h.world.setGravityAlpha).toHaveBeenCalledWith(0.05);
+    expect(h.world.setPressure).toHaveBeenCalledWith(0.03);
+    expect(h.world.setPressureGamma).toHaveBeenCalledWith(2.5);
+    expect(h.world.setPressureEref).toHaveBeenCalledWith(8);
+    expect(h.world.setBaseMutationRate).toHaveBeenCalledWith(0.001);
+  });
+
+  it('applies the engine default gravity/pressure/mutation when init omits them', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    expect(h.world.setGravity).toHaveBeenCalledWith(0.0);
+    expect(h.world.setPressure).toHaveBeenCalledWith(0.0);
+    expect(h.world.setPressureGamma).toHaveBeenCalledWith(2.0);
+    expect(h.world.setPressureEref).toHaveBeenCalledWith(1.0);
+    expect(h.world.setBaseMutationRate).toHaveBeenCalledWith(0.0);
+  });
+
   it('emits an initial snapshot with transferable buffers', () => {
     const h = makeHarness();
     h.handler.handleMessage(baseInit);
@@ -188,6 +223,47 @@ describe('createWorkerHandler — config', () => {
     vi.mocked(h.world.setMoveThreshold).mockClear();
     h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, moveThreshold: 0 });
     expect(h.world.setMoveThreshold).toHaveBeenCalledWith(0);
+  });
+
+  it('does not call the gravity/pressure setters when not given', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    vi.mocked(h.world.setGravity).mockClear();
+    vi.mocked(h.world.setPressure).mockClear();
+    h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1 });
+    expect(h.world.setGravity).not.toHaveBeenCalled();
+    expect(h.world.setPressure).not.toHaveBeenCalled();
+  });
+
+  it('forwards gravity/pressure config fields when given', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    vi.mocked(h.world.setGravity).mockClear();
+    h.handler.handleMessage({
+      type: 'config',
+      coeff: 0.1,
+      k: 1,
+      gravity: 0.25,
+      gravityAlpha: 0.06,
+      pressure: 0.04,
+      pressureGamma: 3.0,
+      pressureEref: 16,
+      baseMutationRate: 0.003,
+    });
+    expect(h.world.setGravity).toHaveBeenCalledWith(0.25);
+    expect(h.world.setGravityAlpha).toHaveBeenCalledWith(0.06);
+    expect(h.world.setPressure).toHaveBeenCalledWith(0.04);
+    expect(h.world.setPressureGamma).toHaveBeenCalledWith(3.0);
+    expect(h.world.setPressureEref).toHaveBeenCalledWith(16);
+    expect(h.world.setBaseMutationRate).toHaveBeenCalledWith(0.003);
+  });
+
+  it('forwards gravity of 0 to turn it back off (truthy guard regression)', () => {
+    const h = makeHarness();
+    h.handler.handleMessage({ ...baseInit, gravity: 0.5 });
+    vi.mocked(h.world.setGravity).mockClear();
+    h.handler.handleMessage({ type: 'config', coeff: 0.1, k: 1, gravity: 0 });
+    expect(h.world.setGravity).toHaveBeenCalledWith(0);
   });
 
   it('does nothing on the world side when config arrives before init', () => {

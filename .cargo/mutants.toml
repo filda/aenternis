@@ -18,6 +18,17 @@ exclude_re = [
     # invisible to any deterministic snapshot.
     "rng\\.rs:.*replace < with <= in Rng::stochastic_floor",
 
+    # `next_f64() < p_flip` vs `<=` in `apply_density_coupled_mutation`.
+    # Same measure-zero argument as `stochastic_floor` above: the two
+    # comparisons differ only when `next_f64()` (a `k / 2^32` value)
+    # equals `p_flip` bit-exactly. At the common clamped `p_flip == 1.0`
+    # they are identical (`next_f64() < 1.0` is always true, as is
+    # `<= 1.0`); at any fractional `p_flip` an exact tie has probability
+    # below `2^-32` per slot and would shift a single slot's flip
+    # decision by one — invisible to the conservation, determinism, and
+    # popcount pins. Truly observation-equivalent.
+    "tick\\.rs:.*replace < with <= in apply_density_coupled_mutation",
+
     # Two `> → >=` mutants in `compute_natural_rates`, both equivalent
     # for different but converging reasons:
     #

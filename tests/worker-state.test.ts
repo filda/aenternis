@@ -21,6 +21,12 @@ describe('DEFAULT_STATE', () => {
       coeff: 0.20,
       k: 1,
       moveThreshold: 2.0,
+      gravity: 0.0,
+      gravityAlpha: 0.0,
+      pressure: 0.0,
+      pressureGamma: 2.0,
+      pressureEref: 1.0,
+      baseMutationRate: 0.0,
     });
   });
 
@@ -45,6 +51,34 @@ describe('stateFromInit', () => {
     const s = stateFromInit({ ...baseInit, moveThreshold: 3.5 });
     expect(s.moveThreshold).toBe(3.5);
   });
+
+  it('uses default gravity/pressure fields when not provided', () => {
+    const s = stateFromInit(baseInit);
+    expect(s.gravity).toBe(DEFAULT_STATE.gravity);
+    expect(s.gravityAlpha).toBe(DEFAULT_STATE.gravityAlpha);
+    expect(s.pressure).toBe(DEFAULT_STATE.pressure);
+    expect(s.pressureGamma).toBe(DEFAULT_STATE.pressureGamma);
+    expect(s.pressureEref).toBe(DEFAULT_STATE.pressureEref);
+    expect(s.baseMutationRate).toBe(DEFAULT_STATE.baseMutationRate);
+  });
+
+  it('uses the provided gravity/pressure fields when given', () => {
+    const s = stateFromInit({
+      ...baseInit,
+      gravity: 0.2,
+      gravityAlpha: 0.05,
+      pressure: 0.03,
+      pressureGamma: 2.5,
+      pressureEref: 8,
+      baseMutationRate: 0.001,
+    });
+    expect(s.gravity).toBe(0.2);
+    expect(s.gravityAlpha).toBe(0.05);
+    expect(s.pressure).toBe(0.03);
+    expect(s.pressureGamma).toBe(2.5);
+    expect(s.pressureEref).toBe(8);
+    expect(s.baseMutationRate).toBe(0.001);
+  });
 });
 
 describe('applyConfig', () => {
@@ -52,6 +86,12 @@ describe('applyConfig', () => {
     coeff: 0.10,
     k: 2,
     moveThreshold: 1.5,
+    gravity: 0.1,
+    gravityAlpha: 0.04,
+    pressure: 0.02,
+    pressureGamma: 2.0,
+    pressureEref: 4.0,
+    baseMutationRate: 0.0005,
   };
 
   const baseCfg: ConfigMsg = {
@@ -87,5 +127,40 @@ describe('applyConfig', () => {
     // guard would mistakenly fall through to the default.
     const s = applyConfig(before, { ...baseCfg, moveThreshold: 0 });
     expect(s.moveThreshold).toBe(0);
+  });
+
+  it('keeps gravity/pressure fields when not provided', () => {
+    const s = applyConfig(before, baseCfg);
+    expect(s.gravity).toBe(before.gravity);
+    expect(s.gravityAlpha).toBe(before.gravityAlpha);
+    expect(s.pressure).toBe(before.pressure);
+    expect(s.pressureGamma).toBe(before.pressureGamma);
+    expect(s.pressureEref).toBe(before.pressureEref);
+    expect(s.baseMutationRate).toBe(before.baseMutationRate);
+  });
+
+  it('updates gravity/pressure fields when provided', () => {
+    const s = applyConfig(before, {
+      ...baseCfg,
+      gravity: 0.3,
+      gravityAlpha: 0.06,
+      pressure: 0.05,
+      pressureGamma: 3.0,
+      pressureEref: 16,
+      baseMutationRate: 0.002,
+    });
+    expect(s.gravity).toBe(0.3);
+    expect(s.gravityAlpha).toBe(0.06);
+    expect(s.pressure).toBe(0.05);
+    expect(s.pressureGamma).toBe(3.0);
+    expect(s.pressureEref).toBe(16);
+    expect(s.baseMutationRate).toBe(0.002);
+  });
+
+  it('updates gravity to 0 when explicitly set to 0 (turning gravity off)', () => {
+    // Same `typeof === 'number'` regression guard as moveThreshold: a
+    // truthy check would refuse to turn gravity back off.
+    const s = applyConfig(before, { ...baseCfg, gravity: 0 });
+    expect(s.gravity).toBe(0);
   });
 });

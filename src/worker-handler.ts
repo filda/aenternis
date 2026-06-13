@@ -33,6 +33,12 @@ import {
 export interface WorldHandle {
   free(): void;
   setMoveThreshold(t: number): void;
+  setGravity(g: number): void;
+  setGravityAlpha(a: number): void;
+  setPressure(p: number): void;
+  setPressureGamma(g: number): void;
+  setPressureEref(e: number): void;
+  setBaseMutationRate(r: number): void;
   step(coeff: number, k: number): void;
   cellsSnapshotView(): Uint32Array;
   boundingBox(): Int32Array;
@@ -144,6 +150,12 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
 
   function applyStateToWorld(w: WorldHandle, s: WorkerSimState): void {
     w.setMoveThreshold(s.moveThreshold);
+    w.setGravity(s.gravity);
+    w.setGravityAlpha(s.gravityAlpha);
+    w.setPressure(s.pressure);
+    w.setPressureGamma(s.pressureGamma);
+    w.setPressureEref(s.pressureEref);
+    w.setBaseMutationRate(s.baseMutationRate);
   }
 
   // Both `send*` helpers take the live `World` as an argument rather
@@ -240,6 +252,14 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
         // actually present on the message).
         if (typeof msg.moveThreshold === 'number') {
           world.setMoveThreshold(state.moveThreshold);
+        }
+        if (typeof msg.gravity === 'number') world.setGravity(state.gravity);
+        if (typeof msg.gravityAlpha === 'number') world.setGravityAlpha(state.gravityAlpha);
+        if (typeof msg.pressure === 'number') world.setPressure(state.pressure);
+        if (typeof msg.pressureGamma === 'number') world.setPressureGamma(state.pressureGamma);
+        if (typeof msg.pressureEref === 'number') world.setPressureEref(state.pressureEref);
+        if (typeof msg.baseMutationRate === 'number') {
+          world.setBaseMutationRate(state.baseMutationRate);
         }
       }
       return;

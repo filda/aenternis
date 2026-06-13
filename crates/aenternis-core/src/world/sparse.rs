@@ -109,12 +109,67 @@ pub struct SparseWorld {
     /// move_threshold), 0, 1)`. Default `2.0`.
     pub move_threshold: f32,
 
+    /// Gravity coupling strength — how hard energy is pulled toward
+    /// local mass. Enters the per-direction drive in
+    /// [`crate::tick::compute_natural_rates`] as `gravity * (M_nbr − M_c)`.
+    /// **Default `0.0`**: with gravity and [`Self::pressure`] both zero the
+    /// rate path takes a frozen fast path that is byte-for-byte the
+    /// pre-gravity code, so existing baselines need no re-bless. See
+    /// `docs/gravity-plan.md`.
+    pub gravity: f64,
+
+    /// Mass coupling — the fraction of a cell's energy that behaves as
+    /// gravitational mass (`m = gravity_alpha · E`). Folded into the
+    /// neighborhood mass `M`. Default `0.0`.
+    pub gravity_alpha: f64,
+
+    /// Pressure amplitude — the outward counter-force that grows with
+    /// density. Enters the drive as `Π(E_c) − Π(E_nbr)` where
+    /// `Π(E) = pressure · eref · (E/eref)^γ`. Default `0.0`.
+    pub pressure: f64,
+
+    /// Polytropic index γ for the pressure law `Π(E) ∝ (E/eref)^γ`.
+    /// Restricted at runtime to portable values
+    /// `{1.0, 1.5, 2.0, 2.5, 3.0}` (evaluated via multiply/`sqrt` chains,
+    /// all IEEE correctly-rounded) so the rate path stays bit-for-bit
+    /// reproducible across native and wasm. Arbitrary γ would need a
+    /// non-portable `powf` and is out of scope. Default `2.0`.
+    pub pressure_gamma: f64,
+
+    /// Reference energy `eref` for the pressure law — the density at
+    /// which `Π = pressure · eref`. Default `1.0`. Inactive while
+    /// [`Self::pressure`] is `0.0`.
+    pub pressure_eref: f64,
+
+    /// Density-coupled mutation rate — the per-slot, per-tick bit-flip
+    /// probability *per unit of local energy density*. The actual flip
+    /// probability for a cell of energy `E` is `(base_mutation_rate · E)`
+    /// clamped to `1.0`, so denser cells (gravity wells) mutate more —
+    /// the "mutagenic cauldrons" of `docs/gravity-plan.md`. A bit flip
+    /// changes a slot's *value*, never the slot count, so energy is
+    /// conserved. **Default `0.0`**: the mutation phase is then a strict
+    /// no-op (no RNG drawn), leaving all existing baselines unchanged.
+    pub base_mutation_rate: f64,
+
     /// Per-tick scratch: neighbor-energy snapshot indexed by cell coord.
     /// Built once at the start of [`crate::tick::step`] and shared
     /// between `compute_natural_rates` and `cpu_phase`, both of which
     /// would otherwise build their own. Cleared (not freed) between
     /// ticks so the backing storage is reused across the whole run.
     pub(crate) scratch_neighbor_energies: FxHashMap<Coord, [u32; Direction::COUNT]>,
+
+    /// Per-tick scratch: gravitational mass `M = gravity_alpha · Σ E_nbr`
+    /// indexed by cell coord, where the sum is over the cell's six
+    /// orthogonal neighbors (cutoff radius R = 1, so `|d| = 1` for every
+    /// term and the `1/|d|` kernel is the identity). Built from
+    /// [`Self::scratch_neighbor_energies`] at the top of
+    /// [`crate::tick::compute_natural_rates`] **only when
+    /// [`Self::gravity`] is non-zero** — left empty (and thus zero-cost)
+    /// on the gravity-off fast path. A void coord has no entry, so its
+    /// mass reads as `0.0`, which makes gravity hold energy against the
+    /// open boundary rather than leak it (see `docs/gravity-plan.md`).
+    /// Cleared (not freed) between ticks like the other scratch maps.
+    pub(crate) scratch_mass: FxHashMap<Coord, f64>,
 
     /// Per-tick scratch: outflow buffer used by
     /// [`crate::tick::collect_outflow`]. Reused across ticks so the
@@ -196,6 +251,14 @@ impl SparseWorld {
     /// Default value for [`SparseWorld::move_threshold`].
     pub const DEFAULT_MOVE_THRESHOLD: f32 = 2.0;
 
+    /// Default polytropic index γ for [`SparseWorld::pressure_gamma`].
+    /// Pressure itself defaults to `0.0`, so this only takes effect once
+    /// a caller turns pressure on.
+    pub const DEFAULT_PRESSURE_GAMMA: f64 = 2.0;
+
+    /// Default reference energy `eref` for [`SparseWorld::pressure_eref`].
+    pub const DEFAULT_PRESSURE_EREF: f64 = 1.0;
+
     /// Build an empty world. No cells exist yet; the caller is responsible
     /// for inserting any initial state (typically via [`big_bang`](Self::big_bang)).
     /// `move_threshold` defaults to [`Self::DEFAULT_MOVE_THRESHOLD`].
@@ -244,7 +307,14 @@ impl SparseWorld {
             world_seed,
             tick: 0,
             move_threshold: Self::DEFAULT_MOVE_THRESHOLD,
+            gravity: 0.0,
+            gravity_alpha: 0.0,
+            pressure: 0.0,
+            pressure_gamma: Self::DEFAULT_PRESSURE_GAMMA,
+            pressure_eref: Self::DEFAULT_PRESSURE_EREF,
+            base_mutation_rate: 0.0,
             scratch_neighbor_energies: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_mass: FxHashMap::with_hasher(FxBuildHasher),
             scratch_outflow: FxHashMap::with_hasher(FxBuildHasher),
             scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
             scratch_per_source_total_outflow: FxHashMap::with_hasher(FxBuildHasher),

@@ -1,6 +1,6 @@
 # Aenternis — plán: gravitace, tlak a hustotní mutace
 
-Last updated: 2026-06-10 (návrh po prototypu 11; čeká na zhuštění instrukční sady)
+Last updated: 2026-06-13 (✅ IMPLEMENTOVÁNO — viz „Stav implementace" na konci)
 
 Designový kontext žije v `aenternis.md` a `mechanics.md`; obecný roadmap v `plan.md`;
 laboratorní ověření fyziky v `prototypes/11-gravity/`. Tento dokument shrnuje
@@ -166,3 +166,44 @@ Prototyp 11 zůstává jako referenční ověření fyziky — **VM se do něj n
 (zdvojovalo by `vm.rs`/`cpu_phase`). Další krok: až bude instrukční sada hustší,
 napojit gravitaci/tlak přímo do `tick.rs` podle tohoto plánu a zkoumat emergenci
 tam, kde už VM a `active_outflow` žijí.
+
+## Stav implementace (2026-06-13)
+
+✅ **Hotovo, brána zelená** (`./check` ALL GREEN + `cargo mutants` na nových
+funkcích v `tick.rs` a na `snap_gamma`: 0 missed; jeden dokumentovaný equivalent
+mutant `< → <=` ve `.cargo/mutants.toml`).
+
+- **Gravitace + tlak** vstupují jako členy do per-směrové rate v
+  `compute_natural_rates` (`tick.rs`): `drive = coeff·(E_c−E_nbr) + (Π(E_c)−Π(E_nbr))
+  + gravity·(M_nbr−M_c)`, pak stávající `proportional_clamp`. Konzervace i invariant
+  `energy == mem_len` beze změny.
+  - **Dosah R=1** (první milník): `M(c) = gravity_alpha·Σ E_nbr` se redukuje na součet
+    existující řady `scratch_neighbor_energies` → ~nulová přidaná cena, žádná O(N²)
+    struktura. Void coord ⇒ `M=0` (akrece drží energii proti úniku do voidu).
+    Širší dosah (cutoff R / Barnes–Hut) odložen, až měření ukáže potřebu.
+  - **Nulové defaulty = nulový re-bless.** `gravity=0 && pressure=0` bere zamrzlou
+    fast-path (textově předgravitační kód) → všechny baseline (bit-parita,
+    konzervace, determinismus) prošly **beze změny**. Aktivní cesta používá explicitní
+    `if drive > 0.0`, nikdy `max(0,drive)` (jinak by ujídala RNG draw a desynchronizovala proud).
+- **Tlak `Π(E)=pressure·eref·(E/eref)^γ`** — γ omezeno na **portable hodnoty
+  `{1, 1.5, 2, 2.5, 3}`** počítané přes `*`/`sqrt` (IEEE correctly-rounded ⇒
+  bit-for-bit reprodukovatelné native↔wasm). Libovolné γ by vyžadovalo `powf`
+  (není correctly-rounded, last-ULP drift native↔wasm by mohl přehodit
+  `stochastic_floor` a rozejít dva světy) → mimo rozsah; `snap_gamma` ve WASM vrstvě
+  zaokrouhlí vstup na nejbližší podporovanou hodnotu.
+- **Hustotně vázaná mutace** — `apply_density_coupled_mutation` po `outflow_phase_inplace`,
+  před `end_of_tick`. Per slot `p_flip = min(base_mutation_rate·E, 1)` (hustota = E,
+  buňka = jednotkový objem ⇒ hustá jádra = mutagenní kotle), překlopení `slot ^= 1<<bit`
+  mění hodnotu, ne počet slotů ⇒ energie konzervována. RNG: jeden proud na buňku,
+  doména `DENSITY_MUTATION_RNG_DOMAIN=3` (disjunktní od 0/1/2), pozice slotu = pozice
+  v proudu (žádná per-slot doména). `base_mutation_rate=0` ⇒ strict no-op (žádné RNG).
+  Coupling na `E` (ne `M`) drží fázi self-contained; coupling na `M`/kombinaci je
+  ladicí knob ponechaný otevřený.
+- **Plumbing**: `SparseWorld` pole (`gravity`, `gravity_alpha`, `pressure`,
+  `pressure_gamma`, `pressure_eref`, `base_mutation_rate`, vše default 0/neutral)
+  → WASM settery/gettery → `protocol.ts`/`worker-state.ts`/`worker-handler.ts` →
+  slidery v `index.html` + listenery v `web/main.ts`.
+
+**Odloženo (beze změny plánu):** dosah R>1 (cutoff/Barnes–Hut — až profiling ukáže,
+že úzké hrdlo není VM); libovolné γ přes `powf` (mimo reprodukovatelný režim);
+coupling mutace na `M` vs kombinaci; native-server vrstva gravitace (zatím jen WASM viewer).

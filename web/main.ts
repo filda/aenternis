@@ -60,6 +60,12 @@ interface RuntimeConfig {
   coeff: number;
   k: number;
   moveThreshold: number;
+  gravity: number;
+  gravityAlpha: number;
+  pressure: number;
+  pressureGamma: number;
+  pressureEref: number;
+  baseMutationRate: number;
 }
 
 interface BackendChoice {
@@ -135,6 +141,12 @@ export function bootstrap(): void {
     coeff: 0.15,
     k: 1,
     moveThreshold: 1.0,
+    gravity: 0.0,
+    gravityAlpha: 0.05,
+    pressure: 0.0,
+    pressureGamma: 2.0,
+    pressureEref: 4.0,
+    baseMutationRate: 0.0,
   };
 
   // ----- DOM lookup ----------------------------------------------------------
@@ -160,6 +172,18 @@ export function bootstrap(): void {
     kVal: requireEl('kVal', HTMLSpanElement),
     moveThreshold: requireEl('moveThreshold', HTMLInputElement),
     moveThresholdVal: requireEl('moveThresholdVal', HTMLSpanElement),
+    gravity: requireEl('gravity', HTMLInputElement),
+    gravityVal: requireEl('gravityVal', HTMLSpanElement),
+    gravityAlpha: requireEl('gravityAlpha', HTMLInputElement),
+    gravityAlphaVal: requireEl('gravityAlphaVal', HTMLSpanElement),
+    pressure: requireEl('pressure', HTMLInputElement),
+    pressureVal: requireEl('pressureVal', HTMLSpanElement),
+    pressureGamma: requireEl('pressureGamma', HTMLInputElement),
+    pressureGammaVal: requireEl('pressureGammaVal', HTMLSpanElement),
+    pressureEref: requireEl('pressureEref', HTMLInputElement),
+    pressureErefVal: requireEl('pressureErefVal', HTMLSpanElement),
+    baseMutationRate: requireEl('baseMutationRate', HTMLInputElement),
+    baseMutationRateVal: requireEl('baseMutationRateVal', HTMLSpanElement),
     trackerEnabled: requireEl('trackerEnabled', HTMLInputElement),
     trailLen: requireEl('trailLen', HTMLInputElement),
     trailLenVal: requireEl('trailLenVal', HTMLSpanElement),
@@ -282,6 +306,12 @@ export function bootstrap(): void {
       coeff: config.coeff,
       k: config.k,
       moveThreshold: config.moveThreshold,
+      gravity: config.gravity,
+      gravityAlpha: config.gravityAlpha,
+      pressure: config.pressure,
+      pressureGamma: config.pressureGamma,
+      pressureEref: config.pressureEref,
+      baseMutationRate: config.baseMutationRate,
       program,
     };
     channel.postMessage(init);
@@ -296,6 +326,12 @@ export function bootstrap(): void {
       coeff: config.coeff,
       k: config.k,
       moveThreshold: config.moveThreshold,
+      gravity: config.gravity,
+      gravityAlpha: config.gravityAlpha,
+      pressure: config.pressure,
+      pressureGamma: config.pressureGamma,
+      pressureEref: config.pressureEref,
+      baseMutationRate: config.baseMutationRate,
     };
     channel.postMessage(cfg);
   }
@@ -904,6 +940,36 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   dom.moveThreshold.addEventListener('input', () => {
     config.moveThreshold = parseFloat(dom.moveThreshold.value) || 2.0;
     dom.moveThresholdVal.textContent = config.moveThreshold.toFixed(1);
+    sendConfig();
+  });
+  dom.gravity.addEventListener('input', () => {
+    config.gravity = parseFloat(dom.gravity.value) || 0.0;
+    dom.gravityVal.textContent = config.gravity.toFixed(2);
+    sendConfig();
+  });
+  dom.gravityAlpha.addEventListener('input', () => {
+    config.gravityAlpha = parseFloat(dom.gravityAlpha.value) || 0.0;
+    dom.gravityAlphaVal.textContent = config.gravityAlpha.toFixed(2);
+    sendConfig();
+  });
+  dom.pressure.addEventListener('input', () => {
+    config.pressure = parseFloat(dom.pressure.value) || 0.0;
+    dom.pressureVal.textContent = config.pressure.toFixed(3);
+    sendConfig();
+  });
+  dom.pressureGamma.addEventListener('input', () => {
+    config.pressureGamma = parseFloat(dom.pressureGamma.value) || 2.0;
+    dom.pressureGammaVal.textContent = config.pressureGamma.toFixed(1);
+    sendConfig();
+  });
+  dom.pressureEref.addEventListener('input', () => {
+    config.pressureEref = parseFloat(dom.pressureEref.value) || 1.0;
+    dom.pressureErefVal.textContent = String(Math.round(config.pressureEref));
+    sendConfig();
+  });
+  dom.baseMutationRate.addEventListener('input', () => {
+    config.baseMutationRate = parseFloat(dom.baseMutationRate.value) || 0.0;
+    dom.baseMutationRateVal.textContent = config.baseMutationRate.toFixed(4);
     sendConfig();
   });
   dom.trackerEnabled.addEventListener('change', () => {

@@ -18,6 +18,14 @@ export interface InitMsg {
   readonly coeff: number;
   readonly k: number;
   readonly moveThreshold?: number;
+  // Gravity / pressure physics (see docs/gravity-plan.md). All optional;
+  // omitted fields fall back to the engine defaults (gravity/pressure off).
+  readonly gravity?: number;
+  readonly gravityAlpha?: number;
+  readonly pressure?: number;
+  readonly pressureGamma?: number;
+  readonly pressureEref?: number;
+  readonly baseMutationRate?: number;
   readonly program?: Uint32Array | readonly number[];
 }
 
@@ -26,6 +34,12 @@ export interface ConfigMsg {
   readonly coeff: number;
   readonly k: number;
   readonly moveThreshold?: number;
+  readonly gravity?: number;
+  readonly gravityAlpha?: number;
+  readonly pressure?: number;
+  readonly pressureGamma?: number;
+  readonly pressureEref?: number;
+  readonly baseMutationRate?: number;
 }
 
 export interface RunningMsg {

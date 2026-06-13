@@ -59,6 +59,14 @@ pub(crate) const COMBINED_CLAMPED_RNG_DOMAIN: u32 = 1;
 /// uncorrelated even when they share `(world_seed, rng_tick, coord)`.
 pub(crate) const PROPORTIONAL_CLAMP_RNG_DOMAIN: u32 = 2;
 
+/// RNG domain salt for [`crate::tick::apply_density_coupled_mutation`]'s
+/// per-slot bit-flip stream. Distinct from `0`/`1`/`2` so a slot's
+/// mutation draw never aliases the rate (`0`), combined-clamp (`1`) or
+/// proportional-clamp (`2`) streams for the same `(world_seed, tick,
+/// coord)`. One stream per cell is advanced in slot order, so the slot
+/// index is the position within this stream — never itself a domain.
+pub(crate) const DENSITY_MUTATION_RNG_DOMAIN: u32 = 3;
+
 /// Largest-Remainder apportionment with a Fisher-Yates tie-break.
 ///
 /// Returns `[u32; 6]` whose sum equals `min(sum(values), cap)` and

@@ -266,6 +266,107 @@ impl World {
         self.inner.move_threshold
     }
 
+    /// Set the gravity coupling strength (default `0.0` = off). Energy is
+    /// pulled toward local mass; `0.0` keeps the frozen pre-gravity rate
+    /// path. See `docs/gravity-plan.md`.
+    #[wasm_bindgen(js_name = setGravity)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_gravity(&mut self, gravity: f64) {
+        self.inner.gravity = gravity;
+    }
+
+    /// Current gravity strength.
+    #[wasm_bindgen(getter, js_name = gravity)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn gravity(&self) -> f64 {
+        self.inner.gravity
+    }
+
+    /// Set the mass coupling `alpha` in `m = alpha · E` (default `0.0`).
+    #[wasm_bindgen(js_name = setGravityAlpha)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_gravity_alpha(&mut self, alpha: f64) {
+        self.inner.gravity_alpha = alpha;
+    }
+
+    /// Current mass coupling `alpha`.
+    #[wasm_bindgen(getter, js_name = gravityAlpha)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn gravity_alpha(&self) -> f64 {
+        self.inner.gravity_alpha
+    }
+
+    /// Set the pressure amplitude (default `0.0` = off).
+    #[wasm_bindgen(js_name = setPressure)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_pressure(&mut self, pressure: f64) {
+        self.inner.pressure = pressure;
+    }
+
+    /// Current pressure amplitude.
+    #[wasm_bindgen(getter, js_name = pressure)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn pressure(&self) -> f64 {
+        self.inner.pressure
+    }
+
+    /// Set the polytropic index γ for the pressure law. **Snapped to the
+    /// nearest portable value** `{1.0, 1.5, 2.0, 2.5, 3.0}` — these are
+    /// evaluated via multiply/`sqrt` chains so the rate path stays
+    /// bit-for-bit reproducible across native and wasm. Arbitrary γ would
+    /// need a non-portable `powf` and is out of scope.
+    #[wasm_bindgen(js_name = setPressureGamma)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_pressure_gamma(&mut self, gamma: f64) {
+        self.inner.pressure_gamma = snap_gamma(gamma);
+    }
+
+    /// Current polytropic index γ (already snapped to a portable value).
+    #[wasm_bindgen(getter, js_name = pressureGamma)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn pressure_gamma(&self) -> f64 {
+        self.inner.pressure_gamma
+    }
+
+    /// Set the reference energy `eref` for the pressure law (default
+    /// `1.0`). Must be positive; non-positive values would only matter
+    /// while pressure is on, where they degrade gracefully to zero rate.
+    #[wasm_bindgen(js_name = setPressureEref)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_pressure_eref(&mut self, eref: f64) {
+        self.inner.pressure_eref = eref;
+    }
+
+    /// Current reference energy `eref`.
+    #[wasm_bindgen(getter, js_name = pressureEref)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn pressure_eref(&self) -> f64 {
+        self.inner.pressure_eref
+    }
+
+    /// Set the density-coupled mutation rate (default `0.0` = off). The
+    /// per-slot bit-flip probability for a cell of energy `E` is
+    /// `min(rate · E, 1)`, so denser cells mutate more. `0.0` makes the
+    /// mutation phase a strict no-op. See `docs/gravity-plan.md`.
+    #[wasm_bindgen(js_name = setBaseMutationRate)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_base_mutation_rate(&mut self, rate: f64) {
+        self.inner.base_mutation_rate = rate;
+    }
+
+    /// Current density-coupled mutation rate.
+    #[wasm_bindgen(getter, js_name = baseMutationRate)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn base_mutation_rate(&self) -> f64 {
+        self.inner.base_mutation_rate
+    }
+
     /// Total energy summed across every cell. Conserved across ticks
     /// (cardinal physical invariant).
     ///
@@ -596,5 +697,62 @@ impl World {
         if let Some(memory) = self.inner.cell_memory(coord) {
             self.inspect_buf.extend_from_slice(memory);
         }
+    }
+}
+
+/// Snap an arbitrary γ to the nearest portable polytropic index in
+/// `{1.0, 1.5, 2.0, 2.5, 3.0}`. The core's pressure law only evaluates
+/// these (via multiply/`sqrt` chains, all IEEE correctly-rounded), so the
+/// boundary clamps user input here rather than letting a non-portable
+/// `powf` slip into the deterministic rate path.
+fn snap_gamma(gamma: f64) -> f64 {
+    const SUPPORTED: [f64; 5] = [1.0, 1.5, 2.0, 2.5, 3.0];
+    let mut best = SUPPORTED[0];
+    let mut best_dist = (gamma - best).abs();
+    for &candidate in &SUPPORTED[1..] {
+        let dist = (gamma - candidate).abs();
+        if dist < best_dist {
+            best = candidate;
+            best_dist = dist;
+        }
+    }
+    best
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)] // snap targets are exactly-representable f64 values
+mod snap_gamma_tests {
+    use super::snap_gamma;
+
+    #[test]
+    fn supported_values_pass_through_unchanged() {
+        for g in [1.0, 1.5, 2.0, 2.5, 3.0] {
+            assert_eq!(snap_gamma(g), g);
+        }
+    }
+
+    #[test]
+    fn nearby_values_snap_to_the_closest_supported() {
+        assert_eq!(snap_gamma(2.1), 2.0);
+        assert_eq!(snap_gamma(2.3), 2.5);
+        assert_eq!(snap_gamma(1.7), 1.5);
+        assert_eq!(snap_gamma(2.9), 3.0);
+    }
+
+    #[test]
+    fn out_of_range_values_clamp_to_the_ends() {
+        assert_eq!(snap_gamma(0.5), 1.0);
+        assert_eq!(snap_gamma(-4.0), 1.0);
+        assert_eq!(snap_gamma(5.0), 3.0);
+        assert_eq!(snap_gamma(100.0), 3.0);
+    }
+
+    #[test]
+    fn exact_ties_resolve_to_the_lower_index() {
+        // 1.25 is equidistant from 1.0 and 1.5; the strict `<` keeps the
+        // first (lower) candidate. A `<=` would instead jump to 1.5, and
+        // 2.25 → 2.5 — so these pin the tie-break direction.
+        assert_eq!(snap_gamma(1.25), 1.0);
+        assert_eq!(snap_gamma(2.25), 2.0);
     }
 }
