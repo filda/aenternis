@@ -141,11 +141,19 @@ export function bootstrap(): void {
     coeff: 0.15,
     k: 1,
     moveThreshold: 1.0,
-    gravity: 0.0,
+    // Viewer starts in a gravity-on regime mirroring prototype 11
+    // (grav 0.12, pressure 0.2, γ 2.0). `eref ≈ 8` is set to the world's
+    // equilibrium mean cell density (the prototype normalized that to 1),
+    // which puts pressure in its active anti-collapse regime; a headless
+    // sweep (examples/gravity_sweep) confirmed ~17 % of energy concentrates
+    // into the top 1 % of cells here — clear structure, no runaway. The
+    // engine-side SparseWorld defaults stay 0 (frozen baselines); these
+    // are UI starting points only.
+    gravity: 0.12,
     gravityAlpha: 0.05,
-    pressure: 0.0,
+    pressure: 0.2,
     pressureGamma: 2.0,
-    pressureEref: 4.0,
+    pressureEref: 8.0,
     baseMutationRate: 0.0,
   };
 
