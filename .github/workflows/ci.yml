@@ -34,10 +34,11 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
-# Cancel previous runs on the same branch when a new commit lands.
+# Serialize runs on the same branch; let in-progress runs finish instead of
+# cancelling them when a new commit lands.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   typecheck:
