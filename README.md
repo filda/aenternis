@@ -4,7 +4,7 @@
      Workflow file lives at .github/workflows/ci.yml and the badge resolves automatically:
      ![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg) -->
 
-A 3D toroidal simulation where every cell is a latent micro-computer with its own program, energy, and memory pointers. Higher-level phenomena — entities, organisms, movement, reproduction, combat, communication — emerge from the physics of energy flow and programmable content.
+A 3D simulation where every cell is a latent micro-computer with its own program, energy, and memory pointers. Higher-level phenomena — entities, organisms, movement, reproduction, combat, communication — emerge from the physics of energy flow and programmable content.
 
 The model shifts away from "entities living in space" toward "space is made of micro-entities". The boundary between an empty cell and an active entity is a spectrum of organization, energy, and program coherence — not a binary flag.
 
@@ -22,9 +22,9 @@ Start with **[docs/aenternis.md](docs/aenternis.md)** — the design core, vocab
 
 ## Status
 
-Prototype phase. Eight laboratory web prototypes exist in `prototypes/`, each verifying a specific layer of physics or programmer interface. The VM has 20 opcodes in its latest 2D variant. The dominance / intrusion mechanic, the UI lineage tracker, and the additional sensors are designed but not yet implemented — see [docs/plan.md](docs/plan.md).
+Past the prototype phase. Twelve laboratory web prototypes live in `prototypes/` (each verifying a layer of physics or programmer interface), but the production engine has moved to a **Rust + WASM core** with a sparse, unbounded world. Implemented there: a 31-opcode VM with a 100 %-density decode fold, dominance / intrusion (collision as soft mixing), gravity / pressure, density-coupled mutation, procedural macro-genesis, and a Three.js viewer with an inspector. Still on the backlog: the UI lineage tracker and the additional sensor opcodes — see [docs/plan.md](docs/plan.md).
 
-The eventual production target is Rust + WASM. Today's prototypes are intentionally low-friction JavaScript so design questions can be answered cheaply.
+The lab prototypes are intentionally low-friction JavaScript so design questions can be answered cheaply; the production code lives in `crates/` (Rust core + WASM) and `src/` + `web/` (the TypeScript viewer).
 
 ## Setup
 
@@ -178,6 +178,10 @@ Each prototype is a self-contained static page — open via the dev server (or `
 - [`prototypes/06-cooperation/`](prototypes/06-cooperation/) — 2D cooperation, full 20-opcode VM, A/B inspector
 - [`prototypes/07-perf-3d/`](prototypes/07-perf-3d/) — 3D performance test
 - [`prototypes/08-viewer-3d/`](prototypes/08-viewer-3d/) — 3D viewer (Three.js, instanced rendering, optional Web Worker)
+- [`prototypes/09-sparse-world/`](prototypes/09-sparse-world/) — sparse 2D world, big bang as initial condition, `cells ≤ energy`
+- [`prototypes/09b-sparse-world-3d/`](prototypes/09b-sparse-world-3d/) — the same sparse world in 3D (`DIRS = 4 → 6`), proving the mechanics are dimension-agnostic
+- [`prototypes/10-render-tuner/`](prototypes/10-render-tuner/) — tournament-style chooser for the viewer's render parameters (visual tool, not physics)
+- [`prototypes/11-gravity/`](prototypes/11-gravity/) — gravity + pressure on diffusion (reference validation for the core mechanic)
 
 The README in each prototype folder is in Czech — they are kept as historical lab notes.
 

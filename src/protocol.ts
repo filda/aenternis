@@ -18,7 +18,7 @@ export interface InitMsg {
   readonly coeff: number;
   readonly k: number;
   readonly moveThreshold?: number;
-  // Gravity / pressure physics (see docs/gravity-plan.md). All optional;
+  // Gravity / pressure physics (see docs/mechanics.md). All optional;
   // omitted fields fall back to the engine defaults (gravity/pressure off).
   readonly gravity?: number;
   readonly gravityAlpha?: number;

@@ -2,7 +2,7 @@
 
 Přesná kopie prototypu 9 s jediným rozdílem: **`DIRS = 4 → 6`**. Sparse svět dostává třetí osu `z` se směry `zp` a `zn`, vše ostatní je stejné — žádné nové opcody, žádná nová pravidla, jen šest sousedů místo čtyř. Sparse model nemá topologii toroidu (a neměl ji ani v 9, ten název nese jen `toroid.js` jako reference implementace pro comparison harness). Otázka, kterou prototyp ověřuje, je tedy **drží se mechanika sparse světa beze změny i ve 3D, nebo se objeví edge case, který v rovině nevidíme?**
 
-Detailní designový plán prototypu 9 je v `docs/prototype-09-plan.md`. Tento README je laboratorní zápisník 3D varianty.
+Detailní designový plán prototypu 9 je v `docs/prototypes.md`. Tento README je laboratorní zápisník 3D varianty.
 
 ## Spuštění
 

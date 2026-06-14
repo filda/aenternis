@@ -48,7 +48,7 @@ Concretely:
 - **[`questions.md`](questions.md)** — open questions and resolved decisions
 - **[`prototypes.md`](prototypes.md)** — series of laboratory prototypes and what each one verifies
 - **[`plan.md`](plan.md)** — current implementation status and planned extensions (single source of truth for status)
-- **[`gravity-plan.md`](gravity-plan.md)** — design for gravity / pressure / density-coupled mutation (awaiting a denser instruction set)
+- **[`genesis-plan.md`](genesis-plan.md)** — design for procedural macro-genesis of the initial cell (Rust core landed; TS / UI layer still in progress)
 - **[`optimalizace-2026-05.md`](optimalizace-2026-05.md)** — archive of the May 2026 core-optimization wave (what landed, what was reverted, why)
 - **[`native-server.md`](native-server.md)** — dev runbook for the native WebSocket backend (`aenternis-server`)
 
@@ -56,6 +56,6 @@ Concretely:
 
 A series of laboratory web prototypes lives in `prototypes/` — each verifies a specific layer of physics or programmer interface (details in `prototypes.md`). The production engine has since moved to a **Rust + WASM core** (`crates/`), with a sparse, unbounded world replacing the toroidal grid. Implementation status and roadmap are tracked in `plan.md`.
 
-The VM currently has **20 opcodes** (`0x00`–`0x13`, `nop`…`paint`) — a meaningful-opcode density of ~8 %, sufficient for simple hand-written programs but sparse for emergence from pure noise. Instruction-set extensions come when needed.
+The VM has **31 opcodes** (`0x00`–`0x1E`, `nop`…`jn`) decoded through a total fold `(slot & 0xFF) mod COUNT`, so meaningful-opcode density is **structurally 100 %** — random noise always executes something rather than mostly `nop` (`vm.md`, "Opcode density"). Instruction-set extensions still come when needed; the fold is decoupled from the count.
 
-**Done:** diffusion + VM tick, dominance / intrusion (collision as soft mixing), WASM + Three.js viewer, inspector, program injection. **Backlog:** sensor opcodes (`sinflow`, `sself`, `srate` — only the inflow-tracking data exists so far), lineage tracker / war-paint UI, a denser (Z80-level) instruction set, and gravity / pressure / density-coupled mutation (see `gravity-plan.md`).
+**Done:** diffusion + VM tick, dominance / intrusion (collision as soft mixing), WASM + Three.js viewer, inspector, program injection, the dense decode-fold instruction set, gravity / pressure / density-coupled mutation (`mechanics.md`, "Gravity and pressure"), and the Rust core of procedural macro-genesis (`genesis-plan.md`). **Backlog:** sensor opcodes (`sinflow`, `sself`, `srate` — only the inflow-tracking data exists so far), lineage tracker / war-paint UI, persistence, and the TypeScript / UI layer of macro-genesis.

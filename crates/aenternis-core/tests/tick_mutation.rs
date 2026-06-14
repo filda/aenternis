@@ -1,5 +1,5 @@
 //! Integration tests for density-coupled mutation (see
-//! `docs/gravity-plan.md`).
+//! `docs/mechanics.md`).
 //!
 //! The flip probability is the saturating curve
 //! `p = mutation_strength · E / (E + mutation_half_density)`. Invariants:

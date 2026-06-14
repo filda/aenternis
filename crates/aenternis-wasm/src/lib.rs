@@ -275,7 +275,7 @@ impl World {
 
     /// Set the gravity coupling strength (default `0.0` = off). Energy is
     /// pulled toward local mass; `0.0` keeps the frozen pre-gravity rate
-    /// path. See `docs/gravity-plan.md`.
+    /// path. See `docs/mechanics.md`.
     #[wasm_bindgen(js_name = setGravity)]
     #[allow(clippy::missing_const_for_fn)]
     pub fn set_gravity(&mut self, gravity: f64) {
@@ -308,7 +308,7 @@ impl World {
     /// Set the gravity cutoff radius `R` (default `1`). `R = 1` is local
     /// (six face neighbors); larger `R` gives genuine long-range
     /// attraction across voids at an `O(N·R³)` cost. See
-    /// `docs/gravity-plan.md`.
+    /// `docs/mechanics.md`.
     #[wasm_bindgen(js_name = setGravityRadius)]
     #[allow(clippy::missing_const_for_fn)]
     pub fn set_gravity_radius(&mut self, radius: i32) {
@@ -378,7 +378,7 @@ impl World {
     /// per-slot bit-flip probability for a cell of energy `E` is
     /// `strength · E / (E + half_density)` — a saturating curve, so dense
     /// gravity wells mutate most while sparse cells stay gentle. `0.0`
-    /// makes the mutation phase a strict no-op. See `docs/gravity-plan.md`.
+    /// makes the mutation phase a strict no-op. See `docs/mechanics.md`.
     #[wasm_bindgen(js_name = setMutationStrength)]
     #[allow(clippy::missing_const_for_fn)]
     pub fn set_mutation_strength(&mut self, strength: f64) {
@@ -395,7 +395,7 @@ impl World {
 
     /// Set the mutation half-saturation density `K` — the energy at which
     /// the flip probability reaches `strength / 2`. High = only dense
-    /// cores mutate hard. See `docs/gravity-plan.md`.
+    /// cores mutate hard. See `docs/mechanics.md`.
     #[wasm_bindgen(js_name = setMutationHalfDensity)]
     #[allow(clippy::missing_const_for_fn)]
     pub fn set_mutation_half_density(&mut self, half_density: f64) {

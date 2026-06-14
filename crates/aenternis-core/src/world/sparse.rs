@@ -1,6 +1,6 @@
 //! Sparse world: cells exist only where energy is non-zero.
 //!
-//! The sparse model (verified in JS prototype 9, see `docs/prototype-09-plan.md`)
+//! The sparse model (verified in JS prototype 9, see `docs/prototypes.md`)
 //! drops the toroidal grid entirely. The world has no fixed bounding box;
 //! its size at any moment is bounded above by the total energy, since one
 //! unit of energy occupies one slot of one cell, and a cell with zero
@@ -116,7 +116,7 @@ pub struct SparseWorld {
     /// **Default `0.0`**: with gravity and [`Self::pressure`] both zero the
     /// rate path takes a frozen fast path that is byte-for-byte the
     /// pre-gravity code, so existing baselines need no re-bless. See
-    /// `docs/gravity-plan.md`.
+    /// `docs/mechanics.md`.
     pub gravity: f64,
 
     /// Mass coupling — the fraction of a cell's energy that behaves as
@@ -130,7 +130,7 @@ pub struct SparseWorld {
     /// face neighbors (a purely local density); larger `R` lets distant
     /// mass attract across voids — genuine long-range gravity — at an
     /// `O(N·R³)` cost. Default `1`. Inactive while [`Self::gravity`] is
-    /// `0.0`. See `docs/gravity-plan.md`.
+    /// `0.0`. See `docs/mechanics.md`.
     pub gravity_radius: i32,
 
     /// Pressure amplitude — the outward counter-force that grows with
@@ -157,7 +157,7 @@ pub struct SparseWorld {
     /// curve: ~0 for a tiny cell (a 1-slot program does nothing anyway),
     /// rising toward `mutation_strength` as density grows. So gravity
     /// wells (dense cores) become the "mutagenic cauldrons" of
-    /// `docs/gravity-plan.md` while dispersed / player-scale cells stay
+    /// `docs/mechanics.md` while dispersed / player-scale cells stay
     /// gentle. A bit flip changes a slot's *value*, never the slot count,
     /// so energy is conserved. **Default `0.0` = off**: the mutation phase
     /// is then a strict no-op (no RNG drawn), leaving all baselines
@@ -170,7 +170,7 @@ pub struct SparseWorld {
     /// mutate hard and a player's few-thousand-energy entity stays gentle.
     /// `K = 0` makes the flip probability density-independent (`= strength`
     /// for any non-empty cell). Inactive while [`Self::mutation_strength`]
-    /// is `0.0`. See `docs/gravity-plan.md`.
+    /// is `0.0`. See `docs/mechanics.md`.
     pub mutation_half_density: f64,
 
     /// Per-tick scratch: neighbor-energy snapshot indexed by cell coord.
@@ -189,7 +189,7 @@ pub struct SparseWorld {
     /// [`Self::gravity`] is non-zero** — left empty (and thus zero-cost)
     /// on the gravity-off fast path. A void coord has no entry, so its
     /// mass reads as `0.0`, which makes gravity hold energy against the
-    /// open boundary rather than leak it (see `docs/gravity-plan.md`).
+    /// open boundary rather than leak it (see `docs/mechanics.md`).
     /// Cleared (not freed) between ticks like the other scratch maps.
     pub(crate) scratch_mass: FxHashMap<Coord, f64>,
 

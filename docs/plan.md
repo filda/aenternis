@@ -1,6 +1,6 @@
 # Aenternis — plan and implementation status
 
-Last updated: 2026-05-03 (Rust core + VM done; toroid harness deferred; WASM bindings next)
+Last updated: 2026-06-14 (Rust core + VM + WASM + Three.js viewer + inspector + dominance + gravity/pressure/density-mutation + dense decode-fold opcodes + macro-genesis core all done; remaining: macro-genesis TS/UI layer, lineage tracker, persistence)
 
 This document summarizes where we are and what comes next. Decisions about mechanics live in `mechanics.md`, questions and agreements in `questions.md`, prototypes in `prototypes.md`.
 
@@ -131,15 +131,18 @@ WASM exposes this as `World.newWithProgram(seed, energy, Uint32Array)`. The fron
 
 This closes the prototype-9 parity gap on the initial-state semantics: pure RNG noise (random emergence) vs deterministic seeded program (intentional experiments) is now a textarea-level choice rather than a code-level one. Mnemonic assembler (parsing `set 5, 42` etc. into slots) is still pending — see "Later". **Done 2026-05-04.**
 
+### Delivered (since the May 2026 roadmap; design distilled into the permanent docs)
+- **Z80-density opcodes** — ✅ 2026-06-13. 31 opcodes (`0x00`–`0x1E`) + a total decode fold `(slot & 0xFF) mod COUNT`, so density is structurally 100 % and decoupled from the opcode count. Distilled into `vm.md` ("Instruction set", "Opcode density"); `stack` / `neg` / `rol` / `ror` / `jg` / `jl` deferred.
+- **Gravity, pressure & density-coupled mutation** — ✅ 2026-06. Gravity (`~1/r²` on mass `m = α·E`, cutoff radius `R`) + pressure (`Π ∝ (E/eref)^γ`) as terms in `compute_natural_rates`; saturating bit-flip mutation `p_flip = mutation_strength · E/(E+K)` as its own phase. Zero defaults = zero re-bless; no inertia; portable `γ`. Distilled into `mechanics.md` ("Gravity and pressure", "Density-coupled point mutation"); open calibration in `questions.md`; physics validated in `prototypes/11-gravity/`.
+- **Procedural macro-genesis (Rust core)** — ✅ 2026-06-13. Macro library (`v1.aenm`) + expander + weighted-stream generator, wired into WASM `World.new` as the default base. Still the living plan — see `genesis-plan.md`; remaining: TypeScript expander parity + UI snippet inserter (Increment 2) and the v1.1 composite macros.
+
 ### Later
-- **Gravitace, tlak a hustotní mutace** — ✅ delivered 2026-06-13 (`docs/gravity-plan.md`). Gravitace (`~1/r²` na hmotu `m = α·E`) + tlak (`Π ∝ (E/eref)^γ`) vstupují jako členy do per-směrové rate v `compute_natural_rates`, hustotně vázaná mutace (`p_flip = min(base_rate·E, 1)`, bit-flip) jako samostatná fáze před `end_of_tick`. Determinismus i konzervace (`energy == mem_len`) zachovány; **nulové defaulty = nulový re-bless** (zamrzlá fast-path když `gravity=0 && pressure=0`). Konfigurovatelný dosah `gravity_radius` (`M = α·Σ_{0<|d|≤R} E/|d|` přes předpočítaný stencil; `R=1` lokální, `R>1` skutečná přitažlivost přes void — měřeno konsolidací buněk; cena O(N·R³); UI default R=3). γ omezeno na portable `{1,1.5,2,2.5,3}` (`*`/`sqrt`, ne `powf`) kvůli cross-platform reprodukovatelnosti. Setrvačnost/hybnost vědomě zamítnuta (svět hýbe energií, ne hmotou). Fyzika ověřena v `prototypes/11-gravity/`.
-- **Mnemonic assembler / disassembler** — phase 7 lands raw u32 program injection; the next step is parsing `set 5, 42` / `port 0, 10` / `jmp 0` mnemonics into slots, plus rendering the inspector's memory dump as a disassembly with PC marker. Pairs naturally with preset programs (`burner`, `repli`, `orbiter`) that prototype 9 had.
+- **Mnemonic assembler / disassembler** — assembling (`set 5, 42`, `port 0, 10`) and the inspector disassembly with PC marker now exist in TS (`src/asm.ts`, `src/disasm.ts`, `src/presets.ts`). Remaining polish: preset-program coverage (`burner`, `repli`, `orbiter`).
 - **Lineage tracker** + manual tag + war paint as a UI overlay.
-- **Z80-density opcodes** — ✅ delivered 2026-06-13 (`docs/opcodes-plan.md`). Added 11 opcodes (`0x14`–`0x1E`: `and`, `or`, `xor`, `not`, `shl`, `shr`, `mul`, `div`, `mod`, `jp`, `jn`) and switched the decoder to a **total fold** `(slot & 0xFF) mod COUNT`, so every byte maps to a real opcode — density is now structurally **100 %** and decoupled from opcode count (no more padding the set to hit a number). `stack` (push/pop/call/ret) consciously deferred — needs an `SP` register and has open structural questions (where it lives, behavior under shrink). `neg`/`rol`/`ror` and two-operand signed `jg`/`jl` left on-demand.
 - **Persistence**: `bincode` save / load with an explicit version byte in the header.
 - **Aging counter** as a debug metric (open: per-slot vs aggregated, see `questions.md`).
 - **Reflection mechanism** if cap-exceeding inflows turn out to be a problem in 3D.
-- **Performance**: rayon `par_iter` over cells, eventually `SharedArrayBuffer` + WASM threads for off-main parallelism. Only after profiling shows it's needed.
+- **Performance**: rayon `par_iter` over cells + `SharedArrayBuffer` + WASM threads — ✅ landed 2026-05-15 (~2× across the realistic cell-count range; see the milestone-history entry). Further work only after profiling shows it's needed.
 - **Optional: toroid reference + bit-identity harness in Rust**. Originally listed as the first production milestone (a port of prototype 5's toroid as a side-by-side baseline for sparse). Demoted to optional because (a) prototype 9 already verified the sparse-vs-toroid equivalence in 2D JS, (b) the 2D-to-3D step is a config change (`DIRS = 4 → 6`) with no logic change, and (c) the Rust sparse engine already has strong invariant coverage (conservation, determinism, world-size bound, per-opcode behavior). Revisit only if a concrete bug surfaces that this harness would have caught.
 
 ### Out of scope (for now)

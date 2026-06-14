@@ -1,6 +1,6 @@
 # Aenternis — open questions and resolved decisions
 
-Last updated: 2026-06-11 (synced to actual engine state — dominance implemented, sensor opcodes still pending)
+Last updated: 2026-06-14 (synced to engine state — dominance, gravity/pressure, density-coupled mutation, and the opcode-density fold all implemented; calibration of gravity/mutation and the sensor opcodes still pending)
 
 This document collects questions about the world's mechanics — both active (waiting for a decision or experiment) and resolved (with the decision and a pointer to where it landed).
 
@@ -51,11 +51,21 @@ The collision-as-soft-mixing-of-continuities mechanic (`mechanics.md`, "Collisio
 - **Player UX**: in production the player gets one "free entity" they control. All other cells remain intact unless the player takes them over via dominance / metempsychosis. Debug mode lives only in development.
 - **Determinism**: a seeded RNG (xorshift / PCG). Important for reproducibility.
 
-### Opcode density and emergence
+### Calibration of gravity / pressure / mutation
 
-The current density of meaningful opcodes is ~8 % (20 / 256 in prototype 6). For emergent appearance from random noise, ~60 % (Z80 level) would be desirable. Planned instruction-set extensions: bitwise operations (and / or / xor / shl / shr / rol / ror), arithmetic (mul / div / mod), conditional jumps (jp / jn / jg / jl), stack (push / pop / call / ret), additional addressing modes.
+The gravity / pressure / density-coupled-mutation mechanic is **implemented** in the Rust core (`mechanics.md`, "Gravity and pressure" + "Density-coupled point mutation"; physics verified in `prototypes/11-gravity/`). What remains is tuning, not implementation:
+
+- **Mutation rate (Eigen error threshold).** Too low → no novelty (the world freezes); too high → loss of heredity (structures degrade faster than they reproduce). The interesting zone is a narrow band — the main knob.
+- **Mutation coupling**: on `E` (local density, current choice) vs `M` (potential) vs a combination.
+- **A deeper gravity regime** strong enough to densify cores *despite* mutation (a true "mutagenic cauldron"). Current calibration keeps cores near player-entity scale because mutation itself resists densification — deferred.
+- **Cost of long-range gravity in the sparse / unbounded world.** Naive O(N²); the cutoff `R` gives O(N·R³); a Barnes–Hut / tree would give O(N log N). The choice affects both cost and behavior (slower falloff = longer range = more global-collapse-prone). VM `floor(E/K)` in a dense bang point, not gravity, is expected to be the real bottleneck.
+- **Emergence is not guaranteed.** From the big-bang point (raw energy, no entities at tick 0) the rise of self-sustaining patterns is the open abiogenesis question; densifying the instruction set is a lever, not a parameter.
 
 ## Resolved decisions
+
+### Opcode density (resolved 2026-06-13)
+
+The old ~8 % meaningful-opcode density (20 / 256, where ~92 % of bytes were inert `nop`) was solved structurally by switching the decoder to a total fold `(slot & 0xFF) mod COUNT`, so **every** byte maps to a real opcode — density is now 100 % and decoupled from the opcode count. The set also grew to 31 opcodes (`0x00`–`0x1E`: bitwise `and`/`or`/`xor`/`not`/`shl`/`shr`, arithmetic `mul`/`div`/`mod`, signed jumps `jp`/`jn`). Details and the append-only maintenance rule live in `vm.md` ("Opcode density"). `stack` (push/pop/call/ret), `neg`/`rol`/`ror`, and two-operand signed `jg`/`jl` are consciously deferred.
 
 ### From the consolidation on 2026-05-01
 

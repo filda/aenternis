@@ -33,7 +33,7 @@ use crate::{Cell, Direction};
 /// **contiguous `0..COUNT-1` and append-only** — `decode` relies on this
 /// to fold any byte onto a variant via `ALL[byte % COUNT]`, and the
 /// append-only rule keeps existing programs stable across additions
-/// (see `docs/opcodes-plan.md`). New opcodes extend the enum, `decode`'s
+/// (see `docs/vm.md`). New opcodes extend the enum, `decode`'s
 /// backing `ALL` array, and the `length` match together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
@@ -122,7 +122,7 @@ impl Opcode {
     /// Bytes `< COUNT` are unchanged by the fold (`b % COUNT == b`), so
     /// every assembled instruction keeps its meaning even as new opcodes
     /// are appended later — provided opcodes stay contiguous and
-    /// append-only. See `docs/opcodes-plan.md`.
+    /// append-only. See `docs/vm.md`.
     #[must_use]
     pub const fn decode(slot: u32) -> Self {
         Self::ALL[(slot as u8 % Self::COUNT) as usize]
@@ -492,7 +492,7 @@ pub fn execute_instruction(
         }
         Opcode::Div => {
             // Division by zero yields 0 — the VM has no trap mechanism, so a
-            // defined deterministic result is required. See `docs/opcodes-plan.md`.
+            // defined deterministic result is required. See `docs/vm.md`.
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
             let lhs = cell.memory_slot(arena, dst);

@@ -150,7 +150,7 @@ export function bootstrap(): void {
     // where the high mutation half-density K=40000 separates a HOT churning
     // core (p≈0.3, rising further at the viewer's 1M energy) from a gentle
     // player (p≈0.07). The engine-side SparseWorld defaults stay 0 (frozen
-    // baselines); these are UI starting points only. See docs/gravity-plan.md.
+    // baselines); these are UI starting points only. See docs/mechanics.md.
     gravity: 1.0,
     gravityAlpha: 0.05,
     gravityRadius: 4,

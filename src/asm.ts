@@ -26,7 +26,7 @@
 // the Rust VM actually executes (0x00–0x1E, `Opcode::MAX`). Adding a new
 // opcode requires extending this map (and the Rust VM, of course); keep the
 // codes contiguous and append-only so the VM's `byte % COUNT` fold stays
-// stable for existing programs (see `docs/opcodes-plan.md`).
+// stable for existing programs (see `docs/vm.md`).
 
 export interface Opcode {
   readonly code: number;

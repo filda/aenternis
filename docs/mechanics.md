@@ -338,13 +338,43 @@ A possible scenario:
 
 In the extreme, the entity creates neighbors in all directions and becomes the core of a small structure. More stable, but in need of coordination, communication, and role distribution.
 
+## Gravity and pressure
+
+Two optional density forces layer on top of diffusion (delivered 2026-06; physics verified in `prototypes/11-gravity/`, engine default off). Both enter as extra terms in the per-direction drive computed in `compute_natural_rates`, before the existing proportional clamp:
+
+```
+drive(c→nbr) = coeff·(E_c − E_nbr)        // diffusion (down the energy gradient)
+             + (Π(E_c) − Π(E_nbr))         // pressure (down the pressure gradient)
+             + gravity·(M_nbr − M_c)        // gravity (toward mass)
+```
+
+- **Gravity** acts on mass `m = α·E` (density ∝ energy) through a long-range potential `M(c) = α·Σ_{0<|d|≤R} E(c+d)/|d|` — a `1/r` kernel, so the force goes as `~1/r²`. The cutoff radius `R` (`gravity_radius`) is a precomputed stencil of offsets + `1/|d|` weights: `R = 1` is local (the 6 face neighbors), `R > 1` gives real attraction across the void — energy pulled together over distance — at `O(N·R³)` cost. The potential is evaluated on occupied cells **and their void shell**, because a void point near distant mass has a real nonzero potential, which is what makes attraction across a gap possible.
+- **Pressure** `Π(E) = pressure·eref·(E/eref)^γ` is steep in density (`γ > 1`): a mild correction at average density, but at extreme density it overpowers gravity and halts collapse. The cap on core density is therefore **pressure (`eref`), not mutation**.
+- **No inertia, no momentum.** The world moves *energy*, not *mass*; every tick re-evaluates the field from scratch (see "No velocity, no inertia" above). Inertia was consciously rejected.
+- **Conservation and determinism unchanged.** `energy == mem_len` still holds. The active path uses an explicit `if drive > 0` (never `max(0, drive)`, which would consume an RNG draw and desync the stream). `γ` is restricted to the portable set `{1, 1.5, 2, 2.5, 3}` computed via `*`/`sqrt` (IEEE correctly-rounded) so native and WASM stay bit-for-bit identical; arbitrary `γ` would need `powf`, which is not correctly-rounded.
+- **Zero defaults = zero re-bless.** With `gravity = 0 && pressure = 0` the engine takes a frozen pre-gravity fast path, so every baseline test (bit-parity, conservation, determinism) passes unchanged. The viewer ships a non-zero "cauldron" preset; the engine default stays off.
+
 ## Mutation
 
 Mutation comes from **the very physics of mixing**. The membrane is rewritten in every tick by content from neighbors, so content is constantly shifting in and out. No special aging rule is needed.
 
 Self-modifying code is another source of change — a program may deliberately rewrite its own code, or unintentionally overwrite itself (especially with active ignition or mis-aimed addresses).
 
+### Density-coupled point mutation
+
+On top of mixing, the engine has an explicit **density-coupled bit-flip mutation** (delivered 2026-06), run as a separate phase after outflow and before end-of-tick. Each slot flips one bit with probability `p_flip = mutation_strength · E/(E + K)` — *saturating*, not linear: a tiny entity is essentially untouched, while density `E ≫ K` approaches `strength`. Flipping a bit changes a slot's *value*, not the slot count, so energy stays conserved. Only one bit per slot per tick, which keeps the fitness landscape smooth under the decode fold (a small mutation is a small behavior change, not a fall into noise). Two parameters: `mutation_strength` (0..1, default 0 = off — a strict no-op that draws no RNG) and `mutation_half_density = K` (the density at which `p` reaches `strength/2`). Mutation is coupled to local density `E`, not the potential `M`. The consequence is that gravity, by deciding *where* energy concentrates, also decides **where evolution happens**: the quiet periphery barely mutates, while dense gravitational wells become mutagenic cauldrons. (Calibration of the rate — the Eigen error threshold — stays open; see `questions.md`.)
+
 The aging of memory cells from prototype 2 was abandoned (consolidation 2026-05-01, point 9): diffusion as mixing supplies mutation on its own. If it ever turns out in simulation that a fully isolated entity in a perfectly equilibrated region stops evolving, aging may return as a backup source of entropy for stagnant regions. For now, on hold.
+
+### Sources of novelty
+
+The engine is deterministic — a seed plus the initial program fix the whole trajectory — so novelty has exactly three sources, each of a different kind:
+
+1. **Choice of the initial program** — variability *between* universes; richer, information-bearing seeds (the macro-genesis of `genesis-plan.md`) replace artificial noise.
+2. **The player's program** — the only exogenous input; the system is deterministic *between* interventions. The player's code obeys the same physics — to survive it must do work (exploit gravity to pile energy in a well, or fight it).
+3. **Mutation** — the one that makes the difference between a universe that *unfolds* and one that *evolves*.
+
+Interesting dynamics therefore come not from the physics parameters but from the layer **program × recombination × mutation × selection** (where gravity co-determines selection). The physics — diffusion + gravity + pressure — is just the environment.
 
 ## Identity and war paint (UI layer)
 

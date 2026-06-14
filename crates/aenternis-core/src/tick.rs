@@ -191,7 +191,7 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
 ///
 /// γ is evaluated via [`gamma_pow`], i.e. only through `*` and `sqrt`,
 /// both IEEE-754 correctly-rounded on every target — so `Π` is bit-for-bit
-/// reproducible across native and wasm. See `docs/gravity-plan.md`.
+/// reproducible across native and wasm. See `docs/mechanics.md`.
 //
 // `float_cmp`: `pressure == 0.0` is a deliberate exact off-switch test.
 // `suboptimal_flops`: keep `pressure * eref * pow` as plain multiplies —
@@ -1725,7 +1725,7 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 /// Density-coupled point mutation: flip random bits in cell memory.
 ///
 /// The per-slot flip probability rises with local energy density (see
-/// `docs/gravity-plan.md`). A flip changes a slot's *value*, never the
+/// `docs/mechanics.md`). A flip changes a slot's *value*, never the
 /// slot count, so the `energy == mem_len` invariant — and total energy —
 /// is preserved exactly; only the *content* (program) drifts.
 ///
@@ -1740,7 +1740,7 @@ pub fn end_of_tick(world: &mut SparseWorld) {
 /// evolution happens. Energy is density (a cell is a unit volume), so this
 /// couples on the cell's own energy: self-contained (no dependency on the
 /// gravity-only `scratch_mass`). All ops are `+`/`*`/`/` (correctly
-/// rounded) → reproducible native↔wasm. See `docs/gravity-plan.md`.
+/// rounded) → reproducible native↔wasm. See `docs/mechanics.md`.
 ///
 /// **Determinism.** One RNG stream per cell, keyed
 /// `(world_seed, tick, coord, DENSITY_MUTATION_RNG_DOMAIN)` — a domain

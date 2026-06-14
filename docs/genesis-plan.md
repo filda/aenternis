@@ -1,13 +1,13 @@
 # Aenternis — plán: procedurální genesis prvotní buňky (seedem řízený generátor programu)
 
-Last updated: 2026-06-13 (návrh; opkódy + fold **hotové**, gravitace běží paralelně)
+Last updated: 2026-06-14 (Increment 1 = Rust jádro **hotové**; opkódy + fold + gravitace/tlak/mutace **hotové**; zbývá Increment 2 = TS/UI vrstva)
 
 Designový kontext žije v `aenternis.md` (jádro, invarianty) a `vm.md` (instrukční
 sada, model paměti/emise); obecný roadmap v `plan.md`; mutace a selekce, na které
-tento plán navazuje, v `gravity-plan.md`; hustota instrukční sady, na které tento
-plán **staví**, v `opcodes-plan.md` — ta je už **dodaná**: 31 opkódů (`0x00`–`0x1E`,
+tento plán navazuje, v `mechanics.md`; hustota instrukční sady, na které tento
+plán **staví**, v `vm.md` — ta je už **dodaná**: 31 opkódů (`0x00`–`0x1E`,
 commit `f252784`) a totální `decode` přes `byte % COUNT` fold (každý byte je platná
-instrukce). Gravitace/tlak/mutace (`gravity-plan.md`) se implementuje paralelně.
+instrukce). Gravitace/tlak/mutace (`mechanics.md`, „Gravity and pressure") jsou rovněž **hotové** — seedovaný start z této genese jim dodá informaci-nesoucí palivo místo šumu.
 
 ## Otázka, kterou plán odpovídá
 
@@ -24,7 +24,7 @@ Genesis dnes umí dva krajní režimy:
 
 Chybí **třetí cesta mezi nimi**: program **řízený seedem světa** — variabilní
 jako šum, ale nesoucí strukturu jako ruční program. Přesně to popisuje
-`gravity-plan.md` („Zdroje novosti", bod 1): *„volba počátečního programu…
+`mechanics.md` („Zdroje novosti", bod 1): *„volba počátečního programu…
 nahrazuje umělý šum bohatšími, informaci nesoucími seedy z vykonávání
 asembleru."* Tento dokument je realizace té věty.
 
@@ -45,7 +45,7 @@ Kanonická genesis i **expander maker** žijí v `aenternis-core`. Důvody:
 
 - Genesis je **artefakt světa**, ne UI feature → plně replayovatelná, engine umí
   seedovat vesmír sám, bez frontendu.
-- **Dveře k pozdější vazbě mutace na seed** zůstávají otevřené (`gravity-plan.md`):
+- **Dveře k pozdější vazbě mutace na seed** zůstávají otevřené (`mechanics.md`):
   pokud se mutace časem naváže na seedovou „genomovou pásku", musí to být tam, kde
   žije svět.
 
@@ -381,7 +381,7 @@ Base se vygeneruje pro `[0, energy)`, **hráčův `overlay` se zapíše od adres
 | **Macros** | prefix | **doporučený hráčův režim** |
 
 - **Default base = `Macros`** — nahrazuje umělý šum bohatším startem
-  (`gravity-plan.md`); `Noise` zůstává jako legacy/test toggle (analogie
+  (`mechanics.md`); `Noise` zůstává jako legacy/test toggle (analogie
   `step_diffusion` vedle `step`).
 - **Overlay nahrazuje, nespotřebovává pásku** (jako dnes RNG): ocas `[len, energy)`
   je byte-identický bez ohledu na prefix → zachová „porovnatelné pozadí".
@@ -393,13 +393,13 @@ Base se vygeneruje pro `[0, energy)`, **hráčův `overlay` se zapíše od adres
 
 ## Vztah k foldu, mutaci a evoluci (proč to celé drží pohromadě)
 
-Tři vrstvy z `opcodes-plan.md` a `gravity-plan.md` do sebe zapadají právě skrz
+Tři vrstvy z `vm.md` a `mechanics.md` do sebe zapadají právě skrz
 makro-genesis:
 
 1. **Fold dekodér** (`% COUNT`, **už dodaný**, `COUNT = 31`) → každý byte je
    platná instrukce → emitovaný *částečný* fragment makra je platný (jen jiný)
    kód. Bez foldu by „rozbité" entity z R2 byly z velké části nop.
-2. **Bodová mutace** (`gravity-plan.md`) překlopí bit ve slotu → pod foldem skoro
+2. **Bodová mutace** (`mechanics.md`) překlopí bit ve slotu → pod foldem skoro
    vždy vyrobí *jinou platnou instrukci*, často téhož makra. Makro-genesis tím
    dává **hladkou fitness krajinu**: malé mutace = malé změny chování, ne pád do
    nopového šumu. To je hlavní „proč" celého přístupu oproti čisté-šumové genesi.
@@ -450,7 +450,7 @@ algoritmická změna → mutační testování je součást brány).
 ## Otevřené otázky
 
 - **Kalibrace vah** je hlavní ladicí páka emergence (analogie „pořadí opkódů" v
-  `opcodes-plan.md`). Příliš málo `spread` → mrtvé vesmíry; příliš mnoho → jen
+  `vm.md`). Příliš málo `spread` → mrtvé vesmíry; příliš mnoho → jen
   triviální replikátory bez vnitřní práce. Zajímavá zóna je úzký pás.
 - **Velikost okna `A`** (A5, default 256) je — vedle vah — hlavní empirická páka:
   malé okno = chaotický stomp, velké = řidší interakce. Ladit spolu s vahami.
@@ -460,7 +460,7 @@ algoritmická změna → mutační testování je součást brány).
 - **Více seedovaných buněk.** Zatím jedna prvotní buňka (zadání). Seedovat rovnou
   několik buněk různými programy (startovní ekosystém)? Follow-up.
 - **Vazba mutace na seedovou pásku.** Dveře otevřené (R1); konkrétní mechanika je
-  na `gravity-plan.md`, ne tady.
+  na `mechanics.md`, ne tady.
 
 ## Mimo rozsah (zatím)
 
@@ -469,7 +469,7 @@ algoritmická změna → mutační testování je součást brány).
 - **Periodický / dlážděný režim.** Zaručené dědění *celého* programu v každém
   emitovaném plátku (perioda P). Vědomě odloženo ve prospěch aperiodicity (R2);
   je to jen druhý konec téhož „period" knobu (aperiodické = P→∞).
-- **Mutační operátory nad genomem.** To je `gravity-plan.md` (hustotně vázaná
+- **Mutační operátory nad genomem.** To je `mechanics.md` (hustotně vázaná
   mutace), ne genesis. Genesis jen vyrobí seedovaný start a nechá dveře otevřené.
 - **Skoky a `setpv` v genesi (→ v2).** v1 je bezskokový dataflow genom (viz „Řídicí
   tok"). První v2 krok = *omezený dopředný* podmíněný skok (cíl = offset + malá
@@ -498,8 +498,8 @@ algoritmická změna → mutační testování je součást brány).
 
 ## Návaznost
 
-Genesis **staví na** `opcodes-plan.md` (hustá sada + fold — bez nich nejsou makra
-expresivní a fragmenty nejsou platné) a **krmí** `gravity-plan.md` (seedovaný
+Genesis **staví na** `vm.md` (hustá sada + fold — bez nich nejsou makra
+expresivní a fragmenty nejsou platné) a **krmí** `mechanics.md` (seedovaný
 informaci-nesoucí start je palivo pro selekci v gravitačních dolech a substrát pro
 mutaci). Předpoklad „hustá sada + fold" je **splněn** (commit `f252784`), takže
 v1 makro-genesis může jít hned. Gravitace/mutace se dodává paralelně; až bude

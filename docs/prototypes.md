@@ -136,22 +136,48 @@ Comes with two test harnesses (Node):
 
 **Out of scope (carried forward):** 3D variant, full inspector, lineage tracker, history-trace overlay. See README in the prototype directory for the full lab notes.
 
+## Prototype 9-B: sparse world (3D)
+
+`prototypes/09b-sparse-world-3d/` — 2026-05-03
+
+An exact copy of prototype 9 with a single change: `DIRS = 4 → 6`. The sparse world gains a `z` axis (directions `zp` / `zn`) — no new opcodes, no new rules, six neighbors instead of four. The big bang is one origin cell at `(0,0,0)`; the world's maximum diameter in cells is `O(∛E_total)` (vs `O(√E_total)` in 2D), so the expansion front advances more slowly per axis.
+
+**Question:** do the sparse-world mechanics hold unchanged in 3D, or does an edge case appear that the plane hides?
+
+**Status: verified.** Same conservation + cap invariants and the same toroid bit-identity (against a 6-direction port of the reference toroid; the sparse world itself is not a torus) as the 2D version. Confirms the sparse mechanics are dimension-agnostic, which cleared the 3D port to go straight into the Rust + WASM core rather than through a JS prototype.
+
+## Prototype 10: render tuner
+
+`prototypes/10-render-tuner/` — 2026-06
+
+A tournament-style chooser for the production render block in `web/`. A static world is generated once (WASM, fixed `seed=1234` / 1 M energy / 250 ticks), then a 5×2 grid of previews each shows a different value of one parameter; clicking a tile fixes that value and advances to the next round (exposure → emissive → roughness → bloom strength/threshold/radius → fog → SSAO radius → voxel size → min luma). The final round emits a JSON of the chosen combination to paste into the slider defaults in the root `index.html`.
+
+**Note:** not a physics experiment — a visual-calibration tool for the viewer. (This slot was originally pencilled in for a self-encapsulation prototype; that experiment moved directly into the Rust + WASM core instead, so slot 10 was reused for the render tuner.)
+
+## Prototype 11: gravity and pressure
+
+`prototypes/11-gravity/` — 2026-06
+
+A standalone JS reimplementation of the core (like prototypes 01–09) that adds two competing forces to diffusion: long-range gravity and pressure. Dense grid, energy as `Float64`, everything is flux across faces: `drive(A→B) = coeff·(E_A−E_B) + (Π(E_A)−Π(E_B)) + grav·(M_B−M_A)`, proportionally clamped so flow stays conservative. Gravity uses a long-range `1/r` potential with cutoff `R`; pressure `Π(E) = pressure·eref·(E/eref)^γ` is steep in density and halts collapse. Boundary is switchable: torus (default, strict conservation — the clean choice for studying structure formation) or void (open universe, leaked energy is lost). Noise breaks symmetry so structure can grow from a symmetric start (Jeans instability).
+
+**Question:** does introducing gravity / density lead to the *emergence of structure* (clusters), or does everything just dilute into the void?
+
+**Status: physics verified.** This is the reference validation for the gravity / pressure / density-coupled-mutation mechanic that landed in the Rust core (`mechanics.md`, "Gravity and pressure"). The VM is intentionally *not* added here — it would duplicate `vm.rs` / the CPU phase; emergence is studied in the production core where the VM and `active_outflow` already live.
+
 ## Planned extensions / further prototypes
 
-From the consolidation on 2026-05-01, several priorities remain unimplemented:
+Of the priorities from the consolidation on 2026-05-01, most have since landed in the **Rust + WASM core** rather than in a JS prototype:
 
-- **Dominance / intrusion mechanic** in the existing prototype 6 — collision as soft mixing of continuities
-- **Lineage tracker + manual tag + war paint** in the prototype 6 UI
-- **Sensor expansion** (`sinflow`, `sself`, `srate`)
-- **Real implementation** in Rust + WASM for production-grade stages — now targeting **sparse 3D directly** (see `plan.md`)
+- **Dominance / intrusion mechanic** (collision as soft mixing of continuities) — ✅ implemented in the core (roadmap Phase 5).
+- **Gravity / pressure / density-coupled mutation** — ✅ implemented in the core; physics first validated in prototype 11.
+- **Lineage tracker + manual tag + war paint** in the UI — still on the backlog (`paint` / `sid` opcodes exist, the UI overlay does not).
+- **Sensor expansion** (`sinflow`, `sself`, `srate`) — still on the backlog (the inflow-tracking data exists, the opcodes do not).
 
-Designed in May 2026 and awaiting implementation:
+**Self-encapsulation** was pencilled in as a 2D-sparse prototype, but the experiment moved directly into the Rust + WASM core (where dominance already lives), so no JS prototype was built — slot 10 was reused for the render tuner. Self-encapsulation in the sparse model is literally "creating your own surrounding world from your own energy".
 
-- **Prototype 10 (self-encapsulation, 2D sparse)** — once the sparse world model is verified (which prototype 9 has done) and dominance / intrusion lands in prototype 6, a concrete experiment with self-encapsulating programs. Self-encapsulation in the sparse model is literally "creating your own surrounding world from your own energy".
+**No separate 3D sparse JS prototype was needed.** Prototype 9-B confirmed the sparse mechanics are dimension-agnostic — `DIRS = 4 → 6` is a configuration change, not a design change — so the production 3D port went straight into the Rust + WASM core.
 
-**No separate 3D sparse JS prototype is planned.** Prototype 9 demonstrated that sparse mechanics are dimension-agnostic — `DIRS = 4 → 6` is a configuration change, not a design change. The 3D port therefore skips the prototype phase and goes directly into the Rust + WASM production implementation. First production milestone is bit-identity verification (port of `test-equivalence.js` to Rust) against a Rust port of prototype 5's toroid.
-
-Detail in `plan.md`, `prototype-09-plan.md`, and `questions.md`.
+Detail in `plan.md` and `questions.md`.
 
 ## The tone of experimentation
 
