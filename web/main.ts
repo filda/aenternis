@@ -143,28 +143,22 @@ export function bootstrap(): void {
     coeff: 0.15,
     k: 1,
     moveThreshold: 1.0,
-    // Viewer starts in a gravity-on regime mirroring prototype 11
-    // (grav 0.12, pressure 0.2, γ 2.0). `eref ≈ 8` is set to the world's
-    // equilibrium mean cell density (the prototype normalized that to 1),
-    // which puts pressure in its active anti-collapse regime; a headless
-    // sweep (examples/gravity_sweep) confirmed ~17 % of energy concentrates
-    // into the top 1 % of cells here — clear structure, no runaway. The
-    // engine-side SparseWorld defaults stay 0 (frozen baselines); these
-    // are UI starting points only.
-    gravity: 0.3,
+    // "Cauldron" preset (2026-06-14): mutagenic dense cores, gentle player.
+    // The core-density cap turned out to be PRESSURE, not mutation — so a
+    // gentle pressure (high eref) plus strong gravity lets cores densify
+    // into the tens of thousands of E (≫ a player's few-thousand entity),
+    // where the high mutation half-density K=40000 separates a HOT churning
+    // core (p≈0.3, rising further at the viewer's 1M energy) from a gentle
+    // player (p≈0.07). The engine-side SparseWorld defaults stay 0 (frozen
+    // baselines); these are UI starting points only. See docs/gravity-plan.md.
+    gravity: 1.0,
     gravityAlpha: 0.05,
     gravityRadius: 4,
     pressure: 0.2,
     pressureGamma: 2.0,
-    pressureEref: 8.0,
-    // Calibration (2026-06-13): livelier default — mutation on, K=15000.
-    // K is a pure liveliness↔player-gentleness tradeoff (mutation self-limits
-    // core density, so the dense-cauldron separation can't be reached by K
-    // alone — that needs a much stronger-gravity regime). K=15000 = lively
-    // (peak churn cv≈0.20) with a player's few-thousand-E entity still
-    // survivable (p≈0.17). See docs/gravity-plan.md.
+    pressureEref: 50_000.0,
     mutationStrength: 1.0,
-    mutationHalfDensity: 15_000,
+    mutationHalfDensity: 40_000,
   };
 
   // ----- DOM lookup ----------------------------------------------------------

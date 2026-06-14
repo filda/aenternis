@@ -266,7 +266,16 @@ mutace; obrázky v `reports/gravity-vis/calib-*`). Zjištění:
   (makro-genesis + volitelný hráčův prefix). Viewer tedy běží na makro-genesi;
   `Base::Noise` zůstává v core API pro baseline/testy. `GenesisConfig` (window,
   fertility) zatím na defaultu — do UI nevystaveno.
-- **Gravitace doladěna (2026-06-14, viewer default `g=0.3, R=4`)** — sweep `g×R`
+- **Kotlový preset (2026-06-14, viewer default) — bod „mutagenní kotle" dosažen.**
+  Strop hustoty jader byl **tlak (`eref`), ne mutace**: při `eref=8` jádra cap ~1,5 k.
+  Uvolněním tlaku (`eref=50000`) + silnější gravitací (`g=1.0`) jádra dorostou na
+  ~16 k E (300 k energie; při 1 M ještě víc). S `K=40000` to **odděluje horké husté
+  jádro** (`p≈0.29`, kde vře evoluce) od **jemného hráče** (`p≈0.07`). Viewer preset:
+  `gravity=1.0, R=4, alpha=0.05, pressure=0.2, γ=2, eref=50000, mutation_strength=1,
+  K=40000`. Vizuál: těsná žluto-bílá nukleus + řídké halo (`reports/gravity-vis/
+  cauldron-regime.png`). Engine default `gravity=0` drží.
+- **Předchozí „hezká struktura" režim (`g=0.3/eref8/K15000`)** byl měkká koule bez
+  horkého jádra — nahrazen kotlovým presetem (uživatel chtěl bod 2). Sweep `g×R`
   s plným systémem (genesis + mutace s=1/K=15000). Klíčové: **z jednoho big-bangu
   vzniká vždy JEDNO dominantní jádro** (+ halo + pár satelitů), ne víc nezávislých
   center — mrak je souvislý, gravitace ho stáhne k těžišti; ani malé `R` ho
