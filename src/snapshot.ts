@@ -34,6 +34,42 @@ export interface SnapshotAnalysis {
   readonly maxEnergy: number;
 }
 
+/** Offset of the `origin_tag` field within a snapshot record (see
+ *  `World::cellsSnapshot` in the Rust core). */
+const ORIGIN_TAG_OFFSET = 4;
+
+/** Index of the highest-energy cell whose `origin_tag` equals `tag`, or
+ *  `-1` if no live cell carries it.
+ *
+ *  Used to follow a lineage rather than the global maximum — Project
+ *  Pilgrim's conversion-wave "torch" is the max-energy carrier of the
+ *  pilgrim tag (docs/pilgrim.md). Requires `stride ≥ 5`, since
+ *  `origin_tag` lives at offset +4. */
+export function findMaxEnergyIdxByTag(
+  snap: Uint32Array,
+  stride: number,
+  cellCount: number,
+  tag: number,
+): number {
+  let bestIdx = -1;
+  // -1 (not 0) so a sole carrier with energy 0 or 1 still wins.
+  let bestEnergy = -1;
+  // Accepted-as-equivalent mutant (Stryker): `i < cellCount` → `i <=
+  // cellCount`. The extra iteration reads one record past the end, but an
+  // out-of-bounds `Uint32Array` read is `undefined`, which fails the
+  // `!== tag` filter below, so it is an observable no-op.
+  for (let i = 0; i < cellCount; i += 1) {
+    const off = i * stride;
+    if (snap[off + ORIGIN_TAG_OFFSET] !== tag) continue;
+    const e = snap[off + 3]!;
+    if (e > bestEnergy) {
+      bestEnergy = e;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 /** Read the `[x, y, z, energy]` record at index `i`. The caller is
  *  responsible for `0 ≤ i < cellCount` and `stride ≥ 4`. */
 export function cellAt(snap: Uint32Array, stride: number, i: number): Cell3D {

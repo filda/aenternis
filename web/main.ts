@@ -41,13 +41,16 @@ import type {
   ConfigMsg,
   InitMsg,
   InspectMsg,
+  ProgramStartedMsg,
+  RunProgramMsg,
   RunningMsg,
   SnapshotMsg,
   StepMsg,
   WorkerToMainMsg,
 } from '../src/protocol.ts';
+import { assemble } from '../src/asm.ts';
 import { openNativeClient } from './native-client.ts';
-import { analyzeSnapshot, type SnapshotBbox } from '../src/snapshot.ts';
+import { analyzeSnapshot, findMaxEnergyIdxByTag, type SnapshotBbox } from '../src/snapshot.ts';
 import {
   EMPTY_TRACKER_STATE,
   pushTrackerSample,
@@ -208,6 +211,7 @@ export function bootstrap(): void {
     programText: requireEl('programText', HTMLTextAreaElement),
     programStatus: requireEl('programStatus', HTMLDivElement),
     programPreset: requireEl('programPreset', HTMLSelectElement),
+    runPilgrimBtn: requireEl('runPilgrimBtn', HTMLButtonElement),
     colorMode: requireEl('colorMode', HTMLSelectElement),
     sliceEnabled: requireEl('sliceEnabled', HTMLInputElement),
     voxelSize: requireEl('voxelSize', HTMLInputElement),
@@ -298,6 +302,10 @@ export function bootstrap(): void {
       latestSnapshot = msg;
     } else if (msg.type === 'cellDetail') {
       renderInspector(msg);
+    } else if (msg.type === 'programStarted') {
+      onProgramStarted(msg);
+    } else if (msg.type === 'programRejected') {
+      dom.programStatus.textContent = `odmítnuto: ${msg.reason}`;
     }
   };
 
@@ -376,6 +384,48 @@ export function bootstrap(): void {
     channel.postMessage(msg);
   }
 
+  /** Assemble the program textarea and ask the worker to possess an
+   *  eligible host with it at runtime (Project Pilgrim). The worker
+   *  replies `programStarted` (→ follow) or `programRejected`. */
+  function sendRunProgram(): void {
+    if (!workerReady) return;
+    const { slots, errors } = assemble(dom.programText.value);
+    if (errors.length > 0) {
+      dom.programStatus.textContent = `${errors.length} parse error(s): ${errors.join('; ')}`;
+      return;
+    }
+    if (slots.length === 0) {
+      dom.programStatus.textContent = 'prázdný program';
+      return;
+    }
+    const msg: RunProgramMsg = {
+      type: 'runProgram',
+      code: slots,
+      reserve: PILGRIM_RESERVE,
+      tag: PILGRIM_TAG,
+      appearance: PILGRIM_APPEARANCE,
+    };
+    channel.postMessage(msg);
+    dom.programStatus.textContent = `${slots.length} slot(s) → hledám hostitele…`;
+  }
+
+  /** A possession succeeded: lock the tracker, camera and inspector onto
+   *  the new lineage and pull the camera back from auto-zoom. */
+  function onProgramStarted(msg: ProgramStartedMsg): void {
+    trackedTag = msg.tag;
+    pilgrimFollow = true;
+    pilgrimSeen = false;
+    lastPilgrimPos = null;
+    trackerState = resetTrackerState();
+    trackerEnabled = true;
+    dom.trackerEnabled.checked = true;
+    cancelAutoZoom();
+    inspector.coord = { x: msg.x, y: msg.y, z: msg.z };
+    inspector.panel.classList.add('visible');
+    requestInspect(msg.x, msg.y, msg.z);
+    dom.programStatus.textContent = `pilgrim spuštěn @ (${msg.x},${msg.y},${msg.z})`;
+  }
+
   // ----- Three.js setup ------------------------------------------------------
   const scene = new THREE.Scene();
   const defaultBackground = new THREE.Color(0x05050a);
@@ -445,6 +495,33 @@ export function bootstrap(): void {
 
   renderer.domElement.addEventListener('pointerdown', cancelAutoZoom);
   renderer.domElement.addEventListener('wheel', cancelAutoZoom, { passive: true });
+
+  // ----- Pilgrim camera-follow ----------------------------------------------
+  const _followDir = new THREE.Vector3();
+  /** Center the view on the pilgrim, keeping the current view direction but
+   *  clamping to a reasonable follow distance (used on the first frame). */
+  function recenterCameraOnPilgrim(x: number, y: number, z: number): void {
+    _followDir.subVectors(camera.position, controls.target);
+    let dist = _followDir.length();
+    if (!Number.isFinite(dist) || dist < 1e-3) dist = 40;
+    dist = Math.min(Math.max(dist, 12), 80);
+    _followDir.normalize();
+    controls.target.set(x, y, z);
+    camera.position.copy(controls.target).addScaledVector(_followDir, dist);
+  }
+  /** Translate target + camera by the same delta so the pilgrim stays
+   *  centered at constant zoom/angle — the user can still orbit around it. */
+  function followCameraToPilgrim(x: number, y: number, z: number): void {
+    const dx = x - controls.target.x;
+    const dy = y - controls.target.y;
+    const dz = z - controls.target.z;
+    controls.target.set(x, y, z);
+    camera.position.set(
+      camera.position.x + dx,
+      camera.position.y + dy,
+      camera.position.z + dz,
+    );
+  }
 
   // Postprocessing pipeline: scene render → unreal bloom. Bloom picks
   // up pixels brighter than `threshold` and bleeds them into a glow,
@@ -727,6 +804,20 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   let trackerState: TrackerState = EMPTY_TRACKER_STATE;
   let trackerEnabled = false;
   let trailLen = 60;
+
+  // ----- Pilgrim tracking (Project Pilgrim, docs/pilgrim.md) -----------------
+  // Reserved lineage marker stamped on a possessed entity so the camera and
+  // inspector can follow it. 0x50494c47 = "PILG"; the appearance is a
+  // distinct colour the war-paint / lineage view modes pick up.
+  const PILGRIM_TAG = 0x50494c47;
+  const PILGRIM_APPEARANCE = 0xff3030;
+  // Extra slots the host must have beyond the program — scratch / compute /
+  // emission fuel (docs/pilgrim.md). Tunable; a UI knob is a follow-up.
+  const PILGRIM_RESERVE = 64;
+  let trackedTag: number | null = null; // non-null → follow this lineage
+  let pilgrimFollow = false; // camera tracks the carrier
+  let pilgrimSeen = false; // have we seen the tag at least once
+  let lastPilgrimPos: { x: number; y: number; z: number } | null = null;
   let highlightMesh: THREE.LineSegments | null = null;
   let trailLine: THREE.Line | null = null;
 
@@ -956,6 +1047,9 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     // User-edited program no longer matches any preset.
     dom.programPreset.value = '';
   });
+  dom.runPilgrimBtn.addEventListener('click', () => {
+    sendRunProgram();
+  });
   dom.coeff.addEventListener('input', () => {
     config.coeff = parseFloat(dom.coeff.value);
     dom.coeffVal.textContent = config.coeff.toFixed(2);
@@ -1164,7 +1258,38 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     // raycaster doesn't lose hits at the field's edge.
     voxelMesh.boundingSphere.radius = halfSpan + JITTER_AMPLITUDE;
 
-    updateTrackerVisuals(analysis.maxCellIdx, snap, stride);
+    // Tracking target: a possessed lineage (Project Pilgrim) when one is
+    // active, otherwise the global max-energy cell (legacy tracker).
+    let trackIdx = analysis.maxCellIdx;
+    if (trackedTag !== null) {
+      trackIdx = findMaxEnergyIdxByTag(snap, stride, cellCount, trackedTag);
+      if (trackIdx >= 0) {
+        pilgrimSeen = true;
+        const off = trackIdx * stride;
+        const px = snap[off]! | 0;
+        const py = snap[off + 1]! | 0;
+        const pz = snap[off + 2]! | 0;
+        const pe = snap[off + 3]!;
+        if (pilgrimFollow) {
+          if (lastPilgrimPos === null) recenterCameraOnPilgrim(px, py, pz);
+          else followCameraToPilgrim(px, py, pz);
+          lastPilgrimPos = { x: px, y: py, z: pz };
+        }
+        // Keep the inspector glued to the moving carrier; the periodic
+        // refresh (maybeRefreshInspector) re-requests this coord.
+        inspector.coord = { x: px, y: py, z: pz };
+        inspector.panel.classList.add('visible');
+        dom.programStatus.textContent =
+          `pilgrim @ (${px},${py},${pz}) E=${pe.toLocaleString()}`;
+      } else if (pilgrimSeen) {
+        // The lineage died out — its tag is gone from the world.
+        dom.programStatus.textContent = 'pilgrim ztracen (tag vyhynul)';
+        trackedTag = null;
+        pilgrimFollow = false;
+      }
+    }
+
+    updateTrackerVisuals(trackIdx, snap, stride);
   }
 
   // ----- Inspector -----------------------------------------------------------

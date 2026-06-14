@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeSnapshot, cellAt } from '../src/snapshot.ts';
+import { analyzeSnapshot, cellAt, findMaxEnergyIdxByTag } from '../src/snapshot.ts';
 
 // Convenience builders so tests can describe cells declaratively.
 function makeSnap(cells: ReadonlyArray<readonly [x: number, y: number, z: number, e: number]>, stride = 4): Uint32Array {
@@ -81,5 +81,71 @@ describe('analyzeSnapshot', () => {
     const r = analyzeSnapshot(snap, 4, 1, false);
     expect(r.maxEnergy).toBe(1);
     expect(r.maxCellIdx).toBe(0);
+  });
+});
+
+describe('findMaxEnergyIdxByTag', () => {
+  const STRIDE = 6;
+
+  /** Build a stride-6 snapshot from `[x, y, z, energy, tag]` records
+   *  (appearance is zero-filled). */
+  function taggedSnap(
+    cells: ReadonlyArray<readonly [number, number, number, number, number]>,
+  ): Uint32Array {
+    const snap = new Uint32Array(cells.length * STRIDE);
+    cells.forEach(([x, y, z, e, tag], i) => {
+      snap[i * STRIDE] = x >>> 0;
+      snap[i * STRIDE + 1] = y >>> 0;
+      snap[i * STRIDE + 2] = z >>> 0;
+      snap[i * STRIDE + 3] = e;
+      snap[i * STRIDE + 4] = tag;
+    });
+    return snap;
+  }
+
+  it('returns -1 for an empty snapshot', () => {
+    expect(findMaxEnergyIdxByTag(new Uint32Array(0), STRIDE, 0, 0x7)).toBe(-1);
+  });
+
+  it('returns -1 when no cell carries the tag', () => {
+    const snap = taggedSnap([
+      [0, 0, 0, 50, 0x1],
+      [1, 0, 0, 90, 0x2],
+    ]);
+    expect(findMaxEnergyIdxByTag(snap, STRIDE, 2, 0x7)).toBe(-1);
+  });
+
+  it('finds the sole carrier of the tag', () => {
+    const snap = taggedSnap([
+      [0, 0, 0, 50, 0x1],
+      [1, 0, 0, 90, 0x7],
+      [2, 0, 0, 80, 0x2],
+    ]);
+    expect(findMaxEnergyIdxByTag(snap, STRIDE, 3, 0x7)).toBe(1);
+  });
+
+  it('picks the highest-energy carrier, ignoring other tags', () => {
+    const snap = taggedSnap([
+      [0, 0, 0, 99, 0x2], // higher energy but wrong tag
+      [1, 0, 0, 30, 0x7],
+      [2, 0, 0, 70, 0x7], // max among the 0x7 carriers
+      [3, 0, 0, 40, 0x7],
+    ]);
+    expect(findMaxEnergyIdxByTag(snap, STRIDE, 4, 0x7)).toBe(2);
+  });
+
+  it('finds a carrier even at the minimum energy of 1', () => {
+    // Pins the `bestEnergy = -1` sentinel against a `0`/`+1` regression.
+    const snap = taggedSnap([[5, 5, 5, 1, 0x7]]);
+    expect(findMaxEnergyIdxByTag(snap, STRIDE, 1, 0x7)).toBe(0);
+  });
+
+  it('breaks energy ties toward the first carrier', () => {
+    // Strict `>` keeps the first seen; `>=` would drift to the last.
+    const snap = taggedSnap([
+      [0, 0, 0, 50, 0x7],
+      [1, 0, 0, 50, 0x7],
+    ]);
+    expect(findMaxEnergyIdxByTag(snap, STRIDE, 2, 0x7)).toBe(0);
   });
 });

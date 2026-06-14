@@ -395,7 +395,8 @@
         Asembler: <code>label:</code>, <code>setp xp, start</code>,
         <code>jmp start</code>, <code>port d, i</code>, atd. Sólo číslo =
         raw slot. Směry: <code>xp xn yp yn zp zn</code>. Komentář <code>;</code>.
-        Aplikuje se po Reset.
+        <strong>Reset</strong> = seedne počáteční buňku; <strong>Run Pilgrim</strong>
+        = vloží program za běhu do vhodné existující buňky (possess) a kamera ho sleduje.
       </div>
       <div class="row" style="margin-bottom: 4px;">
         <label for="programPreset">preset</label>
@@ -416,6 +417,9 @@
       ">start:
   setp xp, start
   jmp start</textarea>
+      <div class="row" style="margin-top: 6px;">
+        <button id="runPilgrimBtn" title="Vloží program za běhu do vhodné existující buňky (possess) a kamera ho začne sledovat.">Run Pilgrim</button>
+      </div>
       <div id="programStatus" class="hint" style="margin-top: 4px;">empty</div>
       </div>
     </details>
