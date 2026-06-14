@@ -48,29 +48,83 @@ describe('findHost', () => {
     expect(findHost(snap, STRIDE, { codeLen: 12, reserve: 0 })).toEqual({ x: 7, y: 7, z: 7 });
   });
 
-  it('picks a sole eligible host even at the minimum energy of 1', () => {
-    // Pins the `bestEnergy = -1` sentinel: a `0` or `+1` start would
-    // fail the `energy > bestEnergy` test for this energy-1 host.
-    const snap = snapshot([[5, 5, 5, 1]]);
+  it('picks the eligible cell farthest from the center of mass', () => {
+    // A heavy core near x=0 anchors the COM; among eligible cells the
+    // farthest one wins regardless of its own (lower) energy.
+    const snap = snapshot([
+      [0, 0, 0, 1000], // core: pulls COM to ~x=5
+      [10, 0, 0, 50],
+      [100, 0, 0, 50], // farthest eligible
+    ]);
+    expect(findHost(snap, STRIDE, { codeLen: 10, reserve: 0 })).toEqual({ x: 100, y: 0, z: 0 });
+  });
+
+  it('weights the center of mass by energy (heavy side pulls it)', () => {
+    // Huge mass at x=100 drags the COM to ~99.8, so the small eligible cell
+    // at x=0 is the farthest — not the one nearest in raw coordinate terms.
+    const snap = snapshot([
+      [0, 0, 0, 20],
+      [100, 0, 0, 10000],
+      [110, 0, 0, 20],
+    ]);
+    expect(findHost(snap, STRIDE, { codeLen: 15, reserve: 0 })).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('uses the y component of the energy-weighted COM', () => {
+    // Heavy mass high in +y pulls the COM to ~95.5; the candidate at y=0 is
+    // therefore the farthest. Any corruption of the y accumulation moves the
+    // COM and flips the winner.
+    const snap = snapshot([
+      [0, 0, 0, 50],
+      [0, 90, 0, 50],
+      [0, 100, 0, 1000],
+    ]);
+    expect(findHost(snap, STRIDE, { codeLen: 10, reserve: 0 })).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('uses the z component of the energy-weighted COM', () => {
+    const snap = snapshot([
+      [0, 0, 0, 50],
+      [0, 0, 90, 50],
+      [0, 0, 100, 1000],
+    ]);
+    expect(findHost(snap, STRIDE, { codeLen: 10, reserve: 0 })).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('divides the y COM by total energy (not multiplies)', () => {
+    // Correct COM.y ≈ 63.6 makes the y=200 cell the farthest. A `/=`→`*=`
+    // bug explodes COM.y, which would make the y=0 cell win instead.
+    const snap = snapshot([
+      [0, 0, 0, 50],
+      [0, 60, 0, 1000],
+      [0, 200, 0, 50],
+    ]);
+    expect(findHost(snap, STRIDE, { codeLen: 10, reserve: 0 })).toEqual({ x: 0, y: 200, z: 0 });
+  });
+
+  it('divides the z COM by total energy (not multiplies)', () => {
+    const snap = snapshot([
+      [0, 0, 0, 50],
+      [0, 0, 60, 1000],
+      [0, 0, 200, 50],
+    ]);
+    expect(findHost(snap, STRIDE, { codeLen: 10, reserve: 0 })).toEqual({ x: 0, y: 0, z: 200 });
+  });
+
+  it('picks a sole eligible host even when it sits at the COM (dist 0)', () => {
+    // Single cell IS the COM (dist² = 0); pins the `bestDist = -1` sentinel
+    // against a `0`/`+1` regression.
+    const snap = snapshot([[5, 5, 5, 50]]);
     expect(findHost(snap, STRIDE, { codeLen: 1, reserve: 0 })).toEqual({ x: 5, y: 5, z: 5 });
   });
 
-  it('picks the largest-energy eligible cell', () => {
+  it('breaks distance ties toward the first (lex-smallest) cell', () => {
+    // Symmetric about the COM (x=0): both at distance 5; first seen wins.
     const snap = snapshot([
-      [1, 0, 0, 20],
-      [2, 0, 0, 80],
-      [3, 0, 0, 50],
+      [-5, 0, 0, 50],
+      [5, 0, 0, 50],
     ]);
-    expect(findHost(snap, STRIDE, { codeLen: 10, reserve: 0 })).toEqual({ x: 2, y: 0, z: 0 });
-  });
-
-  it('breaks energy ties toward the first (lex-smallest) cell', () => {
-    // The snapshot is emitted lex-sorted; first-seen wins on ties.
-    const snap = snapshot([
-      [1, 0, 0, 60],
-      [2, 0, 0, 60],
-    ]);
-    expect(findHost(snap, STRIDE, { codeLen: 1, reserve: 0 })).toEqual({ x: 1, y: 0, z: 0 });
+    expect(findHost(snap, STRIDE, { codeLen: 1, reserve: 0 })).toEqual({ x: -5, y: 0, z: 0 });
   });
 
   it('decodes negative coordinates from their u32 bit pattern', () => {

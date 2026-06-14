@@ -31,18 +31,19 @@ const ENERGY_OFFSET = 3;
  *
  * Eligibility (hard constraint): a host's energy must be at least
  * `codeLen + reserve` — possession is energy-neutral and cannot grow the
- * cell. Among eligible cells the one with the **largest energy** wins;
- * because the snapshot is emitted in lexicographic `(x, y, z)` order and
- * ties keep the first seen, equal-energy ties resolve to the lex-smallest
- * coord (deterministic).
+ * cell.
  *
- * The positional criterion is deliberately simple for now — "largest
- * energy" maximizes fuel / compute headroom. Refining *where* the pilgrim
- * is born (e.g. farthest from the densest well) is a deferred decision
- * (docs/pilgrim.md "Otevřené body"); it only changes this function.
+ * Among eligible cells the one **farthest from the energy-weighted center
+ * of mass** wins. This puts the pilgrim on the cool periphery (low energy →
+ * low density-coupled mutation) with the longest possible journey *inward*
+ * toward the dense core — the pilgrimage arc from docs/pilgrim.md. (The
+ * earlier "largest energy" criterion spawned it in the hottest, most
+ * mutagenic, most-dominated core, where it died almost at once.) Ties
+ * resolve to the lex-smallest coord — the snapshot is emitted in
+ * `(x, y, z)` order and ties keep the first seen.
  *
- * Returns `null` if no cell is eligible — the caller should refuse the run
- * (the world may not be warm enough, or the program is too big).
+ * Returns `null` if no cell is eligible (or the world is empty) — the
+ * caller should refuse the run.
  */
 export function findHost(
   snapshot: Uint32Array,
@@ -50,26 +51,46 @@ export function findHost(
   { codeLen, reserve }: FindHostOptions,
 ): HostCoord | null {
   const need = codeLen + reserve;
-  let best: HostCoord | null = null;
-  // -1 (not 0) so a sole eligible host with energy 0 or 1 still wins the
-  // `energy > bestEnergy` comparison below.
-  let bestEnergy = -1;
-  // Accepted-as-equivalent mutant (Stryker): `off + stride` → `off -
-  // stride` in this guard. The `+ stride` keeps the loop reading only
-  // complete records; the mutant lets it run a couple of iterations past
-  // the end, but an out-of-bounds `Uint32Array` read yields `undefined`,
-  // which fails both `< need` and `> bestEnergy`, so every extra
-  // iteration is an observable no-op and the result is unchanged.
+
+  // Pass 1: energy-weighted center of mass over every live cell. (The
+  // `off + stride <= len` guard's `+`→`-` Stryker mutant is equivalent: the
+  // extra past-the-end iteration reads `undefined`, contributing nothing.)
+  let sumE = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
   for (let off = 0; off + stride <= snapshot.length; off += stride) {
-    const energy = snapshot[off + ENERGY_OFFSET]!;
-    if (energy < need) continue;
-    if (energy > bestEnergy) {
-      bestEnergy = energy;
-      best = {
-        x: snapshot[off]! | 0,
-        y: snapshot[off + 1]! | 0,
-        z: snapshot[off + 2]! | 0,
-      };
+    const e = snapshot[off + ENERGY_OFFSET]!;
+    sumE += e;
+    cx += (snapshot[off]! | 0) * e;
+    cy += (snapshot[off + 1]! | 0) * e;
+    cz += (snapshot[off + 2]! | 0) * e;
+  }
+  // (Stryker: the `sumE === 0` → `false` mutant is equivalent — with the
+  // guard removed an empty world divides by zero into a NaN COM, and pass 2
+  // then finds no eligible cell, so the result is still `null`.)
+  if (sumE === 0) return null;
+  cx /= sumE;
+  cy /= sumE;
+  cz /= sumE;
+
+  // Pass 2: eligible cell farthest from the center of mass.
+  let best: HostCoord | null = null;
+  // -1 (not 0) so a sole eligible host sitting exactly at the COM
+  // (dist² == 0) still wins the `dist2 > bestDist` comparison.
+  let bestDist = -1;
+  for (let off = 0; off + stride <= snapshot.length; off += stride) {
+    if (snapshot[off + ENERGY_OFFSET]! < need) continue;
+    const x = snapshot[off]! | 0;
+    const y = snapshot[off + 1]! | 0;
+    const z = snapshot[off + 2]! | 0;
+    const dx = x - cx;
+    const dy = y - cy;
+    const dz = z - cz;
+    const dist2 = dx * dx + dy * dy + dz * dz;
+    if (dist2 > bestDist) {
+      bestDist = dist2;
+      best = { x, y, z };
     }
   }
   return best;

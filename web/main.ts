@@ -300,6 +300,12 @@ export function bootstrap(): void {
       dom.pauseBtn.textContent = running ? 'Pause' : 'Resume';
     } else if (msg.type === 'snapshot') {
       latestSnapshot = msg;
+      // Render this snapshot even if its tick matches the last one — used
+      // right after a possession so the tagged cell appears at once.
+      if (forceRenderNext) {
+        lastRenderedTick = -1;
+        forceRenderNext = false;
+      }
     } else if (msg.type === 'cellDetail') {
       renderInspector(msg);
     } else if (msg.type === 'programStarted') {
@@ -424,6 +430,11 @@ export function bootstrap(): void {
     inspector.panel.classList.add('visible');
     requestInspect(msg.x, msg.y, msg.z);
     dom.programStatus.textContent = `pilgrim spuštěn @ (${msg.x},${msg.y},${msg.z})`;
+    // The post-possess snapshot carries the same tick as the last render
+    // (possess doesn't advance the clock), so the tick-gated render would
+    // skip it. Force the next snapshot to render so the freshly-possessed,
+    // tagged cell shows up immediately — even before the user steps.
+    forceRenderNext = true;
   }
 
   // ----- Three.js setup ------------------------------------------------------
@@ -497,30 +508,31 @@ export function bootstrap(): void {
   renderer.domElement.addEventListener('wheel', cancelAutoZoom, { passive: true });
 
   // ----- Pilgrim camera-follow ----------------------------------------------
+  // Per-frame lerp fraction toward the pilgrim. Small enough to smooth the
+  // discrete cell-to-cell hops of the lineage torch into continuous motion.
+  const FOLLOW_LERP = 0.18;
   const _followDir = new THREE.Vector3();
-  /** Center the view on the pilgrim, keeping the current view direction but
-   *  clamping to a reasonable follow distance (used on the first frame). */
+  /** One-time lock-on: snap the view onto the pilgrim at a fixed, readable
+   *  follow distance (the auto-zoom may have pulled the camera far out). */
   function recenterCameraOnPilgrim(x: number, y: number, z: number): void {
     _followDir.subVectors(camera.position, controls.target);
     let dist = _followDir.length();
-    if (!Number.isFinite(dist) || dist < 1e-3) dist = 40;
-    dist = Math.min(Math.max(dist, 12), 80);
+    if (!Number.isFinite(dist) || dist < 1e-3) dist = 30;
+    dist = Math.min(Math.max(dist, 18), 45);
     _followDir.normalize();
     controls.target.set(x, y, z);
     camera.position.copy(controls.target).addScaledVector(_followDir, dist);
   }
-  /** Translate target + camera by the same delta so the pilgrim stays
-   *  centered at constant zoom/angle — the user can still orbit around it. */
-  function followCameraToPilgrim(x: number, y: number, z: number): void {
-    const dx = x - controls.target.x;
-    const dy = y - controls.target.y;
-    const dz = z - controls.target.z;
-    controls.target.set(x, y, z);
-    camera.position.set(
-      camera.position.x + dx,
-      camera.position.y + dy,
-      camera.position.z + dz,
-    );
+  /** Per-frame smooth follow: ease target + camera toward the latest
+   *  pilgrim position by the same delta, preserving zoom/angle so the user
+   *  can still orbit. Frame-paced (not tick-paced) so cell hops don't lurch. */
+  function smoothFollowFrame(): void {
+    if (!pilgrimFollow || !pilgrimTargetPos) return;
+    const dx = (pilgrimTargetPos.x - controls.target.x) * FOLLOW_LERP;
+    const dy = (pilgrimTargetPos.y - controls.target.y) * FOLLOW_LERP;
+    const dz = (pilgrimTargetPos.z - controls.target.z) * FOLLOW_LERP;
+    controls.target.set(controls.target.x + dx, controls.target.y + dy, controls.target.z + dz);
+    camera.position.set(camera.position.x + dx, camera.position.y + dy, camera.position.z + dz);
   }
 
   // Postprocessing pipeline: scene render → unreal bloom. Bloom picks
@@ -812,12 +824,18 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   const PILGRIM_TAG = 0x50494c47;
   const PILGRIM_APPEARANCE = 0xff3030;
   // Extra slots the host must have beyond the program — scratch / compute /
-  // emission fuel (docs/pilgrim.md). Tunable; a UI knob is a follow-up.
-  const PILGRIM_RESERVE = 64;
+  // emission fuel (docs/pilgrim.md). Kept small so cooler, more peripheral
+  // cells qualify (a hot core host mutates the genome to death at once).
+  // Tunable; a UI knob is a follow-up.
+  const PILGRIM_RESERVE = 8;
   let trackedTag: number | null = null; // non-null → follow this lineage
   let pilgrimFollow = false; // camera tracks the carrier
   let pilgrimSeen = false; // have we seen the tag at least once
   let lastPilgrimPos: { x: number; y: number; z: number } | null = null;
+  let pilgrimTargetPos: { x: number; y: number; z: number } | null = null;
+  // Set when a possession lands so the next snapshot renders even though its
+  // tick matches the last rendered one (possess doesn't advance the tick).
+  let forceRenderNext = false;
   let highlightMesh: THREE.LineSegments | null = null;
   let trailLine: THREE.Line | null = null;
 
@@ -827,8 +845,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       highlightMesh.geometry.dispose();
       (highlightMesh.material as THREE.Material).dispose();
     }
-    const geo = new THREE.BoxGeometry(1.4, 1.4, 1.4);
-    const mat = new THREE.LineBasicMaterial({ color: 0xfff0c0, transparent: true, opacity: 0.95 });
+    // Larger, high-contrast cyan cage so the tracked cell (rendered bright
+    // magenta) is unmistakable against the field in any colour mode.
+    const geo = new THREE.BoxGeometry(2.4, 2.4, 2.4);
+    const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 1.0 });
     const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), mat);
     wire.visible = false;
     scene.add(wire);
@@ -1145,6 +1165,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
 
     applyWsad(dt);
     stepAutoZoom();
+    smoothFollowFrame();
 
     if (latestSnapshot && latestSnapshot.tick !== lastRenderedTick) {
       renderSnapshot(latestSnapshot);
@@ -1270,11 +1291,16 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
         const py = snap[off + 1]! | 0;
         const pz = snap[off + 2]! | 0;
         const pe = snap[off + 3]!;
-        if (pilgrimFollow) {
-          if (lastPilgrimPos === null) recenterCameraOnPilgrim(px, py, pz);
-          else followCameraToPilgrim(px, py, pz);
-          lastPilgrimPos = { x: px, y: py, z: pz };
-        }
+        // Make the carrier unmistakable in ANY colour mode: override its
+        // instance colour to bright magenta. (instanceColor.needsUpdate was
+        // already set above; the change uploads on the next render.)
+        tempColor.setRGB(1, 0, 1);
+        voxelMesh.setColorAt(trackIdx, tempColor);
+        // Camera: snap on once when first acquired, then frame-paced smooth
+        // follow (smoothFollowFrame) chases this target so hops don't lurch.
+        pilgrimTargetPos = { x: px, y: py, z: pz };
+        if (pilgrimFollow && lastPilgrimPos === null) recenterCameraOnPilgrim(px, py, pz);
+        lastPilgrimPos = pilgrimTargetPos;
         // Keep the inspector glued to the moving carrier; the periodic
         // refresh (maybeRefreshInspector) re-requests this coord.
         inspector.coord = { x: px, y: py, z: pz };
@@ -1286,6 +1312,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
         dom.programStatus.textContent = 'pilgrim ztracen (tag vyhynul)';
         trackedTag = null;
         pilgrimFollow = false;
+        pilgrimTargetPos = null;
       }
     }
 
