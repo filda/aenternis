@@ -35,4 +35,4 @@ pub use crate::coord::{Coord, Direction};
 pub use crate::genesis::GenesisConfig;
 pub use crate::rng::Rng;
 pub use crate::vm::Opcode;
-pub use crate::world::{Arena, Base, SparseWorld};
+pub use crate::world::{Arena, Base, PossessError, SparseWorld};

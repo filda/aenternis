@@ -51,7 +51,7 @@
     feature(alloc_error_hook)
 )]
 
-use aenternis_core::{tick, Base, SparseWorld};
+use aenternis_core::{tick, Base, PossessError, SparseWorld};
 #[cfg(target_arch = "wasm32")]
 use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
@@ -184,6 +184,16 @@ pub struct World {
     inspect_buf: Vec<u32>,
 }
 
+/// Render a [`PossessError`] into a JS-facing message for [`World::possess`].
+fn possess_error_message(x: i32, y: i32, z: i32, err: PossessError) -> String {
+    match err {
+        PossessError::NoCell => format!("possess: no cell at ({x}, {y}, {z})"),
+        PossessError::CodeTooLarge { code_len, capacity } => format!(
+            "possess: program ({code_len} slots) exceeds host energy ({capacity}) at ({x}, {y}, {z})"
+        ),
+    }
+}
+
 #[wasm_bindgen]
 impl World {
     /// Construct a new world initialized as a big bang at the origin.
@@ -248,6 +258,36 @@ impl World {
     /// without a lossy `f32` round-trip.
     pub fn step(&mut self, coeff: f64, k: u32) {
         tick::step(&mut self.inner, coeff, k);
+    }
+
+    /// Possess the cell at `(x, y, z)`: overwrite its leading slots with
+    /// `code`, stamp `tag` (lineage marker, e.g. the Pilgrim tag) and
+    /// `appearance`, and reset its program counter so the loaded program
+    /// runs from the start.
+    ///
+    /// Energy-neutral: the cell's `mem_len` is unchanged, so the world's
+    /// total-energy invariant holds — this is a tool operation, not a
+    /// physics event. The host's trailing slots past `code` are left as
+    /// dirty scratch. See `docs/pilgrim.md`.
+    ///
+    /// # Errors
+    ///
+    /// Throws if no cell exists at `(x, y, z)` (possession can't create
+    /// a cell from void — that would conjure energy) or if `code` is
+    /// larger than the host cell's energy. The world is left unchanged.
+    pub fn possess(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        code: &[u32],
+        tag: u32,
+        appearance: u32,
+    ) -> Result<(), JsValue> {
+        let coord = aenternis_core::Coord::new(x, y, z);
+        self.inner
+            .possess(coord, code, tag, appearance)
+            .map_err(|e| JsValue::from_str(&possess_error_message(x, y, z, e)))
     }
 
     /// Set the dominance / intrusion `move_threshold`.

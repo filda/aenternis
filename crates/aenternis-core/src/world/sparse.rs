@@ -284,6 +284,26 @@ pub enum Base {
     Macros,
 }
 
+/// Failure modes of [`SparseWorld::possess`].
+///
+/// Both variants leave the world completely unchanged — `possess`
+/// validates before it writes anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PossessError {
+    /// No cell exists at the target coordinate. Possession cannot
+    /// create a cell from void: that would conjure energy and break
+    /// the Σ-energy invariant.
+    NoCell,
+    /// The program is larger than the host cell's energy. Writing it
+    /// would require growing `mem_len`, which again would create energy.
+    CodeTooLarge {
+        /// Length of the rejected program, in slots.
+        code_len: u32,
+        /// The host cell's energy (`mem_len`) — the available capacity.
+        capacity: u32,
+    },
+}
+
 impl SparseWorld {
     /// Default value for [`SparseWorld::move_threshold`].
     pub const DEFAULT_MOVE_THRESHOLD: f32 = 2.0;
@@ -504,6 +524,58 @@ impl SparseWorld {
     pub fn insert_with_memory(&mut self, coord: Coord, slots: &[u32]) -> Option<Cell> {
         let cell = Cell::with_memory(&mut self.arena, slots);
         self.insert(coord, cell)
+    }
+
+    /// "Possess" an existing cell: overwrite its leading slots with
+    /// `code`, stamp it with `tag` / `appearance`, and reset its `pc`
+    /// to `0` so the loaded program runs from the start.
+    ///
+    /// This is a **tool / authoring** operation (the UI "load a program
+    /// into an entity"), not a physics event — it runs between ticks.
+    /// See `docs/pilgrim.md`.
+    ///
+    /// **Energy-neutral by construction.** `mem_len` never changes, so
+    /// the Σ-energy invariant (`Σ energy == Σ mem_len`) is preserved:
+    ///
+    /// - `code` (length `L`) is written into slots `[0..L]`.
+    /// - The trailing slots `[L..mem_len)` keep the host's prior
+    ///   contents — dirty scratch the program inherits, deliberately
+    ///   *not* zeroed (the "bordel" is part of the rules).
+    /// - `pointers` / `rates` / `active_outflow` / `inflow` are left
+    ///   untouched; the tick machinery resets/recomputes them and the
+    ///   program sets directions via `setp` / `setpv`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PossessError::NoCell`] if no cell exists at `coord`,
+    /// or [`PossessError::CodeTooLarge`] if `code` exceeds the host's
+    /// energy. In both cases the world is left unchanged.
+    pub fn possess(
+        &mut self,
+        coord: Coord,
+        code: &[u32],
+        tag: u32,
+        appearance: u32,
+    ) -> Result<(), PossessError> {
+        let cell = self.cells.get_mut(&coord).ok_or(PossessError::NoCell)?;
+        let capacity = cell.mem_len;
+        let code_len = u32::try_from(code.len()).unwrap_or(u32::MAX);
+        if code_len > capacity {
+            return Err(PossessError::CodeTooLarge { code_len, capacity });
+        }
+        // Stamp metadata first — this is the last use of `cell`, so the
+        // `self.cells` borrow ends before the disjoint `self.arena`
+        // borrow on the next line.
+        let mem_start = cell.mem_start;
+        cell.origin_tag = tag;
+        cell.appearance = appearance;
+        cell.pc = 0;
+        // Overwrite only the leading `code_len` slots; the tail is left
+        // as-is. No alloc/free → arena ranges unchanged → energy held.
+        self.arena
+            .slice_mut(mem_start, code_len)
+            .copy_from_slice(code);
+        Ok(())
     }
 
     /// Get a mutable reference to the cell at `coord`, allocating an empty
