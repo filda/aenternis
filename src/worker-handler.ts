@@ -10,9 +10,13 @@ import {
   type CellDetailMsg,
   type MainToWorkerMsg,
   normalizeProgram,
+  type ProgramRejectedMsg,
+  type ProgramStartedMsg,
+  type RunProgramMsg,
   type SnapshotMsg,
   type WorkerToMainMsg,
 } from './protocol.ts';
+import { findHost } from './host-select.ts';
 import {
   applyConfig,
   DEFAULT_STATE,
@@ -42,6 +46,19 @@ export interface WorldHandle {
   setMutationStrength(s: number): void;
   setMutationHalfDensity(k: number): void;
   step(coeff: number, k: number): void;
+  /** Overwrite an existing cell's leading slots with `code`, stamp it
+   *  with `tag` / `appearance`, reset its pc. Energy-neutral (the host's
+   *  `mem_len` is unchanged). Throws if no cell exists at `(x, y, z)` or
+   *  if `code` is larger than the host's energy — callers pick the host
+   *  via [`findHost`] first, so neither fires in practice. */
+  possess(
+    x: number,
+    y: number,
+    z: number,
+    code: Uint32Array,
+    tag: number,
+    appearance: number,
+  ): void;
   cellsSnapshotView(): Uint32Array;
   boundingBox(): Int32Array;
   tick(): number;
@@ -207,6 +224,43 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     deps.postMessage(msg, [data.buffer]);
   }
 
+  /** Inject a program into the running world: pick an eligible host via
+   *  [`findHost`], `possess` it, and report the chosen coord — or refuse
+   *  if no cell is large enough. On success emit a fresh snapshot so the
+   *  possession is visible immediately. See docs/pilgrim.md.
+   *
+   *  `findHost` guarantees `host.energy >= code.length + reserve >=
+   *  code.length`, so the `possess` call below cannot fail (the host
+   *  exists and the code fits) — no try/catch needed. */
+  function runProgram(w: WorldHandle, msg: RunProgramMsg): void {
+    const code = normalizeProgram(msg.code);
+    // Copy out of the WASM-aliasing snapshot view before `possess`
+    // writes WASM memory below.
+    const snap = new Uint32Array(w.cellsSnapshotView());
+    const host = findHost(snap, w.snapshotStride, {
+      codeLen: code.length,
+      reserve: msg.reserve,
+    });
+    if (!host) {
+      const rejected: ProgramRejectedMsg = {
+        type: 'programRejected',
+        reason: `no host cell with energy >= ${code.length + msg.reserve}`,
+      };
+      deps.postMessage(rejected);
+      return;
+    }
+    w.possess(host.x, host.y, host.z, code, msg.tag, msg.appearance);
+    const started: ProgramStartedMsg = {
+      type: 'programStarted',
+      x: host.x,
+      y: host.y,
+      z: host.z,
+      tag: msg.tag,
+    };
+    deps.postMessage(started);
+    sendSnapshot(w);
+  }
+
   /** Advance the world by one tick, capture timing, and emit one
    *  snapshot. Shared between the auto-running `loop` and the on-demand
    *  `step` message so single-step and run-mode behave identically.
@@ -283,6 +337,10 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
       // useful exactly when the auto-loop is paused. No `scheduleNext`:
       // the caller controls when the next tick happens.
       if (world) stepOnce(world);
+      return;
+    }
+    if (msg.type === 'runProgram') {
+      if (world) runProgram(world, msg);
       return;
     }
     // msg.type === 'inspect'

@@ -58,6 +58,10 @@ describe('isMainToWorkerMsg', () => {
     expect(isMainToWorkerMsg({ type: 'step' })).toBe(true);
   });
 
+  it('accepts a runProgram message', () => {
+    expect(isMainToWorkerMsg({ type: 'runProgram' })).toBe(true);
+  });
+
   it('rejects unknown type', () => {
     expect(isMainToWorkerMsg({ type: 'snapshot' })).toBe(false);
     expect(isMainToWorkerMsg({ type: 'foo' })).toBe(false);

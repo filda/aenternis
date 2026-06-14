@@ -65,7 +65,31 @@ export interface StepMsg {
   readonly type: 'step';
 }
 
-export type MainToWorkerMsg = InitMsg | ConfigMsg | RunningMsg | InspectMsg | StepMsg;
+/** Inject a program into the running world (Project Pilgrim "Run
+ *  Program" / "Run Pilgrim"). The worker picks an eligible host cell
+ *  (energy ≥ `code.length + reserve`), `possess`es it with `code` —
+ *  energy-neutral, see docs/pilgrim.md — and stamps `tag` / `appearance`
+ *  so the entity can be tracked. Replies with `programStarted` (host
+ *  coord + tag) or `programRejected` (no eligible host). */
+export interface RunProgramMsg {
+  readonly type: 'runProgram';
+  readonly code: Uint32Array | readonly number[];
+  /** Extra slots the host must have beyond the program — scratch /
+   *  compute / emission fuel (docs/pilgrim.md). */
+  readonly reserve: number;
+  /** `origin_tag` stamped on the host: the lineage marker to follow. */
+  readonly tag: number;
+  /** `appearance` stamped on the host (war-paint / color). */
+  readonly appearance: number;
+}
+
+export type MainToWorkerMsg =
+  | InitMsg
+  | ConfigMsg
+  | RunningMsg
+  | InspectMsg
+  | StepMsg
+  | RunProgramMsg;
 
 // ---- Worker → Main ----------------------------------------------------------
 
@@ -106,7 +130,32 @@ export interface CellDetailMsg {
   readonly prefix: number;
 }
 
-export type WorkerToMainMsg = ReadyMsg | WelcomeMsg | SnapshotMsg | CellDetailMsg;
+/** Reply to a successful [`RunProgramMsg`]: the program was injected
+ *  into the cell at `(x, y, z)`, stamped with `tag`. The main thread
+ *  uses this to lock the camera / inspector onto the new entity. */
+export interface ProgramStartedMsg {
+  readonly type: 'programStarted';
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly tag: number;
+}
+
+/** Reply to a [`RunProgramMsg`] that could not be honored — no cell in
+ *  the world was large enough to host the program (the world may not be
+ *  warm enough yet, or the program is too big). Nothing was changed. */
+export interface ProgramRejectedMsg {
+  readonly type: 'programRejected';
+  readonly reason: string;
+}
+
+export type WorkerToMainMsg =
+  | ReadyMsg
+  | WelcomeMsg
+  | SnapshotMsg
+  | CellDetailMsg
+  | ProgramStartedMsg
+  | ProgramRejectedMsg;
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -125,5 +174,12 @@ export function normalizeProgram(
 export function isMainToWorkerMsg(value: unknown): value is MainToWorkerMsg {
   if (typeof value !== 'object' || value === null) return false;
   const t = (value as { readonly type?: unknown }).type;
-  return t === 'init' || t === 'config' || t === 'running' || t === 'inspect' || t === 'step';
+  return (
+    t === 'init' ||
+    t === 'config' ||
+    t === 'running' ||
+    t === 'inspect' ||
+    t === 'step' ||
+    t === 'runProgram'
+  );
 }

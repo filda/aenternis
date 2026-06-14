@@ -4,6 +4,7 @@ import type {
   InitMsg,
   InspectMsg,
   RunningMsg,
+  RunProgramMsg,
 } from '../src/protocol.ts';
 import {
   createWorkerHandler,
@@ -33,6 +34,7 @@ function makeMockWorld(): WorldHandle {
     setMutationStrength: vi.fn(),
     setMutationHalfDensity: vi.fn(),
     step: vi.fn(),
+    possess: vi.fn(),
     cellsSnapshotView: vi.fn(() => new Uint32Array([10, 20, 30, 40])),
     boundingBox: vi.fn(() => new Int32Array([0, 0, 0, 1, 1, 1])),
     tick: vi.fn(() => 42),
@@ -438,6 +440,84 @@ describe('createWorkerHandler — inspect', () => {
     const h = makeHarness();
     h.handler.handleMessage({ type: 'inspect', x: 0, y: 0, z: 0 });
     expect(h.deps.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ---- runProgram -------------------------------------------------------------
+
+describe('createWorkerHandler — runProgram', () => {
+  const baseRun: RunProgramMsg = {
+    type: 'runProgram',
+    code: [0x09, 0x00, 0x00],
+    reserve: 0,
+    tag: 0x7,
+    appearance: 0x9,
+  };
+
+  it('possesses the eligible host and reports programStarted + a snapshot', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    h.deps.postMessage.mockClear();
+
+    h.handler.handleMessage(baseRun);
+
+    // Default mock snapshot is one cell at (10, 20, 30) with energy 40 —
+    // eligible for a 3-slot program with reserve 0.
+    expect(h.world.possess).toHaveBeenCalledTimes(1);
+    const [px, py, pz, pcode, ptag, pappearance] =
+      vi.mocked(h.world.possess).mock.calls[0]!;
+    expect([px, py, pz]).toEqual([10, 20, 30]);
+    expect(pcode).toBeInstanceOf(Uint32Array);
+    expect(Array.from(pcode)).toEqual([9, 0, 0]); // number-array code normalized
+    expect(ptag).toBe(0x7);
+    expect(pappearance).toBe(0x9);
+
+    const types = h.deps.postMessage.mock.calls.map((c) => c[0]!.type);
+    expect(types).toContain('programStarted');
+    expect(types).toContain('snapshot');
+    const started = h.deps.postMessage.mock.calls.find(
+      (c) => c[0]!.type === 'programStarted',
+    )![0];
+    expect(started).toMatchObject({
+      type: 'programStarted',
+      x: 10,
+      y: 20,
+      z: 30,
+      tag: 0x7,
+    });
+  });
+
+  it('rejects when no cell is large enough, without possessing', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    // Single low-energy cell (energy 1) → ineligible for a 5-slot program.
+    vi.mocked(h.world.cellsSnapshotView).mockReturnValue(new Uint32Array([0, 0, 0, 1]));
+    h.deps.postMessage.mockClear();
+
+    h.handler.handleMessage({ ...baseRun, code: [1, 2, 3, 4, 5], reserve: 0 });
+
+    expect(h.world.possess).not.toHaveBeenCalled();
+    expect(h.deps.postMessage).toHaveBeenCalledTimes(1);
+    const msg = h.deps.postMessage.mock.calls[0]![0]!;
+    expect(msg.type).toBe('programRejected');
+    expect((msg as { reason: string }).reason).toContain('>= 5');
+  });
+
+  it('counts the reserve toward host eligibility', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    h.deps.postMessage.mockClear();
+    // Host energy 40; code 3 + reserve 38 = 41 > 40 → no eligible host.
+    h.handler.handleMessage({ ...baseRun, reserve: 38 });
+    expect(h.world.possess).not.toHaveBeenCalled();
+    expect(h.deps.postMessage.mock.calls[0]![0]!.type).toBe('programRejected');
+  });
+
+  it('does nothing when runProgram arrives before init', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseRun);
+    expect(h.deps.postMessage).not.toHaveBeenCalled();
+    expect(h.world.possess).not.toHaveBeenCalled();
   });
 });
 
