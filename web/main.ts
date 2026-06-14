@@ -30,7 +30,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
 import { disassemble } from '../src/disasm.ts';
-import { heatColor, meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
+import { meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
+import { cellColor, type ColorMode } from '../src/color.ts';
 import { JITTER_AMPLITUDE, gridJitter } from '../src/jitter.ts';
 import type { SimChannel } from '../src/native-client.ts';
 import { PRESETS, findPreset } from '../src/presets.ts';
@@ -207,6 +208,7 @@ export function bootstrap(): void {
     programText: requireEl('programText', HTMLTextAreaElement),
     programStatus: requireEl('programStatus', HTMLDivElement),
     programPreset: requireEl('programPreset', HTMLSelectElement),
+    colorMode: requireEl('colorMode', HTMLSelectElement),
     sliceEnabled: requireEl('sliceEnabled', HTMLInputElement),
     voxelSize: requireEl('voxelSize', HTMLInputElement),
     voxelSizeVal: requireEl('voxelSizeVal', HTMLSpanElement),
@@ -901,6 +903,13 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     lastRenderedTick = -1; // force a re-render even if no new snapshot.
   });
 
+  // ----- Color mode (energy heat ramp / war paint / lineage) -----------------
+  let colorMode: ColorMode = 'energy';
+  dom.colorMode.addEventListener('change', () => {
+    colorMode = dom.colorMode.value as ColorMode;
+    lastRenderedTick = -1; // force a re-render even if no new snapshot.
+  });
+
   // ----- Pause / Tick / Reset / config listeners ----------------------------
   // Initial state mirrors `initPaused()`: world is held on tick 0 until
   // the user explicitly starts it with Pause/Resume or steps with Tick.
@@ -1102,6 +1111,8 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       const y = snap[off + 1]! | 0;
       const z = snap[off + 2]! | 0;
       const e = snap[off + 3]!;
+      const originTag = snap[off + 4]!;
+      const appearance = snap[off + 5]!;
 
       if (sliceEnabled && z !== 0) {
         tempMatrix.compose(tempPos.set(0, 0, 0), tempQuat, zeroScale);
@@ -1124,7 +1135,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       tempMatrix.compose(tempPos, tempQuat, tempScale);
       voxelMesh.setMatrixAt(i, tempMatrix);
 
-      const [r, g, b] = heatColor(t);
+      const [r, g, b] = cellColor(colorMode, t, appearance, originTag);
       tempColor.setRGB(r, g, b);
       voxelMesh.setColorAt(i, tempColor);
     }

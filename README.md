@@ -22,7 +22,7 @@ Start with **[docs/aenternis.md](docs/aenternis.md)** — the design core, vocab
 
 ## Status
 
-Past the prototype phase. Twelve laboratory web prototypes live in `prototypes/` (each verifying a layer of physics or programmer interface), but the production engine has moved to a **Rust + WASM core** with a sparse, unbounded world. Implemented there: a 31-opcode VM with a 100 %-density decode fold, dominance / intrusion (collision as soft mixing), gravity / pressure, density-coupled mutation, procedural macro-genesis, and a Three.js viewer with an inspector. Still on the backlog: the UI lineage tracker and the additional sensor opcodes — see [docs/plan.md](docs/plan.md).
+Past the prototype phase. Twelve laboratory web prototypes live in `prototypes/` (each verifying a layer of physics or programmer interface), but the production engine has moved to a **Rust + WASM core** with a sparse, unbounded world. Implemented there: a 31-opcode VM with a 100 %-density decode fold, dominance / intrusion (collision as soft mixing), gravity / pressure, density-coupled mutation, procedural macro-genesis, and a Three.js viewer with an inspector and war-paint / lineage color modes. Still on the backlog: the UI lineage tracker + manual tag, and the additional sensor opcodes — see [docs/plan.md](docs/plan.md).
 
 The lab prototypes are intentionally low-friction JavaScript so design questions can be answered cheaply; the production code lives in `crates/` (Rust core + WASM) and `src/` + `web/` (the TypeScript viewer).
 

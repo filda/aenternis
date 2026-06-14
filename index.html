@@ -444,6 +444,19 @@
       <summary>Render</summary>
       <div class="body">
       <div class="row">
+        <label for="colorMode">barva</label>
+        <select id="colorMode">
+          <option value="energy">energie (heat)</option>
+          <option value="appearance">war paint (appearance)</option>
+          <option value="origin">linie (origin_tag)</option>
+        </select>
+      </div>
+      <div class="row hint">
+        War paint = heat mapa natónovaná barvou z programu (<code>paint</code>);
+        linie = obarvení podle <code>origin_tag</code> (dědí se dominancí).
+        Jas = energie.
+      </div>
+      <div class="row">
         <label>voxel size</label>
         <input id="voxelSize" type="range" min="0.2" max="1.5" step="0.05" value="1.20">
         <span class="value" id="voxelSizeVal">1.20</span>

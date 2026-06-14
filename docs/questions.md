@@ -19,6 +19,7 @@ The collision-as-soft-mixing-of-continuities mechanic (`mechanics.md`, "Collisio
 
 - Implementing the lineage tracker in the UI (Hamming-distance match on low addresses, "follow this entity") — still open
 - Manual cell tagging in the UI with visualization — still open
+- War-paint / lineage **color modes** in the viewer (appearance hue tinting the heat map; `origin_tag` recoloring) — **resolved & implemented** (2026-06-14, `src/color.ts`)
 - Rule for dominance-propagation of the tag — **resolved & implemented**: the target inherits the attacker's `origin_tag` when top dominance ≥ 0.5 (Phase 5)
 - Opcodes `sid` (read self-tag) and `paint` (set appearance) — **implemented** (0x12 / 0x13, 2026-05-02)
 

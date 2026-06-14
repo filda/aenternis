@@ -170,7 +170,7 @@ Of the priorities from the consolidation on 2026-05-01, most have since landed i
 
 - **Dominance / intrusion mechanic** (collision as soft mixing of continuities) — ✅ implemented in the core (roadmap Phase 5).
 - **Gravity / pressure / density-coupled mutation** — ✅ implemented in the core; physics first validated in prototype 11.
-- **Lineage tracker + manual tag + war paint** in the UI — still on the backlog (`paint` / `sid` opcodes exist, the UI overlay does not).
+- **War paint** in the UI — ✅ done (viewer color modes: energy / appearance / lineage, `src/color.ts`). The **lineage tracker** (follow one entity across metempsychosis) and **manual tag** (click-to-tag) are still on the backlog.
 - **Sensor expansion** (`sinflow`, `sself`, `srate`) — still on the backlog (the inflow-tracking data exists, the opcodes do not).
 
 **Self-encapsulation** was pencilled in as a 2D-sparse prototype, but the experiment moved directly into the Rust + WASM core (where dominance already lives), so no JS prototype was built — slot 10 was reused for the render tuner. Self-encapsulation in the sparse model is literally "creating your own surrounding world from your own energy".

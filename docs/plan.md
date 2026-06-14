@@ -27,10 +27,10 @@ This document summarizes where we are and what comes next. Decisions about mecha
 
 ### Done in design (decided, awaiting implementation)
 
-- **Dominance / intrusion mechanic** (collision as soft mixing)
-- **Identity / lineage tracker** in the UI (Hamming-distance match)
-- **HSV visualization** combining appearance hue + energy brightness
+- **Identity / lineage tracker** in the UI (Hamming-distance match) + **manual tag** (click a cell to tag/follow it). The appearance / origin-tag **color modes** this builds on are already done (see "Delivered").
 - **Sensors `sinflow`, `sself`, `srate`** — implementation debt
+
+(Dominance / intrusion and the HSV appearance visualization, formerly listed here, are now implemented — see the roadmap phases and "Delivered".)
 
 ### Open (needs further discussion or experiment)
 
@@ -135,10 +135,11 @@ This closes the prototype-9 parity gap on the initial-state semantics: pure RNG 
 - **Z80-density opcodes** — ✅ 2026-06-13. 31 opcodes (`0x00`–`0x1E`) + a total decode fold `(slot & 0xFF) mod COUNT`, so density is structurally 100 % and decoupled from the opcode count. Distilled into `vm.md` ("Instruction set", "Opcode density"); `stack` / `neg` / `rol` / `ror` / `jg` / `jl` deferred.
 - **Gravity, pressure & density-coupled mutation** — ✅ 2026-06. Gravity (`~1/r²` on mass `m = α·E`, cutoff radius `R`) + pressure (`Π ∝ (E/eref)^γ`) as terms in `compute_natural_rates`; saturating bit-flip mutation `p_flip = mutation_strength · E/(E+K)` as its own phase. Zero defaults = zero re-bless; no inertia; portable `γ`. Distilled into `mechanics.md` ("Gravity and pressure", "Density-coupled point mutation"); open calibration in `questions.md`; physics validated in `prototypes/11-gravity/`.
 - **Procedural macro-genesis (Rust core)** — ✅ 2026-06-13. Macro library (`v1.aenm`) + expander + weighted-stream generator, wired into WASM `World.new` as the default base. Still the living plan — see `genesis-plan.md`; remaining: TypeScript expander parity + UI snippet inserter (Increment 2) and the v1.1 composite macros.
+- **War-paint & lineage color modes** — ✅ 2026-06-14. Viewer color-mode switch (energy heat ramp / war paint / lineage): the `appearance` field (`paint` opcode) tints the heat map toward a per-cell hue at the ramp's own brightness, and `origin_tag` recolors cells by lineage. Realizes the "HSV visualization" design point. Pure logic in `src/color.ts` (HSV + tag-hash hue), wired in `web/main.ts` + `index.html`.
 
 ### Later
 - **Mnemonic assembler / disassembler** — assembling (`set 5, 42`, `port 0, 10`) and the inspector disassembly with PC marker now exist in TS (`src/asm.ts`, `src/disasm.ts`, `src/presets.ts`). Remaining polish: preset-program coverage (`burner`, `repli`, `orbiter`).
-- **Lineage tracker** + manual tag + war paint as a UI overlay.
+- **Lineage tracker** + manual tag as a UI overlay. (War paint is done — see "Delivered"; what remains is following one entity across metempsychosis via a low-address Hamming match, and click-to-tag.)
 - **Persistence**: `bincode` save / load with an explicit version byte in the header.
 - **Aging counter** as a debug metric (open: per-slot vs aggregated, see `questions.md`).
 - **Reflection mechanism** if cap-exceeding inflows turn out to be a problem in 3D.

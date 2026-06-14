@@ -383,8 +383,8 @@ The identity of a program continuity is **not gameplay**. The engine does not kn
 - **lineage tracker**: the UI looks for the cell with the best match on a low-address signature against a captured snapshot — tracking "where my entity moved" across metempsychosis
 - **manual tag**: the player assigns a tag / color to a specific cell and follows its lineage over time
 - **call-sign** (optional opcode `sid a`): the program can read its own origin tag and react (typically for "who am I? have I been attacked?")
-- **war paint** (optional opcode `paint v`): the program sets its visual appearance, combined in the UI with energy intensity (HSV mapping). Purely aesthetic, does not affect physics.
+- **war paint** (optional opcode `paint v`): the program sets its visual appearance, which the viewer turns into a hue that tints the energy heat map (HSV — paint hue at the heat ramp's own brightness, blended over the heat color). Purely aesthetic, does not affect physics. A sibling **lineage** mode recolors cells by `origin_tag` instead.
 
 These tools sit **outside game mechanics**. The programmer may use them, but their presence or absence doesn't change the physics of combat, dominance, or emission.
 
-**Status:** `sid` and `paint` are implemented; lineage tracker and the UI tag layer are designed and waiting for implementation in further iterations. See `plan.md`.
+**Status:** `sid` and `paint` are implemented, and the viewer has the **war-paint and lineage color modes** (energy / appearance / origin_tag — `src/color.ts`). Still designed-and-waiting: the **lineage tracker** (following one entity across metempsychosis via a low-address Hamming match) and the **manual tag** (click-to-tag). See `plan.md`.
