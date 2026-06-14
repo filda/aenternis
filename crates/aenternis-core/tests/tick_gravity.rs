@@ -1,5 +1,5 @@
 //! Integration tests for the gravity + pressure terms in
-//! `compute_natural_rates` (see `docs/gravity-plan.md`).
+//! `compute_natural_rates` (see `docs/mechanics.md`).
 //!
 //! The hard invariants these lock in:
 //!

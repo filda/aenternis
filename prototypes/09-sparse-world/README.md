@@ -2,7 +2,7 @@
 
 Devátý laboratorní prototyp odpovídá na otázku **lze nahradit pevný toroidální grid sparse modelem světa, jehož velikost je důsledkem celkové energie, nikoli jejím parametrem — a zachovat všechny dosavadní fyzikální vlastnosti?**
 
-Detailní designový plán je v `docs/prototype-09-plan.md`. Tento README je laboratorní zápisník.
+Detailní designový plán je v `docs/prototypes.md`. Tento README je laboratorní zápisník.
 
 ## Spuštění
 
@@ -36,7 +36,7 @@ Fyzika je stejná. Rozdíl je v topologii a datové struktuře:
 - **Big bang místo iniciálního scénáře.** Jedna buňka v (0, 0) drží celé `E_total`, žádní sousedi neexistují. Difuze sama spustí expanzi.
 - **Alokace na zápis.** Když buňka emituje směrem, kde soused neexistuje, fáze inflow ho alokuje s prázdnou pamětí (E = 0) a zapíše do něj. Není to nové fyzikální pravidlo, jen důsledek `world.getOrCreate(coord)`.
 - **Garbage collection.** Po každém ticku se buňky s `E = 0` odstraní z mapy. Nemůžou existovat — paměť = energie.
-- **Kamera energetický centroid.** Default kamera míří na `(Σ E_i · x_i) / E_total` po jednotlivých osách (viz `prototype-09-plan.md`, sekce „Default kamera").
+- **Kamera energetický centroid.** Default kamera míří na `(Σ E_i · x_i) / E_total` po jednotlivých osách (viz `prototypes.md`, sekce „Default kamera").
 - **Tick-based RNG.** Stochastic floor používá rng seedovaný `(coord, tick)`. Pro každý (coord, tick) je rng deterministicky čerstvé, což činí výsledky nezávislé na pořadí iterace a životním cyklu buňky (alive/dead/realloc). Detail: viz `cellTickSeed` v `world.js`.
 
 ## Pořadí událostí v ticku
@@ -83,7 +83,7 @@ Implementace prošla těmito testy (viz `test-headless.js` a `test-equivalence.j
 
 - **Žádný inspector buněk.** Klik na canvas zatím nic nedělá. Pokud bude potřeba detailní pohled na konkrétní buňku, přidat panel ve stylu prototypu 6.
 - **Žádný entity tracking.** Lineage tracker z prototypu 6 nebyl portovaný — sparse model nemá pevný grid pro Hamming match snapshot.
-- **Žádná stopa historicky obsazených pozic.** Volitelná feature z `prototype-09-plan.md` (otevřená otázka 4); nezahrnuto.
+- **Žádná stopa historicky obsazených pozic.** Volitelná feature z `prototypes.md` (otevřená otázka 4); nezahrnuto.
 - **`MAX_MEMORY = 65536` cap.** Pro `E_total > 65536` v jediné buňce (= big bang start) by hrozila energy leakage při dominance insert. Pro praktické `E_total ≤ 65536` se cap nedosahuje po prvním ticku.
 - **Performance.** Naivní `Map<bigint, Cell>` je dostatečné pro `E_total` v řádu tisíců. Pro desítky tisíc by pomohl chunked grid nebo sparse quadtree, ale to už by porušovalo princip „obyčejnost nad optimalizací" pro prototyp.
 

@@ -118,7 +118,7 @@ function render() {
   const cx = w / 2;
   const cy = h / 2;
 
-  // Defaultní kamera míří na energetický centroid (viz `prototype-09-plan.md`).
+  // Defaultní kamera míří na energetický centroid (viz `prototypes.md`).
   const c = ui.world.centroid();
   const camX = c ? c.x : 0;
   const camY = c ? c.y : 0;
