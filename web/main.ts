@@ -50,7 +50,12 @@ import type {
 } from '../src/protocol.ts';
 import { assemble } from '../src/asm.ts';
 import { openNativeClient } from './native-client.ts';
-import { analyzeSnapshot, findMaxEnergyIdxByTag, type SnapshotBbox } from '../src/snapshot.ts';
+import {
+  analyzeLineage,
+  analyzeSnapshot,
+  type LineageStats,
+  type SnapshotBbox,
+} from '../src/snapshot.ts';
 import {
   EMPTY_TRACKER_STATE,
   pushTrackerSample,
@@ -838,6 +843,9 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   let forceRenderNext = false;
   let highlightMesh: THREE.LineSegments | null = null;
   let trailLine: THREE.Line | null = null;
+  // Wireframe cage around the WHOLE pilgrim lineage (all tagged descendants),
+  // sized per tick to the lineage bounding box. A unit cube scaled to span.
+  let lineageBox: THREE.LineSegments | null = null;
 
   function createHighlightMesh(): void {
     if (highlightMesh) {
@@ -874,8 +882,42 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     scene.add(line);
     trailLine = line;
   }
+  function createLineageBox(): void {
+    if (lineageBox) {
+      scene.remove(lineageBox);
+      lineageBox.geometry.dispose();
+      (lineageBox.material as THREE.Material).dispose();
+    }
+    // Unit cube centered at origin; scaled to the lineage span each tick.
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.9 });
+    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), mat);
+    wire.visible = false;
+    wire.frustumCulled = false;
+    scene.add(wire);
+    lineageBox = wire;
+  }
+
+  /** Size + position the lineage cage to the descendant cloud's bbox. */
+  function updateLineageBox(lin: LineageStats): void {
+    if (!lineageBox) return;
+    lineageBox.position.set(
+      (lin.minX + lin.maxX) / 2,
+      (lin.minY + lin.maxY) / 2,
+      (lin.minZ + lin.maxZ) / 2,
+    );
+    // +2 so a single-cell (zero-span) lineage still gets a visible cage.
+    lineageBox.scale.set(
+      lin.maxX - lin.minX + 2,
+      lin.maxY - lin.minY + 2,
+      lin.maxZ - lin.minZ + 2,
+    );
+    lineageBox.visible = true;
+  }
+
   createHighlightMesh();
   createTrailLine();
+  createLineageBox();
 
   function updateTrackerVisuals(maxCellIdx: number, snap: Uint32Array, stride: number): void {
     if (!trackerEnabled || maxCellIdx < 0) {
@@ -1250,8 +1292,14 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       tempMatrix.compose(tempPos, tempQuat, tempScale);
       voxelMesh.setMatrixAt(i, tempMatrix);
 
-      const [r, g, b] = cellColor(colorMode, t, appearance, originTag);
-      tempColor.setRGB(r, g, b);
+      // Every pilgrim descendant (any cell carrying the tracked tag) glows
+      // bright magenta in any colour mode, so the whole lineage cloud pops.
+      if (trackedTag !== null && originTag === trackedTag) {
+        tempColor.setRGB(1, 0, 1);
+      } else {
+        const [r, g, b] = cellColor(colorMode, t, appearance, originTag);
+        tempColor.setRGB(r, g, b);
+      }
       voxelMesh.setColorAt(i, tempColor);
     }
 
@@ -1279,44 +1327,43 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     // raycaster doesn't lose hits at the field's edge.
     voxelMesh.boundingSphere.radius = halfSpan + JITTER_AMPLITUDE;
 
-    // Tracking target: a possessed lineage (Project Pilgrim) when one is
-    // active, otherwise the global max-energy cell (legacy tracker).
-    let trackIdx = analysis.maxCellIdx;
+    // Tracking: a possessed lineage (Project Pilgrim) is followed as a whole
+    // CLOUD — centroid for the camera, bbox cage around every descendant —
+    // rather than a single max-energy cell that flickers between fragments.
+    // Otherwise the legacy tracker follows the global max-energy cell.
     if (trackedTag !== null) {
-      trackIdx = findMaxEnergyIdxByTag(snap, stride, cellCount, trackedTag);
-      if (trackIdx >= 0) {
+      // Lineage mode owns its own visuals; hide the legacy single-cell ones.
+      if (highlightMesh) highlightMesh.visible = false;
+      if (trailLine) trailLine.visible = false;
+      const lin = analyzeLineage(snap, stride, cellCount, trackedTag);
+      if (lin) {
         pilgrimSeen = true;
-        const off = trackIdx * stride;
-        const px = snap[off]! | 0;
-        const py = snap[off + 1]! | 0;
-        const pz = snap[off + 2]! | 0;
-        const pe = snap[off + 3]!;
-        // Make the carrier unmistakable in ANY colour mode: override its
-        // instance colour to bright magenta. (instanceColor.needsUpdate was
-        // already set above; the change uploads on the next render.)
-        tempColor.setRGB(1, 0, 1);
-        voxelMesh.setColorAt(trackIdx, tempColor);
-        // Camera: snap on once when first acquired, then frame-paced smooth
-        // follow (smoothFollowFrame) chases this target so hops don't lurch.
-        pilgrimTargetPos = { x: px, y: py, z: pz };
-        if (pilgrimFollow && lastPilgrimPos === null) recenterCameraOnPilgrim(px, py, pz);
+        // Camera follows the energy-weighted centroid (stable); snap on once.
+        pilgrimTargetPos = { x: lin.cx, y: lin.cy, z: lin.cz };
+        if (pilgrimFollow && lastPilgrimPos === null) {
+          recenterCameraOnPilgrim(lin.cx, lin.cy, lin.cz);
+        }
         lastPilgrimPos = pilgrimTargetPos;
-        // Keep the inspector glued to the moving carrier; the periodic
-        // refresh (maybeRefreshInspector) re-requests this coord.
-        inspector.coord = { x: px, y: py, z: pz };
+        updateLineageBox(lin);
+        // Inspector tracks the strongest carrier (the torch).
+        const off = lin.maxIdx * stride;
+        inspector.coord = { x: snap[off]! | 0, y: snap[off + 1]! | 0, z: snap[off + 2]! | 0 };
         inspector.panel.classList.add('visible');
         dom.programStatus.textContent =
-          `pilgrim @ (${px},${py},${pz}) E=${pe.toLocaleString()}`;
+          `pilgrim: ${lin.count} buněk, E=${lin.sumEnergy.toLocaleString()} @ ` +
+          `(${Math.round(lin.cx)},${Math.round(lin.cy)},${Math.round(lin.cz)})`;
       } else if (pilgrimSeen) {
         // The lineage died out — its tag is gone from the world.
         dom.programStatus.textContent = 'pilgrim ztracen (tag vyhynul)';
         trackedTag = null;
         pilgrimFollow = false;
         pilgrimTargetPos = null;
+        if (lineageBox) lineageBox.visible = false;
       }
+    } else {
+      if (lineageBox) lineageBox.visible = false;
+      updateTrackerVisuals(analysis.maxCellIdx, snap, stride);
     }
-
-    updateTrackerVisuals(trackIdx, snap, stride);
   }
 
   // ----- Inspector -----------------------------------------------------------

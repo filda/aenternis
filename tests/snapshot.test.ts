@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeSnapshot, cellAt, findMaxEnergyIdxByTag } from '../src/snapshot.ts';
+import {
+  analyzeLineage,
+  analyzeSnapshot,
+  cellAt,
+  findMaxEnergyIdxByTag,
+} from '../src/snapshot.ts';
 
 // Convenience builders so tests can describe cells declaratively.
 function makeSnap(cells: ReadonlyArray<readonly [x: number, y: number, z: number, e: number]>, stride = 4): Uint32Array {
@@ -147,5 +152,81 @@ describe('findMaxEnergyIdxByTag', () => {
       [1, 0, 0, 50, 0x7],
     ]);
     expect(findMaxEnergyIdxByTag(snap, STRIDE, 2, 0x7)).toBe(0);
+  });
+});
+
+describe('analyzeLineage', () => {
+  const ST = 6;
+
+  function taggedSnap(
+    cells: ReadonlyArray<readonly [number, number, number, number, number]>,
+  ): Uint32Array {
+    const snap = new Uint32Array(cells.length * ST);
+    cells.forEach(([x, y, z, e, tag], i) => {
+      snap[i * ST] = x >>> 0;
+      snap[i * ST + 1] = y >>> 0;
+      snap[i * ST + 2] = z >>> 0;
+      snap[i * ST + 3] = e;
+      snap[i * ST + 4] = tag;
+    });
+    return snap;
+  }
+
+  it('returns null when no cell carries the tag', () => {
+    const snap = taggedSnap([
+      [0, 0, 0, 50, 0x1],
+      [1, 0, 0, 90, 0x2],
+    ]);
+    expect(analyzeLineage(snap, ST, 2, 0x7)).toBeNull();
+  });
+
+  it('returns null for an empty snapshot', () => {
+    expect(analyzeLineage(new Uint32Array(0), ST, 0, 0x7)).toBeNull();
+  });
+
+  it('summarizes a single carrier', () => {
+    const snap = taggedSnap([[5, -6, 7, 40, 0x7]]);
+    const lin = analyzeLineage(snap, ST, 1, 0x7)!;
+    expect(lin.count).toBe(1);
+    expect(lin.sumEnergy).toBe(40);
+    expect([lin.cx, lin.cy, lin.cz]).toEqual([5, -6, 7]);
+    expect([lin.minX, lin.maxX, lin.minY, lin.maxY, lin.minZ, lin.maxZ]).toEqual([5, 5, -6, -6, 7, 7]);
+    expect(lin.maxIdx).toBe(0);
+  });
+
+  it('counts, sums, bounds, weights and finds the torch across carriers', () => {
+    const snap = taggedSnap([
+      [10, 0, 0, 100, 0x7], // strongest → maxIdx 0; dominates the weighted centroid
+      [3, 3, 3, 999, 0x2], // other tag — ignored
+      [-6, 4, 0, 20, 0x7],
+      [0, -2, 8, 20, 0x7],
+    ]);
+    const lin = analyzeLineage(snap, ST, 4, 0x7)!;
+    expect(lin.count).toBe(3);
+    expect(lin.sumEnergy).toBe(140);
+    // Energy-weighted centroid (sum(coord*e)/sumE), per axis.
+    expect(lin.cx).toBeCloseTo(880 / 140, 5); // (10*100 - 6*20 + 0*20)/140
+    expect(lin.cy).toBeCloseTo(40 / 140, 5); //  (0*100 + 4*20 - 2*20)/140
+    expect(lin.cz).toBeCloseTo(160 / 140, 5); // (0*100 + 0*20 + 8*20)/140
+    // Bounding box over the three carriers (the 0x2 cell excluded).
+    expect([lin.minX, lin.maxX]).toEqual([-6, 10]);
+    expect([lin.minY, lin.maxY]).toEqual([-2, 4]);
+    expect([lin.minZ, lin.maxZ]).toEqual([0, 8]);
+    expect(lin.maxIdx).toBe(0); // the 100-energy carrier
+  });
+
+  it('breaks torch (maxIdx) ties toward the first carrier', () => {
+    const snap = taggedSnap([
+      [0, 0, 0, 50, 0x7],
+      [9, 9, 9, 50, 0x7],
+    ]);
+    expect(analyzeLineage(snap, ST, 2, 0x7)!.maxIdx).toBe(0);
+  });
+
+  it('registers the torch even at the minimum energy of 1', () => {
+    // Pins the `maxEnergy = -1` sentinel: a `+1` start would skip an
+    // energy-1 carrier and leave maxIdx at -1.
+    const snap = taggedSnap([[5, 5, 5, 1, 0x7]]);
+    expect(analyzeLineage(snap, ST, 1, 0x7)!.maxIdx).toBe(0);
   });
 });

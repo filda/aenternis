@@ -70,6 +70,99 @@ export function findMaxEnergyIdxByTag(
   return bestIdx;
 }
 
+/** Summary of every cell carrying a given lineage tag. */
+export interface LineageStats {
+  /** Number of cells carrying the tag. */
+  readonly count: number;
+  /** Total energy across the lineage. */
+  readonly sumEnergy: number;
+  /** Energy-weighted centroid of the lineage. */
+  readonly cx: number;
+  readonly cy: number;
+  readonly cz: number;
+  /** Axis-aligned bounding box over all carriers. */
+  readonly minX: number;
+  readonly maxX: number;
+  readonly minY: number;
+  readonly maxY: number;
+  readonly minZ: number;
+  readonly maxZ: number;
+  /** Index of the highest-energy carrier (the "torch"). */
+  readonly maxIdx: number;
+}
+
+/** Summarize the lineage carrying `tag`: count, total energy, energy-weighted
+ *  centroid, bounding box, and the strongest carrier. `null` when no cell
+ *  carries the tag (lineage extinct).
+ *
+ *  Project Pilgrim tracks the whole descendant *cloud* this way rather than a
+ *  single max-energy cell that flickers between fragments (docs/pilgrim.md).
+ *  Requires `stride ≥ 5` (origin_tag at offset +4). */
+export function analyzeLineage(
+  snap: Uint32Array,
+  stride: number,
+  cellCount: number,
+  tag: number,
+): LineageStats | null {
+  let count = 0;
+  let sumEnergy = 0;
+  let wx = 0;
+  let wy = 0;
+  let wz = 0;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  // (Stryker: `maxIdx = -1` → `+1` is equivalent — with any carrier the
+  // `e > maxEnergy` below always overwrites it, and with none we return null,
+  // so the initial value is never observed.) `maxEnergy = -1` must stay below
+  // the minimum cell energy of 1 so an energy-1 sole carrier still registers.
+  let maxIdx = -1;
+  let maxEnergy = -1;
+  // (Stryker: the `i < cellCount` → `i <= cellCount` mutant is equivalent —
+  // the extra past-the-end read is `undefined`, which fails the tag test.)
+  for (let i = 0; i < cellCount; i += 1) {
+    const off = i * stride;
+    if (snap[off + ORIGIN_TAG_OFFSET] !== tag) continue;
+    const x = snap[off]! | 0;
+    const y = snap[off + 1]! | 0;
+    const z = snap[off + 2]! | 0;
+    const e = snap[off + 3]!;
+    count += 1;
+    sumEnergy += e;
+    wx += x * e;
+    wy += y * e;
+    wz += z * e;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
+    if (e > maxEnergy) {
+      maxEnergy = e;
+      maxIdx = i;
+    }
+  }
+  if (count === 0) return null;
+  return {
+    count,
+    sumEnergy,
+    cx: wx / sumEnergy,
+    cy: wy / sumEnergy,
+    cz: wz / sumEnergy,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    minZ,
+    maxZ,
+    maxIdx,
+  };
+}
+
 /** Read the `[x, y, z, energy]` record at index `i`. The caller is
  *  responsible for `0 ≤ i < cellCount` and `stride ≥ 4`. */
 export function cellAt(snap: Uint32Array, stride: number, i: number): Cell3D {
