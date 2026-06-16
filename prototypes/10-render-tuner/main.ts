@@ -64,9 +64,12 @@ const PARAM_DEFS: readonly ParamDef[] = [
   { name: 'ssaoRadius',     label: 'SSAO radius',      min: 1.0,  max: 20.0, step: 0.5,   default: 8.0,   precision: 1 },
   { name: 'voxelSize',      label: 'voxel size',       min: 0.2,  max: 4.5,  step: 0.05,  default: 4.50,  precision: 2 },
   { name: 'minLuma',        label: 'min luma (cull)',  min: 0.0,  max: 1.00, step: 0.02,  default: 0.42,  precision: 2 },
+  // DoF is OFF by default (maxblur 0 → BokehPass disabled), so rounds 1-10
+  // render sharp. maxblur comes first among the DoF rounds: it engages the
+  // pass, then focus/aperture are tunable with the blur visible.
+  { name: 'dofMaxblur',     label: 'DoF maxblur',      min: 0.0,  max: 0.05, step: 0.001, default: 0.000, precision: 3 },
   { name: 'dofFocus',       label: 'DoF focus',        min: 0.0,  max: 400,  step: 5,     default: 50,    precision: 0 },
   { name: 'dofAperture',    label: 'DoF aperture',     min: 0.0,  max: 0.1,  step: 0.001, default: 0.025, precision: 3 },
-  { name: 'dofMaxblur',     label: 'DoF maxblur',      min: 0.0,  max: 0.05, step: 0.001, default: 0.010, precision: 3 },
 ];
 
 interface RenderParams {
@@ -499,6 +502,9 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     aperture: params.dofAperture,
     maxblur: params.dofMaxblur,
   });
+  // Skip the (expensive, blurry) DoF pass entirely until a round dials in a
+  // non-zero maxblur — keeps the default-params view sharp.
+  bokehPass.enabled = params.dofMaxblur > 0;
   composer.addPass(bokehPass);
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(tileWidth, tileHeight),
@@ -535,6 +541,7 @@ function applyTileParams(
   bokeh['focus']!.value = next.dofFocus;
   bokeh['aperture']!.value = next.dofAperture;
   bokeh['maxblur']!.value = next.dofMaxblur;
+  tile.bokehPass.enabled = next.dofMaxblur > 0;
   tile.bloomPass.threshold = next.bloomThreshold;
   tile.bloomPass.strength = next.bloomStrength;
   tile.bloomPass.radius = next.bloomRadius;
@@ -611,6 +618,7 @@ async function bootstrap(): Promise<void> {
   const summary = document.getElementById('summary') as HTMLElement;
   topbar.hidden = false;
   gridEl.hidden = false;
+  (document.getElementById('roundTotal') as HTMLSpanElement).textContent = String(PARAM_DEFS.length);
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -655,6 +663,13 @@ async function bootstrap(): Promise<void> {
   let history = loadHistory();
   const locked: Partial<RenderParams> = {};
 
+  // Tile picking is routed through the canvas (tiles are pointer-events:none so
+  // drags reach OrbitControls). rebuildOverlay publishes the active handler +
+  // tile count here; the canvas click dispatcher below maps a click position
+  // to a tile index. pickCount 0 → clicks are ignored (e.g. final preview).
+  let pickHandler: ((i: number) => void) | null = null;
+  let pickCount = 0;
+
   function currentParamsFor(value: number): RenderParams {
     const base = defaultParams();
     Object.assign(base, locked);
@@ -677,6 +692,8 @@ async function bootstrap(): Promise<void> {
     onClickAt: (i: number) => void,
   ): void {
     overlay.innerHTML = '';
+    pickHandler = onClickAt;
+    pickCount = n;
     for (let i = 0; i < n; i += 1) {
       const col = i % layout.cols;
       const row = Math.floor(i / layout.cols);
@@ -690,10 +707,43 @@ async function bootstrap(): Promise<void> {
       label.className = 'label';
       label.innerHTML = labelHtmlFor(i);
       tile.appendChild(label);
-      tile.addEventListener('click', () => onClickAt(i));
       overlay.appendChild(tile);
     }
   }
+
+  // Maps a client (x, y) to the tile index under it for the current layout,
+  // or -1 if outside the grid / beyond the active tile count.
+  function tileIndexAt(clientX: number, clientY: number): number {
+    const rect = canvas.getBoundingClientRect();
+    const col = Math.floor((clientX - rect.left) / layout.tileWidth);
+    const row = Math.floor((clientY - rect.top) / layout.tileHeight);
+    if (col < 0 || col >= layout.cols || row < 0 || row >= layout.rows) return -1;
+    const idx = row * layout.cols + col;
+    return idx < pickCount ? idx : -1;
+  }
+
+  // Click-vs-drag: a pointer that barely moved is a tile pick; anything more
+  // was an OrbitControls orbit, so leave it alone.
+  let downX = 0;
+  let downY = 0;
+  canvas.addEventListener('pointerdown', (e) => {
+    downX = e.clientX;
+    downY = e.clientY;
+  });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!pickHandler || pickCount === 0) return;
+    if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+    const idx = tileIndexAt(e.clientX, e.clientY);
+    if (idx >= 0) pickHandler(idx);
+  });
+  // Hover highlight (tiles are pointer-events:none, so :hover can't fire).
+  canvas.addEventListener('pointermove', (e) => {
+    const idx = pickCount > 0 ? tileIndexAt(e.clientX, e.clientY) : -1;
+    const els = overlay.children;
+    for (let i = 0; i < els.length; i += 1) {
+      (els[i] as HTMLElement).classList.toggle('hover', i === idx);
+    }
+  });
 
   function syncCameraAspect(): void {
     camera.aspect = layout.tileWidth / Math.max(1, layout.tileHeight);
@@ -757,6 +807,8 @@ async function bootstrap(): Promise<void> {
     const finalParams: RenderParams = { ...defaultParams(), ...locked };
     applyTileParams(tiles[0]!, finalParams, snapshot);
     overlay.innerHTML = '';
+    pickHandler = null;
+    pickCount = 0;
 
     history = appendHistory(history, finalParams);
 

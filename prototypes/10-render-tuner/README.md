@@ -19,9 +19,15 @@ zafixuje, přechod do dalšího kola.
 | 8 | `ssaoRadius`     | 1 - 20    | 8.0  |
 | 9 | `voxelSize`      | 0.2 - 4.5 | 4.50 |
 | 10 | `minLuma`       | 0 - 1.00  | 0.42 |
-| 11 | `dofFocus`      | 0 - 400   | 50 |
-| 12 | `dofAperture`   | 0 - 0.1   | 0.025 |
-| 13 | `dofMaxblur`    | 0 - 0.05  | 0.010 |
+| 11 | `dofMaxblur`    | 0 - 0.05  | 0.000 |
+| 12 | `dofFocus`      | 0 - 400   | 50 |
+| 13 | `dofAperture`   | 0 - 0.1   | 0.025 |
+
+DoF je defaultně vypnutý (`dofMaxblur = 0` → BokehPass přeskočen), takže kola
+1–10 jsou ostrá. `dofMaxblur` jde jako první z DoF kol — zapne pass, pak se
+`dofFocus`/`dofAperture` ladí s viditelným rozmazáním. Pozn.: `dofFocus` (max
+400) nedosáhne na mračno při fit-zoomu vzdálené ~1900 jednotek — DoF tuning má
+u velkých světů omezenou užitečnost (platí i pro viewer).
 
 Po posledním kole se zobrazí JSON s finalní kombinací - lze nakopírovat
 do slider defaultů v root `index.html`.

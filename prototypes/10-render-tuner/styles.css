@@ -106,15 +106,17 @@ main#grid {
 
 .tile {
   position: absolute;
-  pointer-events: auto;
-  cursor: pointer;
+  /* none → pointer drags fall through to the canvas so OrbitControls can
+     orbit/zoom from the first round; tile selection is handled by a
+     click-vs-drag dispatcher on the canvas (see main.ts). */
+  pointer-events: none;
   border: 1px solid transparent;
   transition: border-color 0.12s;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
 }
-.tile:hover {
+.tile.hover {
   border-color: #d4a76a;
 }
 .tile .label {
