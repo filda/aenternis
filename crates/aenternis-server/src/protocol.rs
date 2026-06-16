@@ -105,14 +105,17 @@ pub const SNAPSHOT_TAG: u8 = 1;
 pub(crate) const CELL_DETAIL_TAG: u8 = 2;
 
 /// Snapshot stride: number of `u32` fields per cell in the snapshot
-/// payload. Matches `aenternis-wasm::World::SNAPSHOT_STRIDE` so JS
-/// callers see an identical layout regardless of backend.
-pub const SNAPSHOT_STRIDE: u32 = 6;
+/// payload.
+///
+/// Re-exported from the core so the layout has a single definition
+/// shared with the WASM backend — JS callers see an identical payload
+/// regardless of backend.
+pub const SNAPSHOT_STRIDE: u32 = aenternis_core::snapshot::SNAPSHOT_STRIDE as u32;
 
 /// `CellDetail` prefix length: number of `u32` fields in the fixed
-/// header before the variable-length memory dump. Matches
-/// `aenternis-wasm::World::INSPECT_PREFIX`.
-pub(crate) const INSPECT_PREFIX: u32 = 28;
+/// header before the variable-length memory dump. Re-exported from the
+/// core alongside [`SNAPSHOT_STRIDE`].
+pub(crate) const INSPECT_PREFIX: u32 = aenternis_core::snapshot::INSPECT_PREFIX as u32;
 
 /// All the inputs needed to encode a snapshot binary frame. Held by
 /// reference so we don't copy the (potentially large) `snap` payload

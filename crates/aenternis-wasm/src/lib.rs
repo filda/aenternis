@@ -718,13 +718,16 @@ impl World {
 impl World {
     /// Number of `u32` fields per cell in [`World::cells_snapshot`].
     /// Available as a constant for Rust-side callers; JS uses the
-    /// `snapshotStride` getter.
-    pub const SNAPSHOT_STRIDE: usize = 6;
+    /// `snapshotStride` getter. Re-exported from the core so the
+    /// snapshot layout has a single definition shared with the native
+    /// server (see [`aenternis_core::snapshot`]).
+    pub const SNAPSHOT_STRIDE: usize = aenternis_core::snapshot::SNAPSHOT_STRIDE;
 
     /// Number of `u32` fields in the fixed-width prefix of
     /// [`World::cell_inspect`] before the variable-length memory
-    /// region starts (4 scalars + 4 × 6 directional arrays = 28).
-    pub const INSPECT_PREFIX: usize = 28;
+    /// region starts. Re-exported from the core alongside
+    /// [`Self::SNAPSHOT_STRIDE`].
+    pub const INSPECT_PREFIX: usize = aenternis_core::snapshot::INSPECT_PREFIX;
 
     /// Number of `u32` fields in [`World::memory_report`]'s flat array.
     /// JS validates against [`World::memory_report_len`] (the JS-side
@@ -737,49 +740,19 @@ impl World {
     /// buffer out) and [`World::cells_snapshot_view`] (returns a view
     /// over it). Capacity is retained across calls.
     fn fill_snapshot_buf(&mut self) {
-        self.snapshot_buf.clear();
-        self.snapshot_buf
-            .reserve(self.inner.len() * Self::SNAPSHOT_STRIDE);
-        // sorted_iter walks cells in `(x, y, z)` lex order — the snapshot's
-        // documented contract. The world's internal FxHashMap iterates in
-        // hash order, which is deterministic but not lex.
-        for (coord, cell) in self.inner.sorted_iter() {
-            self.snapshot_buf.push(coord.x as u32);
-            self.snapshot_buf.push(coord.y as u32);
-            self.snapshot_buf.push(coord.z as u32);
-            self.snapshot_buf.push(cell.energy());
-            self.snapshot_buf.push(cell.origin_tag);
-            self.snapshot_buf.push(cell.appearance);
-        }
+        // Layout lives in the core so the WASM and native-server
+        // backends emit byte-identical payloads. See
+        // [`aenternis_core::snapshot`].
+        aenternis_core::snapshot::snapshot_into(&self.inner, &mut self.snapshot_buf);
     }
 
     /// Refresh `inspect_buf` with the cell at `(x, y, z)`, or leave
     /// it empty if no such cell exists. Shared between
     /// [`World::cell_inspect`] and [`World::cell_inspect_view`].
     fn fill_inspect_buf(&mut self, x: i32, y: i32, z: i32) {
-        self.inspect_buf.clear();
+        // Layout lives in the core; see [`World::fill_snapshot_buf`].
         let coord = aenternis_core::Coord::new(x, y, z);
-        let Some(cell) = self.inner.get(coord) else {
-            return;
-        };
-        self.inspect_buf
-            .reserve(Self::INSPECT_PREFIX + cell.memory_len());
-        self.inspect_buf.push(cell.pc);
-        self.inspect_buf.push(cell.energy());
-        self.inspect_buf.push(cell.origin_tag);
-        self.inspect_buf.push(cell.appearance);
-        self.inspect_buf.extend_from_slice(&cell.pointers);
-        self.inspect_buf.extend_from_slice(&cell.rates);
-        self.inspect_buf.extend_from_slice(&cell.active_outflow);
-        self.inspect_buf.extend_from_slice(&cell.inflow);
-        // Pull the memory slice through the world-level helper so
-        // we don't have to thread the (crate-private) `Arena` type
-        // into the wasm wrapper. `cell` is already a borrow of
-        // `self.inner`; another shared borrow for the slice
-        // composes fine.
-        if let Some(memory) = self.inner.cell_memory(coord) {
-            self.inspect_buf.extend_from_slice(memory);
-        }
+        aenternis_core::snapshot::inspect_into(&self.inner, coord, &mut self.inspect_buf);
     }
 }
 

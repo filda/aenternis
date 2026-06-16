@@ -26,6 +26,7 @@ pub mod genesis;
 pub mod macros;
 pub mod parallel;
 pub mod rng;
+pub mod snapshot;
 pub mod tick;
 pub mod vm;
 pub mod world;

@@ -74,14 +74,16 @@ exclude_re = [
     "aenternis-wasm/src/lib\\.rs:.*replace World::cells_snapshot_view",
     "aenternis-wasm/src/lib\\.rs:.*replace World::cell_inspect_view",
 
-    # `Vec::reserve(n)` arithmetic in the `fill_*_buf` helpers. Reserve
-    # is a capacity hint; the subsequent push/extend loop writes the
-    # exact same bytes regardless of `n`. Mutating `len() * STRIDE` to
-    # `len() + STRIDE` (or `... / ...`, or `prefix + memlen` to
-    # `prefix * memlen`) only changes the number of internal Vec
-    # reallocations during fill — not observable through any public
-    # output. The content equality is pinned by every snapshot/inspect
-    # test in `crates/aenternis-wasm/tests/world.rs`.
-    "aenternis-wasm/src/lib\\.rs:.*replace \\* with [+/] in World::fill_snapshot_buf",
-    "aenternis-wasm/src/lib\\.rs:.*replace \\+ with \\* in World::fill_inspect_buf",
+    # `Vec::reserve(n)` arithmetic in the core snapshot/inspect payload
+    # builders (`aenternis-core::snapshot`, shared by the WASM and
+    # native-server backends). Reserve is a capacity hint; the
+    # subsequent push/extend loop writes the exact same bytes regardless
+    # of `n`. Mutating `len() * STRIDE` to `len() + STRIDE` (or
+    # `... / ...`, or `prefix + memlen` to `prefix * memlen`) only
+    # changes the number of internal Vec reallocations during fill — not
+    # observable through any public output. Content equality is pinned by
+    # the canonical layout tests in `snapshot.rs` and by every
+    # snapshot/inspect test in the wasm and server crates.
+    "snapshot\\.rs:.*replace \\* with [+/] in snapshot_into",
+    "snapshot\\.rs:.*replace \\+ with \\* in inspect_into",
 ]

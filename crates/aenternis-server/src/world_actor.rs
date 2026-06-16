@@ -19,12 +19,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use aenternis_core::{tick, Cell, Coord, SparseWorld};
+use aenternis_core::{tick, Coord, SparseWorld};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::protocol::{
     encode_cell_detail_frame, encode_snapshot_frame_into, CellDetailFrame, SnapshotFrame,
-    SNAPSHOT_STRIDE,
 };
 
 /// Broadcast channel capacity for snapshot frames. Lagging receivers
@@ -268,7 +267,11 @@ impl WorldActor {
         if self.event_tx.receiver_count() == 0 {
             return;
         }
-        build_snapshot_payload_into(&mut self.snapshot_buf, &self.world);
+        // Snapshot payload layout lives in the core, shared with the
+        // WASM backend so both emit byte-identical cells. The frame
+        // header below is server-only (the WASM path hands JS the raw
+        // `Uint32Array` in-process, with no header).
+        aenternis_core::snapshot::snapshot_into(&self.world, &mut self.snapshot_buf);
         let cell_count = u32::try_from(self.world.len()).unwrap_or(u32::MAX);
         let total_energy = u32::try_from(self.world.total_energy()).unwrap_or(u32::MAX);
         // Indexed access avoids `clippy::tuple_array_conversions`,
@@ -301,16 +304,13 @@ impl WorldActor {
     }
 
     fn build_inspect_frame(&self, x: i32, y: i32, z: i32) -> Vec<u8> {
-        let coord = Coord::new(x, y, z);
         let tick_u32 = u32::try_from(self.world.tick).unwrap_or(u32::MAX);
-        let data = self
-            .world
-            .get(coord)
-            .map(|cell| {
-                let memory = self.world.cell_memory(coord).unwrap_or(&[]);
-                build_inspect_data(cell, memory)
-            })
-            .unwrap_or_default();
+        // Detail payload layout lives in the core, shared with the
+        // WASM backend. Inspect is a rare per-click path, so a fresh
+        // `Vec` per request (rather than a persistent scratch buffer)
+        // is fine.
+        let mut data = Vec::new();
+        aenternis_core::snapshot::inspect_into(&self.world, Coord::new(x, y, z), &mut data);
         let frame = CellDetailFrame {
             x,
             y,
@@ -326,52 +326,6 @@ impl WorldActor {
             running: self.running,
         });
     }
-}
-
-/// Build the flat `Uint32Array`-style snapshot payload — one cell
-/// per `[x, y, z, energy, origin_tag, appearance]` group, in
-/// `(x, y, z)` lex order. Mirrors `aenternis-wasm::World::cells_snapshot`
-/// bit-for-bit so the JS viewer treats both backends identically.
-///
-/// `out` is cleared first and re-filled in place. Capacity is
-/// retained across calls — the `WorldActor` holds a persistent
-/// `snapshot_buf` and amortizes the allocation away after the first
-/// peak-sized world.
-fn build_snapshot_payload_into(out: &mut Vec<u32>, world: &SparseWorld) {
-    out.clear();
-    out.reserve(world.len() * SNAPSHOT_STRIDE as usize);
-    for (coord, cell) in world.sorted_iter() {
-        out.push(coord.x as u32);
-        out.push(coord.y as u32);
-        out.push(coord.z as u32);
-        out.push(cell.energy());
-        out.push(cell.origin_tag);
-        out.push(cell.appearance);
-    }
-}
-
-/// Build the `[pc, energy, origin_tag, appearance, pointers×6,
-/// rates×6, active_outflow×6, inflow×6, memory×E]` cellDetail
-/// payload. Mirrors `aenternis-wasm::World::cell_inspect` so the
-/// viewer's inspector panel parses both backends with the same
-/// `prefix` constant.
-///
-/// Takes `memory` as a separate slice because cell memory lives
-/// in the world-owned arena (Phase 2 of the arena refactor); the
-/// caller has both the cell and the arena, we just need the
-/// already-resolved slice here.
-fn build_inspect_data(cell: &Cell, memory: &[u32]) -> Vec<u32> {
-    let mut out = Vec::with_capacity(28 + memory.len());
-    out.push(cell.pc);
-    out.push(cell.energy());
-    out.push(cell.origin_tag);
-    out.push(cell.appearance);
-    out.extend_from_slice(&cell.pointers);
-    out.extend_from_slice(&cell.rates);
-    out.extend_from_slice(&cell.active_outflow);
-    out.extend_from_slice(&cell.inflow);
-    out.extend_from_slice(memory);
-    out
 }
 
 #[cfg(test)]
