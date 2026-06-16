@@ -21,6 +21,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -223,7 +224,7 @@ export function bootstrap(): void {
     voxelSizeVal: requireEl('voxelSizeVal', HTMLSpanElement),
     minLuma: requireEl('minLuma', HTMLInputElement),
     minLumaVal: requireEl('minLumaVal', HTMLSpanElement),
-    shapeOcta: requireEl('shapeOcta', HTMLInputElement),
+    shapeSel: requireEl('shapeSel', HTMLSelectElement),
     bloomEnabled: requireEl('bloomEnabled', HTMLInputElement),
     bloomThreshold: requireEl('bloomThreshold', HTMLInputElement),
     bloomThresholdVal: requireEl('bloomThresholdVal', HTMLSpanElement),
@@ -231,6 +232,13 @@ export function bootstrap(): void {
     bloomStrengthVal: requireEl('bloomStrengthVal', HTMLSpanElement),
     bloomRadius: requireEl('bloomRadius', HTMLInputElement),
     bloomRadiusVal: requireEl('bloomRadiusVal', HTMLSpanElement),
+    dofEnabled: requireEl('dofEnabled', HTMLInputElement),
+    dofFocus: requireEl('dofFocus', HTMLInputElement),
+    dofFocusVal: requireEl('dofFocusVal', HTMLSpanElement),
+    dofAperture: requireEl('dofAperture', HTMLInputElement),
+    dofApertureVal: requireEl('dofApertureVal', HTMLSpanElement),
+    dofMaxblur: requireEl('dofMaxblur', HTMLInputElement),
+    dofMaxblurVal: requireEl('dofMaxblurVal', HTMLSpanElement),
     exposure: requireEl('exposure', HTMLInputElement),
     exposureVal: requireEl('exposureVal', HTMLSpanElement),
     fogEnabled: requireEl('fogEnabled', HTMLInputElement),
@@ -555,6 +563,21 @@ export function bootstrap(): void {
   ssaoPass.kernelRadius = parseFloat(dom.ssaoRadius.value);
   ssaoPass.enabled = dom.ssaoEnabled.checked;
   composer.addPass(ssaoPass);
+  // Depth of field (Bokeh). Off by default — when on, cells in front of /
+  // behind the focus plane melt into a soft crystalline haze while the
+  // focused mid-field stays sharp. Inserted before bloom so the glow
+  // blooms the already-defocused image. Re-renders a depth pass, so it's
+  // the cheap-toggle kind; disabled passes are skipped by the composer.
+  const bokehPass = new BokehPass(scene, camera, {
+    focus: parseFloat(dom.dofFocus.value),
+    aperture: parseFloat(dom.dofAperture.value),
+    maxblur: parseFloat(dom.dofMaxblur.value),
+  });
+  bokehPass.enabled = dom.dofEnabled.checked;
+  composer.addPass(bokehPass);
+  // three's BokehPass types `uniforms` as an opaque `{}`; alias it so the
+  // focus / aperture / maxblur sliders can poke the shader values directly.
+  const bokehUniforms = bokehPass.uniforms as Record<string, THREE.IUniform>;
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
     parseFloat(dom.bloomStrength.value),
@@ -573,6 +596,7 @@ export function bootstrap(): void {
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     ssaoPass.setSize(window.innerWidth, window.innerHeight);
+    bokehPass.setSize(window.innerWidth, window.innerHeight);
   });
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.4));
@@ -733,13 +757,24 @@ export function bootstrap(): void {
   // reads as a slightly faceted ball.
   const VOXEL_SPHERE_RADIUS = 0.45;
   const VOXEL_OCTA_RADIUS = 0.55;
-  function makeVoxelGeometry(octahedron: boolean): THREE.BufferGeometry {
-    return octahedron
-      ? new THREE.OctahedronGeometry(VOXEL_OCTA_RADIUS, 0)
-      : new THREE.SphereGeometry(VOXEL_SPHERE_RADIUS, 8, 6);
+  // The icosahedron is inscribed, so it reads optically smaller than the
+  // sphere at the same nominal radius; 0.6 lands it on roughly the same
+  // visual footprint. Detail 0 = 20 triangles — cheap, with sharp facets.
+  const VOXEL_CRYSTAL_RADIUS = 0.6;
+  type VoxelShape = 'sphere' | 'octahedron' | 'crystal';
+  function makeVoxelGeometry(shape: VoxelShape): THREE.BufferGeometry {
+    switch (shape) {
+      case 'octahedron':
+        return new THREE.OctahedronGeometry(VOXEL_OCTA_RADIUS, 0);
+      case 'crystal':
+        return new THREE.IcosahedronGeometry(VOXEL_CRYSTAL_RADIUS, 0);
+      case 'sphere':
+      default:
+        return new THREE.SphereGeometry(VOXEL_SPHERE_RADIUS, 8, 6);
+    }
   }
-  let useOctahedron = false;
-  let voxelGeometry: THREE.BufferGeometry = makeVoxelGeometry(useOctahedron);
+  let voxelShape: VoxelShape = 'crystal';
+  let voxelGeometry: THREE.BufferGeometry = makeVoxelGeometry(voxelShape);
   // PBR material — metalness 0 (no specular highlights from a metallic
   // surface) and a soft roughness keep the diffuse shading subtle so
   // the heat-ramp color stays the dominant visual signal. Per-cell
@@ -749,6 +784,9 @@ export function bootstrap(): void {
   const voxelMaterial = new THREE.MeshStandardMaterial({
     metalness: 0.0,
     roughness: parseFloat(dom.roughness.value),
+    // Crystal is the default shape, so it must boot with hard facets;
+    // setVoxelShape keeps this in sync on later switches.
+    flatShading: voxelShape === 'crystal',
   });
   // Captured shader handle so the emissive slider can poke at the
   // uniform after the material has been compiled. Three.js compiles
@@ -807,11 +845,18 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     rebuildVoxelMesh(cap);
   }
 
-  function setVoxelShape(octahedron: boolean): void {
-    if (useOctahedron === octahedron) return;
-    useOctahedron = octahedron;
+  function setVoxelShape(shape: VoxelShape): void {
+    if (voxelShape === shape) return;
+    voxelShape = shape;
     voxelGeometry.dispose();
-    voxelGeometry = makeVoxelGeometry(useOctahedron);
+    voxelGeometry = makeVoxelGeometry(voxelShape);
+    // Only the crystal gets hard facets; sphere / octahedron keep their
+    // smooth position-derived normals. Toggling flatShading forces a
+    // shader recompile, which re-runs onBeforeCompile and re-captures
+    // voxelMaterialShader — the emissive / min-luma uniforms are seeded
+    // from the current slider values there, so both sliders keep working.
+    voxelMaterial.flatShading = shape === 'crystal';
+    voxelMaterial.needsUpdate = true;
     rebuildVoxelMesh(Math.max(voxelCapacity, 256));
     lastRenderedTick = -1;
   }
@@ -975,7 +1020,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   }
 
   // ----- Render settings -----------------------------------------------------
-  let voxelScale = 1.0;
+  let voxelScale = parseFloat(dom.voxelSize.value);
   dom.voxelSize.addEventListener('input', () => {
     voxelScale = parseFloat(dom.voxelSize.value);
     dom.voxelSizeVal.textContent = voxelScale.toFixed(2);
@@ -988,8 +1033,8 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     }
     dom.minLumaVal.textContent = v.toFixed(2);
   });
-  dom.shapeOcta.addEventListener('change', () => {
-    setVoxelShape(dom.shapeOcta.checked);
+  dom.shapeSel.addEventListener('change', () => {
+    setVoxelShape(dom.shapeSel.value as VoxelShape);
   });
   dom.bloomEnabled.addEventListener('change', () => {
     bloomPass.enabled = dom.bloomEnabled.checked;
@@ -1008,6 +1053,24 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     const v = parseFloat(dom.bloomRadius.value);
     bloomPass.radius = v;
     dom.bloomRadiusVal.textContent = v.toFixed(2);
+  });
+  dom.dofEnabled.addEventListener('change', () => {
+    bokehPass.enabled = dom.dofEnabled.checked;
+  });
+  dom.dofFocus.addEventListener('input', () => {
+    const v = parseFloat(dom.dofFocus.value);
+    bokehUniforms['focus']!.value = v;
+    dom.dofFocusVal.textContent = v.toFixed(0);
+  });
+  dom.dofAperture.addEventListener('input', () => {
+    const v = parseFloat(dom.dofAperture.value);
+    bokehUniforms['aperture']!.value = v;
+    dom.dofApertureVal.textContent = v.toFixed(4);
+  });
+  dom.dofMaxblur.addEventListener('input', () => {
+    const v = parseFloat(dom.dofMaxblur.value);
+    bokehUniforms['maxblur']!.value = v;
+    dom.dofMaxblurVal.textContent = v.toFixed(3);
   });
   dom.exposure.addEventListener('input', () => {
     const v = parseFloat(dom.exposure.value);
@@ -1190,8 +1253,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   const tempColor = new THREE.Color();
   const tempPos = new THREE.Vector3();
   const tempQuat = new THREE.Quaternion();
+  const tempEuler = new THREE.Euler();
   const tempScale = new THREE.Vector3(1, 1, 1);
   const zeroScale = new THREE.Vector3(0, 0, 0);
+  const TWO_PI = Math.PI * 2;
 
   let lastT = performance.now();
   let fpsAvg = 0;
@@ -1262,6 +1327,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       startAutoZoom(state.tick);
     }
 
+    // Crystals (and octahedra) get a per-cell orientation; a rotated sphere
+    // is identical, so it would just waste a quaternion.
+    const rotated = voxelShape !== 'sphere';
+
     for (let i = 0; i < cellCount; i += 1) {
       const off = i * stride;
       const x = snap[off]! | 0;
@@ -1282,13 +1351,26 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       const t = meanRelativeT(e, totalE, liveCellCount);
       const perScale = voxelScale * voxelSizeFactor(t);
       tempScale.set(perScale, perScale, perScale);
-      // Tiny deterministic per-cell offset breaks grid-aligned moire
-      // in dense fields. Stable across frames so cells don't shimmer.
+      // Tiny deterministic per-cell offset breaks grid-aligned moire in
+      // dense fields. Stable across frames so cells don't shimmer.
       tempPos.set(
         x + gridJitter(x, y, z, 0) * JITTER_AMPLITUDE,
         y + gridJitter(x, y, z, 1) * JITTER_AMPLITUDE,
         z + gridJitter(x, y, z, 2) * JITTER_AMPLITUDE,
       );
+      if (rotated) {
+        // Deterministic per-cell orientation: stable across frames (no
+        // shimmer on pause) yet varied cell-to-cell (no aligned-facet
+        // moire). Reuses the same jitter hash as the position offset.
+        tempEuler.set(
+          gridJitter(x, y, z, 0) * TWO_PI,
+          gridJitter(x, y, z, 1) * TWO_PI,
+          gridJitter(x, y, z, 2) * TWO_PI,
+        );
+        tempQuat.setFromEuler(tempEuler);
+      } else {
+        tempQuat.identity();
+      }
       tempMatrix.compose(tempPos, tempQuat, tempScale);
       voxelMesh.setMatrixAt(i, tempMatrix);
 

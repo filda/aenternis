@@ -462,8 +462,8 @@
       </div>
       <div class="row">
         <label>voxel size</label>
-        <input id="voxelSize" type="range" min="0.2" max="1.5" step="0.05" value="1.20">
-        <span class="value" id="voxelSizeVal">1.20</span>
+        <input id="voxelSize" type="range" min="0.2" max="4.5" step="0.05" value="4.50">
+        <span class="value" id="voxelSizeVal">4.50</span>
       </div>
       <div class="row">
         <label>min luma (cull)</label>
@@ -471,11 +471,12 @@
         <span class="value" id="minLumaVal">0.42</span>
       </div>
       <div class="row">
-        <label>shape</label>
-        <label style="font-weight: normal;">
-          <input id="shapeOcta" type="checkbox">
-          octahedron (8 trianglů)
-        </label>
+        <label for="shapeSel">shape</label>
+        <select id="shapeSel">
+          <option value="sphere">koule (sphere)</option>
+          <option value="octahedron">oktaedr (8 trianglů)</option>
+          <option value="crystal" selected>krystal (icosahedron, fasety)</option>
+        </select>
       </div>
       <div class="row">
         <label>bloom</label>
@@ -495,6 +496,25 @@
         <label>· radius</label>
         <input id="bloomRadius" type="range" min="0" max="1" step="0.05" value="0.20">
         <span class="value" id="bloomRadiusVal">0.20</span>
+      </div>
+      <div class="row">
+        <label for="dofEnabled">depth of field</label>
+        <input id="dofEnabled" type="checkbox">
+      </div>
+      <div class="row">
+        <label>· focus</label>
+        <input id="dofFocus" type="range" min="0" max="400" step="5" value="50">
+        <span class="value" id="dofFocusVal">50</span>
+      </div>
+      <div class="row">
+        <label>· aperture</label>
+        <input id="dofAperture" type="range" min="0" max="0.1" step="0.001" value="0.025">
+        <span class="value" id="dofApertureVal">0.0250</span>
+      </div>
+      <div class="row">
+        <label>· maxblur</label>
+        <input id="dofMaxblur" type="range" min="0" max="0.05" step="0.001" value="0.010">
+        <span class="value" id="dofMaxblurVal">0.010</span>
       </div>
       <div class="row">
         <label>tonemap exposure</label>

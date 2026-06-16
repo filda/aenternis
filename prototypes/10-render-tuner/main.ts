@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -50,6 +51,8 @@ interface ParamDef {
 }
 
 // Pořadí kol — od největšího vizuálního dopadu k nejmenšímu.
+// voxelSize range/default zrcadlí produkční /web/index.html (krystaly do 4.5×);
+// DoF kola (focus/aperture/maxblur) odpovídají BokehPass sliderům ve vieweru.
 const PARAM_DEFS: readonly ParamDef[] = [
   { name: 'exposure',       label: 'tonemap exposure', min: 0.3,  max: 2.5,  step: 0.05,  default: 1.00,  precision: 2 },
   { name: 'emissive',       label: 'emissive boost',   min: 0.0,  max: 2.0,  step: 0.05,  default: 0.50,  precision: 2 },
@@ -59,8 +62,11 @@ const PARAM_DEFS: readonly ParamDef[] = [
   { name: 'bloomRadius',    label: 'bloom radius',     min: 0.0,  max: 1.0,  step: 0.05,  default: 0.40,  precision: 2 },
   { name: 'fogDensity',     label: 'fog density',      min: 0.0,  max: 0.03, step: 0.001, default: 0.005, precision: 3 },
   { name: 'ssaoRadius',     label: 'SSAO radius',      min: 1.0,  max: 20.0, step: 0.5,   default: 8.0,   precision: 1 },
-  { name: 'voxelSize',      label: 'voxel size',       min: 0.2,  max: 1.5,  step: 0.05,  default: 1.00,  precision: 2 },
+  { name: 'voxelSize',      label: 'voxel size',       min: 0.2,  max: 4.5,  step: 0.05,  default: 4.50,  precision: 2 },
   { name: 'minLuma',        label: 'min luma (cull)',  min: 0.0,  max: 1.00, step: 0.02,  default: 0.42,  precision: 2 },
+  { name: 'dofFocus',       label: 'DoF focus',        min: 0.0,  max: 400,  step: 5,     default: 50,    precision: 0 },
+  { name: 'dofAperture',    label: 'DoF aperture',     min: 0.0,  max: 0.1,  step: 0.001, default: 0.025, precision: 3 },
+  { name: 'dofMaxblur',     label: 'DoF maxblur',      min: 0.0,  max: 0.05, step: 0.001, default: 0.010, precision: 3 },
 ];
 
 interface RenderParams {
@@ -74,6 +80,9 @@ interface RenderParams {
   ssaoRadius: number;
   voxelSize: number;
   minLuma: number;
+  dofFocus: number;
+  dofAperture: number;
+  dofMaxblur: number;
 }
 
 function defaultParams(): RenderParams {
@@ -142,8 +151,10 @@ function medianParams(history: RenderParams[]): RenderParams {
   return result as RenderParams;
 }
 
-// Voxel geometrie konstanty (z /web/main.ts).
-const VOXEL_SPHERE_RADIUS = 0.45;
+// Voxel geometrie konstanty (z /web/main.ts). Viewer teď defaultně renderuje
+// flat-shaded krystaly, takže tuner ladí proti stejnému povrchu.
+const VOXEL_CRYSTAL_RADIUS = 0.6;
+const TWO_PI = Math.PI * 2;
 
 // ----- Snapshot data ---------------------------------------------------------
 
@@ -282,11 +293,12 @@ interface Tile {
   readonly mesh: THREE.InstancedMesh;
   readonly composer: EffectComposer;
   readonly ssaoPass: SSAOPass;
+  readonly bokehPass: BokehPass;
   readonly bloomPass: UnrealBloomPass;
   params: RenderParams;
 }
 
-const SHARED_GEOMETRY = new THREE.SphereGeometry(VOXEL_SPHERE_RADIUS, 8, 6);
+const SHARED_GEOMETRY = new THREE.IcosahedronGeometry(VOXEL_CRYSTAL_RADIUS, 0);
 
 function buildSpaceEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
   // Kopie /web/main.ts:buildSpaceEnvironment — gradient sphere + 800 stars,
@@ -373,6 +385,7 @@ function populateMesh(
   const tempMatrix = new THREE.Matrix4();
   const tempPos = new THREE.Vector3();
   const tempQuat = new THREE.Quaternion();
+  const tempEuler = new THREE.Euler();
   const tempScale = new THREE.Vector3();
   const tempColor = new THREE.Color();
   for (let i = 0; i < cellCount; i += 1) {
@@ -389,6 +402,14 @@ function populateMesh(
       y + gridJitter(x, y, z, 1) * JITTER_AMPLITUDE,
       z + gridJitter(x, y, z, 2) * JITTER_AMPLITUDE,
     );
+    // Deterministic per-cell crystal orientation (matches /web/main.ts) — the
+    // same jitter hash as the position offset, so facets don't align into moire.
+    tempEuler.set(
+      gridJitter(x, y, z, 0) * TWO_PI,
+      gridJitter(x, y, z, 1) * TWO_PI,
+      gridJitter(x, y, z, 2) * TWO_PI,
+    );
+    tempQuat.setFromEuler(tempEuler);
     tempMatrix.compose(tempPos, tempQuat, tempScale);
     mesh.setMatrixAt(i, tempMatrix);
     const [r, g, b] = heatColor(t);
@@ -423,6 +444,7 @@ function createTile(
   const material = new THREE.MeshStandardMaterial({
     metalness: 0.0,
     roughness: params.roughness,
+    flatShading: true, // hard crystal facets (viewer default shape).
   });
   let materialShader: THREE.WebGLProgramParametersWithUniforms | null = null;
   material.onBeforeCompile = (shader) => {
@@ -469,6 +491,15 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   const ssaoPass = new SSAOPass(scene, camera, tileWidth, tileHeight);
   ssaoPass.kernelRadius = params.ssaoRadius;
   composer.addPass(ssaoPass);
+  // DoF before bloom (same order as /web/main.ts). Always enabled here — the
+  // tournament tunes focus/aperture/maxblur, so the pass must be live; at the
+  // default maxblur the blur is mild, so the earlier rounds stay readable.
+  const bokehPass = new BokehPass(scene, camera, {
+    focus: params.dofFocus,
+    aperture: params.dofAperture,
+    maxblur: params.dofMaxblur,
+  });
+  composer.addPass(bokehPass);
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(tileWidth, tileHeight),
     params.bloomStrength,
@@ -479,7 +510,7 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   composer.addPass(new OutputPass());
 
   return {
-    scene, fog, material, mesh, composer, ssaoPass, bloomPass,
+    scene, fog, material, mesh, composer, ssaoPass, bokehPass, bloomPass,
     params: { ...params },
     get materialShader() { return materialShader; },
     set materialShader(s) { materialShader = s; },
@@ -499,6 +530,11 @@ function applyTileParams(
     tile.materialShader.uniforms['uMinLuma']!.value = next.minLuma;
   }
   tile.ssaoPass.kernelRadius = next.ssaoRadius;
+  // three types BokehPass.uniforms as an opaque {}, so cast to poke values.
+  const bokeh = tile.bokehPass.uniforms as Record<string, THREE.IUniform>;
+  bokeh['focus']!.value = next.dofFocus;
+  bokeh['aperture']!.value = next.dofAperture;
+  bokeh['maxblur']!.value = next.dofMaxblur;
   tile.bloomPass.threshold = next.bloomThreshold;
   tile.bloomPass.strength = next.bloomStrength;
   tile.bloomPass.radius = next.bloomRadius;
@@ -514,6 +550,7 @@ function applyTileParams(
 function resizeTile(tile: Tile, w: number, h: number): void {
   tile.composer.setSize(w, h);
   tile.ssaoPass.setSize(w, h);
+  tile.bokehPass.setSize(w, h);
   // UnrealBloomPass nemá veřejné setSize, ale composer.setSize na něj propaguje.
 }
 
