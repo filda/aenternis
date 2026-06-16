@@ -25,16 +25,19 @@ import init, { World } from '../../crates/aenternis-wasm/pkg/aenternis_wasm.js';
 import { fitCamera } from '../../src/camera-fit.ts';
 import { heatColor, meanRelativeT, voxelSizeFactor } from '../../src/heat.ts';
 import { JITTER_AMPLITUDE, gridJitter } from '../../src/jitter.ts';
+import { parseProgramText } from '../../src/program-text.ts';
+import {
+  CAPTURE_TICKS,
+  DEFAULT_PROGRAM_TEXT,
+  DEFAULT_SIM_CONFIG,
+  applySimConfig,
+} from '../../src/sim-defaults.ts';
 import type { SnapshotBbox } from '../../src/snapshot.ts';
 
 // ----- Konfigurace -----------------------------------------------------------
-
-const CAPTURE_SEED = 1234;
-const CAPTURE_ENERGY = 1_000_000;
-const CAPTURE_TICKS = 250;
-const CAPTURE_COEFF = 0.15;
-const CAPTURE_K = 1;
-const CAPTURE_MOVE_THRESHOLD = 1.0;
+// Capture recipe = the production world config (src/sim-defaults.ts), so the
+// tuner tunes against the same gravity/pressure/mutation + genesis program the
+// viewer boots with — not a bare diffusion field.
 
 const GRID_COLS = 5;
 const GRID_ROWS = 2;
@@ -217,15 +220,20 @@ async function captureSnapshot(): Promise<SnapshotData> {
   await init();
 
   setStatus('Inicializuji svět…');
-  const world = World.newWithProgram(CAPTURE_SEED, CAPTURE_ENERGY, new Uint32Array(0));
-  world.setMoveThreshold(CAPTURE_MOVE_THRESHOLD);
+  const { program } = parseProgramText(DEFAULT_PROGRAM_TEXT);
+  const world = World.newWithProgram(
+    DEFAULT_SIM_CONFIG.seed,
+    DEFAULT_SIM_CONFIG.energy,
+    program ?? new Uint32Array(0),
+  );
+  applySimConfig(world, DEFAULT_SIM_CONFIG);
 
   // Tickujeme po dávkách, aby browser nezamrzl a status mohl tickovat.
   const BATCH = 50;
   for (let done = 0; done < CAPTURE_TICKS; done += BATCH) {
     const end = Math.min(CAPTURE_TICKS, done + BATCH);
     for (let i = done; i < end; i += 1) {
-      world.step(CAPTURE_COEFF, CAPTURE_K);
+      world.step(DEFAULT_SIM_CONFIG.coeff, DEFAULT_SIM_CONFIG.k);
     }
     setStatus(`Generuji svět… tick ${end}/${CAPTURE_TICKS}`);
     await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -249,9 +257,9 @@ async function captureSnapshot(): Promise<SnapshotData> {
     totalEnergy: world.totalEnergy(),
     bbox,
     tick: world.tick(),
-    seed: CAPTURE_SEED,
+    seed: DEFAULT_SIM_CONFIG.seed,
     ticks: CAPTURE_TICKS,
-    energyIn: CAPTURE_ENERGY,
+    energyIn: DEFAULT_SIM_CONFIG.energy,
   };
   world.free();
   return data;

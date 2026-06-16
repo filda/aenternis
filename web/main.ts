@@ -37,6 +37,7 @@ import { JITTER_AMPLITUDE, gridJitter } from '../src/jitter.ts';
 import type { SimChannel } from '../src/native-client.ts';
 import { PRESETS, findPreset } from '../src/presets.ts';
 import { parseProgramText } from '../src/program-text.ts';
+import { DEFAULT_PROGRAM_TEXT, DEFAULT_SIM_CONFIG, type SimConfig } from '../src/sim-defaults.ts';
 import type {
   CellDetailMsg,
   ConfigMsg,
@@ -63,22 +64,6 @@ import {
   resetTrackerState,
   type TrackerState,
 } from '../src/tracker.ts';
-
-interface RuntimeConfig {
-  seed: number;
-  energy: number;
-  coeff: number;
-  k: number;
-  moveThreshold: number;
-  gravity: number;
-  gravityAlpha: number;
-  gravityRadius: number;
-  pressure: number;
-  pressureGamma: number;
-  pressureEref: number;
-  mutationStrength: number;
-  mutationHalfDensity: number;
-}
 
 interface BackendChoice {
   readonly backend: 'wasm' | 'native';
@@ -147,29 +132,11 @@ function requireEl<T extends Element>(id: string, ctor: { new (...args: never[])
  *  running on `requestAnimationFrame`. */
 export function bootstrap(): void {
   // ----- Configuration -------------------------------------------------------
-  const config: RuntimeConfig = {
-    seed: 1234,
-    energy: 1_000_000,
-    coeff: 0.15,
-    k: 1,
-    moveThreshold: 1.0,
-    // "Cauldron" preset (2026-06-14): mutagenic dense cores, gentle player.
-    // The core-density cap turned out to be PRESSURE, not mutation — so a
-    // gentle pressure (high eref) plus strong gravity lets cores densify
-    // into the tens of thousands of E (≫ a player's few-thousand entity),
-    // where the high mutation half-density K=40000 separates a HOT churning
-    // core (p≈0.3, rising further at the viewer's 1M energy) from a gentle
-    // player (p≈0.07). The engine-side SparseWorld defaults stay 0 (frozen
-    // baselines); these are UI starting points only. See docs/mechanics.md.
-    gravity: 1.0,
-    gravityAlpha: 0.05,
-    gravityRadius: 4,
-    pressure: 0.2,
-    pressureGamma: 2.0,
-    pressureEref: 50_000.0,
-    mutationStrength: 1.0,
-    mutationHalfDensity: 40_000,
-  };
+  // Mutable copy of the shared production defaults — UI listeners write back
+  // into this as the user drags sliders. The starting values (the "Cauldron"
+  // preset) live in src/sim-defaults.ts so the render-tuner captures against
+  // the exact same world. See docs/mechanics.md for the preset rationale.
+  const config: SimConfig = { ...DEFAULT_SIM_CONFIG };
 
   // ----- DOM lookup ----------------------------------------------------------
   // Resolved once; if any id is missing we want to see the error before
@@ -1153,6 +1120,9 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     config.energy = parseInt(dom.energyIn.value, 10) || 0;
     initPaused();
   });
+  // Seed the program textarea from the shared default so the origin-cell
+  // overlay matches what the render-tuner captures (single source of truth).
+  dom.programText.value = DEFAULT_PROGRAM_TEXT;
   for (const preset of PRESETS) {
     const opt = document.createElement('option');
     opt.value = preset.name;

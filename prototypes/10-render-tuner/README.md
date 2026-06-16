@@ -34,9 +34,11 @@ do slider defaultů v root `index.html`.
 
 ## Statický svět
 
-Snapshot se generuje **deterministicky** podle hardcoded receptu
-(`CAPTURE_SEED=1234`, `CAPTURE_ENERGY=1_000_000`, `CAPTURE_TICKS=250`).
-Při prvním otevření stránky se počítá za běhu (~1-3s). Tlačítko
+Snapshot se generuje **deterministicky** podle produkční konfigurace ze
+sdíleného `src/sim-defaults.ts` (`DEFAULT_SIM_CONFIG` — gravitace/tlak/mutace
++ genesis program, `CAPTURE_TICKS`), takže ladíš proti **stejnému světu, jaký
+ukazuje viewer**, ne proti holé difuzi. Při prvním otevření stránky se počítá
+za běhu (~1-3s). Tlačítko
 **Save snapshot** v topbaru stáhne `snapshot.bin` + `snapshot.meta.json`;
 když oba soubory zaarchivuješ vedle `main.ts`, prototyp je při dalším
 otevření použije přímo a kapture přeskočí.
@@ -45,8 +47,8 @@ otevření použije přímo a kapture přeskočí.
 
 Snapshot odráží chování core v době captuře, takže časem zastarává
 (`./build` staví jen web target). Přegeneruj ho z aktuálního core dvěma
-příkazy z rootu repa — `scripts/gen-tuner-snapshot.mjs` zrcadlí stejný
-`CAPTURE_*` recept jako browser:
+příkazy z rootu repa — `scripts/gen-tuner-snapshot.mjs` čerpá ze stejného
+`src/sim-defaults.ts` jako viewer i browser capture:
 
 ```
 wasm-pack build crates/aenternis-wasm --target nodejs --release --out-dir pkg-node

@@ -2,11 +2,10 @@
 // Headless generator for the render-tuner's static snapshot
 // (prototypes/10-render-tuner/snapshot.bin + snapshot.meta.json).
 //
-// Mirrors the in-browser `captureSnapshot()` recipe in
-// prototypes/10-render-tuner/main.ts exactly (same seed / energy / ticks /
-// coeff / k / move_threshold) so the cached field matches what the tuner
-// would generate live — but runs in Node against the current core, so the
-// committed snapshot stays in sync with the simulation as it evolves.
+// Uses the shared production config (src/sim-defaults.ts) — the exact same
+// world the viewer boots and the in-browser captureSnapshot() generates, so
+// the cached field never drifts from production. Runs in Node against the
+// current core, keeping the committed snapshot in sync as the sim evolves.
 //
 // PREREQUISITE: a fresh nodejs-target wasm build (the repo's ./build only
 // emits the web target, so pkg-node can go stale):
@@ -20,22 +19,27 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { parseProgramText } from '../src/program-text.ts';
+import {
+  CAPTURE_TICKS,
+  DEFAULT_PROGRAM_TEXT,
+  DEFAULT_SIM_CONFIG,
+  applySimConfig,
+} from '../src/sim-defaults.ts';
+
 // pkg-node is a CommonJS module (wasm-bindgen nodejs target) and loads its
 // .wasm synchronously at require time; createRequire bridges it into this ESM.
 const require = createRequire(import.meta.url);
 const { World } = require('../crates/aenternis-wasm/pkg-node/aenternis_wasm.js');
 
-// Recipe — keep in lock-step with the CAPTURE_* constants in main.ts.
-const SEED = 1234;
-const ENERGY = 1_000_000;
-const TICKS = 250;
-const COEFF = 0.15;
-const K = 1;
-const MOVE_THRESHOLD = 1.0;
+// Config = the shared production defaults (src/sim-defaults.ts), so this
+// matches the viewer and the in-browser capture without any hand-syncing.
+const cfg = DEFAULT_SIM_CONFIG;
+const { program } = parseProgramText(DEFAULT_PROGRAM_TEXT);
 
-const world = World.newWithProgram(SEED, ENERGY, new Uint32Array(0));
-world.setMoveThreshold(MOVE_THRESHOLD);
-for (let i = 0; i < TICKS; i += 1) world.step(COEFF, K);
+const world = World.newWithProgram(cfg.seed, cfg.energy, program ?? new Uint32Array(0));
+applySimConfig(world, cfg);
+for (let i = 0; i < CAPTURE_TICKS; i += 1) world.step(cfg.coeff, cfg.k);
 
 // Copy out of WASM linear memory before any further call invalidates the view.
 const snap = new Uint32Array(world.cellsSnapshotView());
@@ -48,9 +52,9 @@ const meta = {
   totalEnergy: world.totalEnergy(),
   bbox: { minX: bb[0], maxX: bb[1], minY: bb[2], maxY: bb[3], minZ: bb[4], maxZ: bb[5] },
   tick: world.tick(),
-  seed: SEED,
-  ticks: TICKS,
-  energyIn: ENERGY,
+  seed: cfg.seed,
+  ticks: CAPTURE_TICKS,
+  energyIn: cfg.energy,
 };
 world.free();
 
