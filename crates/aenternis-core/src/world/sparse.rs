@@ -241,6 +241,22 @@ pub struct SparseWorld {
     /// `step_diffusion`) keeps using the legacy map.
     pub(crate) scratch_inflows_fast: FxHashMap<Coord, Vec<crate::tick::InflowFast>>,
 
+    /// Per-tick scratch for the gravity mass gather: a sparse grid of
+    /// dense `GRAV_BLOCK_SIDE³` energy blocks. `scratch_energy_block_idx`
+    /// maps a block coord (`coord >> GRAV_BLOCK_BITS` per axis) to an
+    /// index into `scratch_energy_block_pool`; each pooled block holds
+    /// the energies of the cells in that block (0 for void slots).
+    ///
+    /// Rebuilt each tick inside [`crate::tick::refresh_mass`] (gravity-on
+    /// path only). It turns the stencil gather's per-offset
+    /// `cells.get(coord)` hash probe into a block lookup that only
+    /// re-hashes when the walk crosses a block boundary, plus a dense
+    /// in-block array read — same energies in the same order, so the
+    /// `f64` mass sum stays bit-identical (no baseline regen). Both are
+    /// cleared (not freed) between ticks so storage carries over.
+    pub(crate) scratch_energy_block_idx: FxHashMap<Coord, u32>,
+    pub(crate) scratch_energy_block_pool: Vec<[u32; crate::tick::GRAV_BLOCK_VOL]>,
+
     /// Lex-sorted snapshot of `cells.keys()`. Mirrors the canonical
     /// `(x, y, z)` order that [`Self::sorted_iter`] commits to.
     ///
@@ -384,6 +400,8 @@ impl SparseWorld {
             scratch_inflows_by_target: FxHashMap::with_hasher(FxBuildHasher),
             scratch_per_source_total_outflow: FxHashMap::with_hasher(FxBuildHasher),
             scratch_inflows_fast: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_energy_block_idx: FxHashMap::with_hasher(FxBuildHasher),
+            scratch_energy_block_pool: Vec::new(),
             sorted_cache: Vec::new(),
             sorted_dirty: false,
             bbox_cache: None,

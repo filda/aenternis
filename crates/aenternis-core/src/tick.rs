@@ -286,6 +286,40 @@ fn refresh_neighbor_energies(world: &mut SparseWorld) {
     par_or_seq_iter_mut!(snapshot, body);
 }
 
+/// Gravity mass-gather block grid. Space is tiled into dense
+/// `GRAV_BLOCK_SIDE³` energy blocks; a block coord is `coord >>
+/// GRAV_BLOCK_BITS` per axis (arithmetic shift floors for negatives) and
+/// the in-block index packs `coord & MASK` per axis. `GRAV_BLOCK_VOL` is
+/// the pool element length (see `SparseWorld::scratch_energy_block_pool`).
+pub(crate) const GRAV_BLOCK_BITS: i32 = 3;
+const GRAV_BLOCK_SIDE: i32 = 1 << GRAV_BLOCK_BITS;
+const GRAV_BLOCK_MASK: i32 = GRAV_BLOCK_SIDE - 1;
+pub(crate) const GRAV_BLOCK_VOL: usize =
+    (GRAV_BLOCK_SIDE * GRAV_BLOCK_SIDE * GRAV_BLOCK_SIDE) as usize;
+
+/// Block coord containing `(x, y, z)`.
+#[inline]
+const fn block_coord(x: i32, y: i32, z: i32) -> Coord {
+    Coord::new(
+        x >> GRAV_BLOCK_BITS,
+        y >> GRAV_BLOCK_BITS,
+        z >> GRAV_BLOCK_BITS,
+    )
+}
+
+/// In-block index for `(x, y, z)` (`0..GRAV_BLOCK_VOL`).
+///
+/// **Accepted-as-unkillable mutants** (`cargo mutants`): the two
+/// `|` → `^` swaps. The three masked fields occupy disjoint bit ranges
+/// (`[0,3)`, `[3,6)`, `[6,9)`), so `^` and `|` produce byte-identical
+/// output — a genuinely equivalent mutant no test can distinguish.
+#[inline]
+const fn block_local(x: i32, y: i32, z: i32) -> usize {
+    (((z & GRAV_BLOCK_MASK) << (2 * GRAV_BLOCK_BITS))
+        | ((y & GRAV_BLOCK_MASK) << GRAV_BLOCK_BITS)
+        | (x & GRAV_BLOCK_MASK)) as usize
+}
+
 /// Build the gravitational stencil for cutoff radius `R`: every integer
 /// offset `d` with `0 < |d| ≤ R`, paired with its `1/r` kernel weight
 /// `1/|d|`. Offsets are emitted in a fixed `(dz, dy, dx)`-ascending order
@@ -356,13 +390,57 @@ fn refresh_mass(world: &mut SparseWorld, alpha: f64, radius: i32) {
         }
     }
 
-    let cells = &world.cells;
+    // Build the per-tick blocked energy grid: scatter each live cell's
+    // energy into its dense block. `clear` keeps both the map's buckets
+    // and the pool's `Box`-free `[u32; VOL]` backing across ticks; a
+    // pooled block is rewritten with a fresh zeroed array on reuse, so a
+    // cell only ever sees its own slot set (others stay 0 = void).
+    {
+        let cells = &world.cells;
+        let idx = &mut world.scratch_energy_block_idx;
+        let pool = &mut world.scratch_energy_block_pool;
+        idx.clear();
+        pool.clear();
+        for (coord, cell) in cells.iter() {
+            let e = cell.energy();
+            if e == 0 {
+                continue;
+            }
+            let slot = *idx
+                .entry(block_coord(coord.x, coord.y, coord.z))
+                .or_insert_with(|| {
+                    let i = u32::try_from(pool.len()).unwrap_or(u32::MAX);
+                    pool.push([0u32; GRAV_BLOCK_VOL]);
+                    i
+                });
+            pool[slot as usize][block_local(coord.x, coord.y, coord.z)] = e;
+        }
+    }
+
     let stencil = &stencil;
+    let block_idx = &world.scratch_energy_block_idx;
+    let block_pool = &world.scratch_energy_block_pool;
     let body = |coord: &Coord, m: &mut f64| {
         let mut acc = 0.0_f64;
+        // Re-resolve the block only when the stencil walk crosses a block
+        // boundary. The `(dz, dy, dx)`-ascending stencil order keeps long
+        // same-block runs, so this collapses the per-offset `cells.get`
+        // hash probe to a few dozen lookups plus a dense in-block read.
+        // Energies are added in the exact stencil order — same values,
+        // same order — so the `f64` mass sum is bit-identical to the
+        // per-cell-hash version (the bit-parity baseline is untouched).
+        let mut cur_bc: Option<Coord> = None;
+        let mut cur_block: Option<&[u32; GRAV_BLOCK_VOL]> = None;
         for (off, weight) in stencil {
-            let nc = Coord::new(coord.x + off.x, coord.y + off.y, coord.z + off.z);
-            let e = cells.get(&nc).map_or(0, Cell::energy);
+            let nx = coord.x + off.x;
+            let ny = coord.y + off.y;
+            let nz = coord.z + off.z;
+            let bc = block_coord(nx, ny, nz);
+            if cur_bc != Some(bc) {
+                cur_bc = Some(bc);
+                cur_block = block_idx.get(&bc).map(|&i| &block_pool[i as usize]);
+            }
+            let e = cur_block.map_or(0, |b| b[block_local(nx, ny, nz)]);
             // Plain `+ x*w`, never `mul_add`: FMA's single rounding is not
             // portable native↔wasm and would break reproducibility.
             acc += f64::from(e) * weight;
@@ -2050,5 +2128,55 @@ mod mutation_unit_tests {
         // First draws of the two streams must differ — the domain salt
         // genuinely decorrelates them, not just the constant value.
         assert_ne!(mutation.next_u32(), rate.next_u32());
+    }
+}
+
+#[cfg(test)]
+mod block_addr_tests {
+    //! Pins the gravity block-grid addressing. The mapping is internal
+    //! (any bijection coord→(block, local) yields identical mass, since
+    //! build and gather share it), so a system-level test can't catch a
+    //! re-addressing change — these unit pins do. They also guard the
+    //! one re-addressing that *isn't* harmless: a packing that overlaps
+    //! the z/y/x bit fields (e.g. `2*BITS` → `2+BITS`) stops being a
+    //! bijection and would alias distinct cells onto one slot.
+    use super::{block_coord, block_local, GRAV_BLOCK_VOL};
+    use crate::Coord;
+
+    #[test]
+    fn block_coord_floors_toward_negative() {
+        assert_eq!(block_coord(0, 0, 0), Coord::new(0, 0, 0));
+        assert_eq!(block_coord(7, 7, 7), Coord::new(0, 0, 0));
+        assert_eq!(block_coord(8, 16, 0), Coord::new(1, 2, 0));
+        // Arithmetic shift floors negatives: -1 >> 3 == -1, -8 >> 3 == -1.
+        assert_eq!(block_coord(-1, -8, 0), Coord::new(-1, -1, 0));
+    }
+
+    #[test]
+    fn block_local_packs_disjoint_fields() {
+        assert_eq!(block_local(0, 0, 0), 0);
+        assert_eq!(block_local(1, 0, 0), 1); // x → bits 0..3
+        assert_eq!(block_local(0, 1, 0), 8); // y → bits 3..6
+        assert_eq!(block_local(0, 0, 1), 64); // z → bits 6..9 (kills `*`→`+`)
+        assert_eq!(block_local(7, 7, 7), GRAV_BLOCK_VOL - 1);
+        // Negatives wrap into the block via `& MASK`.
+        assert_eq!(block_local(-1, -1, -1), GRAV_BLOCK_VOL - 1);
+    }
+
+    #[test]
+    fn local_index_is_a_bijection_over_a_block() {
+        // Every (x, y, z) in one block maps to a distinct slot in
+        // `0..VOL`. Catches any field-overlap re-packing.
+        let mut seen = [false; GRAV_BLOCK_VOL];
+        for z in 0..8 {
+            for y in 0..8 {
+                for x in 0..8 {
+                    let i = block_local(x, y, z);
+                    assert!(!seen[i], "collision at ({x},{y},{z}) → {i}");
+                    seen[i] = true;
+                }
+            }
+        }
+        assert!(seen.iter().all(|&b| b), "indices must cover 0..VOL");
     }
 }
