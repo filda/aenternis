@@ -452,8 +452,13 @@ export function bootstrap(): void {
   // The initial fit lands tight against the tick-0 bbox; auto-zoom-out gently
   // pulls the camera back as the world grows. Cancelled the moment the user
   // touches the canvas or presses any key so manual control always wins.
-  const AUTO_ZOOM_TICKS = 200;
-  const AUTO_ZOOM_TOTAL_FACTOR = 150.0;
+  const AUTO_ZOOM_TICKS = 400;
+  // Total distance multiplier over the window: the camera eases from the tight
+  // tick-0 fit out to this × the start distance, then stops. Kept modest on
+  // purpose — a large factor flings the world away *and* drives it into the fog
+  // (density·distance grows with the pull-back). A gentle ~3× keeps the world
+  // big and well within the fog's visible range, so the fog needs no tweaking.
+  const AUTO_ZOOM_TOTAL_FACTOR = 8.0;
   let autoZoomTicksLeft = 0;
   let autoZoomBaseTick = 0;
   let autoZoomBaseDist = 0;
