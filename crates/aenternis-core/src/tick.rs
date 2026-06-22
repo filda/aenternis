@@ -82,8 +82,6 @@ use rayon::prelude::*;
 // cross-host reproducibility contract this rate path depends on.
 #[allow(clippy::float_cmp, clippy::suboptimal_flops)]
 pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
-    refresh_neighbor_energies(world);
-
     // Pull Copy fields off the world so the per-cell closure below
     // doesn't hold a shared borrow during the (parallel) mutable phase.
     let gravity = world.gravity;
@@ -94,10 +92,19 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     let radius = world.gravity_radius;
 
     // Gravitational mass `M = α·Σ E(c+d)/|d|` is only needed when gravity
-    // is on. On the gravity-off path `scratch_mass` stays empty and is
-    // never read, so the gravity-off cost (and the frozen baselines)
-    // are untouched.
-    if gravity != 0.0 {
+    // is on. On the gravity-off path the blocked energy grid and
+    // `scratch_mass` stay empty and untouched (frozen fast path), and the
+    // neighbor snapshot is built with the plain per-coord hash.
+    //
+    // On the gravity-on path the blocked grid is built once up front and
+    // shared: both the 6-face neighbor snapshot and the stencil mass
+    // gather read energies through it instead of hashing every neighbor
+    // coord into `world.cells`. Values are identical either way.
+    if gravity == 0.0 {
+        refresh_neighbor_energies(world);
+    } else {
+        refresh_energy_blocks(world);
+        refresh_neighbor_energies_blocked(world);
         refresh_mass(world, alpha, radius);
     }
 
@@ -286,6 +293,75 @@ fn refresh_neighbor_energies(world: &mut SparseWorld) {
     par_or_seq_iter_mut!(snapshot, body);
 }
 
+/// Rebuild the per-tick blocked energy grid: scatter each live cell's
+/// energy into its dense `GRAV_BLOCK_SIDE³` block (see
+/// [`SparseWorld::scratch_energy_block_idx`]). `clear` keeps both the
+/// map's buckets and the pool's `[u32; VOL]` backing across ticks; a
+/// pooled block is overwritten with a fresh zeroed array on reuse, so a
+/// cell only ever sees its own slot set (the rest stay 0 = void).
+///
+/// Built once per tick on the gravity-on path, then shared by
+/// [`refresh_neighbor_energies_blocked`] (6-face) and [`refresh_mass`]
+/// (stencil) so both skip the per-coord `cells.get` hash.
+fn refresh_energy_blocks(world: &mut SparseWorld) {
+    let cells = &world.cells;
+    let idx = &mut world.scratch_energy_block_idx;
+    let pool = &mut world.scratch_energy_block_pool;
+    idx.clear();
+    pool.clear();
+    for (coord, cell) in cells.iter() {
+        let e = cell.energy();
+        if e == 0 {
+            continue;
+        }
+        let slot = *idx
+            .entry(block_coord(coord.x, coord.y, coord.z))
+            .or_insert_with(|| {
+                let i = u32::try_from(pool.len()).unwrap_or(u32::MAX);
+                pool.push([0u32; GRAV_BLOCK_VOL]);
+                i
+            });
+        pool[slot as usize][block_local(coord.x, coord.y, coord.z)] = e;
+    }
+}
+
+/// Block-grid variant of [`refresh_neighbor_energies`]: fills the same
+/// `Coord → [u32; 6]` snapshot, but reads each face neighbor's energy
+/// from the pre-built [`refresh_energy_blocks`] grid instead of hashing
+/// every neighbor coord into `world.cells`. An interior cell's six faces
+/// share its own block, so the per-cell work collapses to ~1 block
+/// resolve plus dense reads. Used only on the gravity-on path (where the
+/// grid is built anyway); the values are identical to the hash version.
+fn refresh_neighbor_energies_blocked(world: &mut SparseWorld) {
+    {
+        let cells = &world.cells;
+        let snapshot = &mut world.scratch_neighbor_energies;
+        snapshot.retain(|coord, _| cells.contains_key(coord));
+        snapshot.reserve(cells.len().saturating_sub(snapshot.len()));
+        for coord in cells.keys() {
+            snapshot.entry(*coord).or_default();
+        }
+    }
+
+    let block_idx = &world.scratch_energy_block_idx;
+    let block_pool = &world.scratch_energy_block_pool;
+    let body = |coord: &Coord, energies: &mut [u32; Direction::COUNT]| {
+        let mut cur_bc: Option<Coord> = None;
+        let mut cur_block: Option<&[u32; GRAV_BLOCK_VOL]> = None;
+        for &d in &Direction::ALL {
+            let nc = coord.neighbor(d);
+            let bc = block_coord(nc.x, nc.y, nc.z);
+            if cur_bc != Some(bc) {
+                cur_bc = Some(bc);
+                cur_block = block_idx.get(&bc).map(|&i| &block_pool[i as usize]);
+            }
+            energies[d.index()] = cur_block.map_or(0, |b| b[block_local(nc.x, nc.y, nc.z)]);
+        }
+    };
+
+    par_or_seq_iter_mut!(&mut world.scratch_neighbor_energies, body);
+}
+
 /// Gravity mass-gather block grid. Space is tiled into dense
 /// `GRAV_BLOCK_SIDE³` energy blocks; a block coord is `coord >>
 /// GRAV_BLOCK_BITS` per axis (arithmetic shift floors for negatives) and
@@ -390,33 +466,9 @@ fn refresh_mass(world: &mut SparseWorld, alpha: f64, radius: i32) {
         }
     }
 
-    // Build the per-tick blocked energy grid: scatter each live cell's
-    // energy into its dense block. `clear` keeps both the map's buckets
-    // and the pool's `Box`-free `[u32; VOL]` backing across ticks; a
-    // pooled block is rewritten with a fresh zeroed array on reuse, so a
-    // cell only ever sees its own slot set (others stay 0 = void).
-    {
-        let cells = &world.cells;
-        let idx = &mut world.scratch_energy_block_idx;
-        let pool = &mut world.scratch_energy_block_pool;
-        idx.clear();
-        pool.clear();
-        for (coord, cell) in cells.iter() {
-            let e = cell.energy();
-            if e == 0 {
-                continue;
-            }
-            let slot = *idx
-                .entry(block_coord(coord.x, coord.y, coord.z))
-                .or_insert_with(|| {
-                    let i = u32::try_from(pool.len()).unwrap_or(u32::MAX);
-                    pool.push([0u32; GRAV_BLOCK_VOL]);
-                    i
-                });
-            pool[slot as usize][block_local(coord.x, coord.y, coord.z)] = e;
-        }
-    }
-
+    // The blocked energy grid (`refresh_energy_blocks`) is built by the
+    // caller before this runs, so the gather below resolves neighbor
+    // energies through it instead of a per-offset `cells.get` hash.
     let stencil = &stencil;
     let block_idx = &world.scratch_energy_block_idx;
     let block_pool = &world.scratch_energy_block_pool;
