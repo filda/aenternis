@@ -32,7 +32,7 @@ import { fitCamera } from '../src/camera-fit.ts';
 import { fmtBbox, fmtDirArr, fmtMemoryHexDump } from '../src/format.ts';
 import { disassemble } from '../src/disasm.ts';
 import { meanRelativeT, voxelSizeFactor } from '../src/heat.ts';
-import { cellColor, type ColorMode } from '../src/color.ts';
+import { cellColorInto, type ColorMode } from '../src/color.ts';
 import { JITTER_AMPLITUDE, gridJitter } from '../src/jitter.ts';
 import type { SimChannel } from '../src/native-client.ts';
 import { PRESETS, findPreset } from '../src/presets.ts';
@@ -1226,6 +1226,9 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   const tempEuler = new THREE.Euler();
   const tempScale = new THREE.Vector3(1, 1, 1);
   const zeroScale = new THREE.Vector3(0, 0, 0);
+  // Reused RGB buffer for the alloc-free per-cell color path (see
+  // cellColorInto) — one array for the whole render loop, not one per cell.
+  const colorOut: [number, number, number] = [0, 0, 0];
   const TWO_PI = Math.PI * 2;
 
   let lastT = performance.now();
@@ -1349,8 +1352,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
       if (trackedTag !== null && originTag === trackedTag) {
         tempColor.setRGB(1, 0, 1);
       } else {
-        const [r, g, b] = cellColor(colorMode, t, appearance, originTag);
-        tempColor.setRGB(r, g, b);
+        // Alloc-free: write into the shared `colorOut` buffer instead of
+        // allocating an Rgb array per cell (×cellCount per snapshot).
+        cellColorInto(colorOut, colorMode, t, appearance, originTag);
+        tempColor.setRGB(colorOut[0], colorOut[1], colorOut[2]);
       }
       voxelMesh.setColorAt(i, tempColor);
     }

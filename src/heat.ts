@@ -11,6 +11,12 @@
 
 export type Rgb = readonly [r: number, g: number, b: number];
 
+/** A reusable RGB output buffer — the alloc-free counterpart to [`Rgb`].
+ *  The `*Into` color functions write into one of these so the per-cell
+ *  render loop can avoid allocating a fresh array per cell (which at
+ *  hundreds of thousands of cells per snapshot churned the GC). */
+export type MutableRgb = [r: number, g: number, b: number];
+
 interface HeatStop {
   readonly t: number;
   readonly rgb: Rgb;
@@ -32,6 +38,13 @@ export const HEAT_STOPS: readonly HeatStop[] = Object.freeze([
  *  HEAT_STOPS ramp. Values outside [0, 1] are clamped. The mapping is
  *  piecewise linear between adjacent stops. */
 export function heatColor(t: number): Rgb {
+  const out: MutableRgb = [0, 0, 0];
+  heatColorInto(out, t);
+  return out;
+}
+
+/** Alloc-free [`heatColor`]: write the ramp color for `t` into `out`. */
+export function heatColorInto(out: MutableRgb, t: number): void {
   const clamped = Math.max(0, Math.min(1, t));
 
   // Find the segment [i, i+1] whose lower bound is the largest stop ≤ t.
@@ -49,11 +62,9 @@ export function heatColor(t: number): Rgb {
   // last stop, `a === b` and `lerp = 0` cleanly returns `a.rgb`.
   const span = b.t - a.t;
   const lerp = a === b ? 0 : (clamped - a.t) / span;
-  return [
-    a.rgb[0] + (b.rgb[0] - a.rgb[0]) * lerp,
-    a.rgb[1] + (b.rgb[1] - a.rgb[1]) * lerp,
-    a.rgb[2] + (b.rgb[2] - a.rgb[2]) * lerp,
-  ];
+  out[0] = a.rgb[0] + (b.rgb[0] - a.rgb[0]) * lerp;
+  out[1] = a.rgb[1] + (b.rgb[1] - a.rgb[1]) * lerp;
+  out[2] = a.rgb[2] + (b.rgb[2] - a.rgb[2]) * lerp;
 }
 
 /** Translate a per-cell energy into a normalized `t ∈ [0, 1]` for the

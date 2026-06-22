@@ -105,6 +105,22 @@ describe('appearanceColor', () => {
     expect(PAINT_BLEND).toBeGreaterThan(0);
     expect(PAINT_BLEND).toBeLessThanOrEqual(1);
   });
+
+  it('blends paint over heat by exactly PAINT_BLEND at heat brightness', () => {
+    // Pins the precise blend math: result = heat + (paint − heat)·PAINT_BLEND,
+    // where paint = hsv(tagHue, HUE_SATURATION, max-channel of heat). Recompute
+    // from the building blocks so any drift in the max / blend arithmetic shows.
+    const appearance = 0x00ff_00aa;
+    const t = 0.6;
+    const heat = heatColor(t);
+    const value = Math.max(heat[0], heat[1], heat[2]);
+    const paint = hsvToRgb(tagHue(appearance), HUE_SATURATION, value);
+    expectRgbClose(appearanceColor(appearance, t), [
+      heat[0] + (paint[0] - heat[0]) * PAINT_BLEND,
+      heat[1] + (paint[1] - heat[1]) * PAINT_BLEND,
+      heat[2] + (paint[2] - heat[2]) * PAINT_BLEND,
+    ]);
+  });
 });
 
 describe('originColor', () => {
