@@ -91,20 +91,19 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     let alpha = world.gravity_alpha;
     let radius = world.gravity_radius;
 
+    // Build the per-tick blocked energy grid up front and read all
+    // neighbor energies through it — the 6-face snapshot always, and the
+    // gravitational mass stencil when gravity is on. Both skip the
+    // per-neighbor `cells.get` hash; the grid build (one hash per cell)
+    // costs less than the 6-per-cell hashing the snapshot used to do, so
+    // the gravity-off path (tests / frozen baseline) is faster too, with
+    // byte-identical neighbor energies.
+    refresh_energy_blocks(world);
+    refresh_neighbor_energies(world);
     // Gravitational mass `M = α·Σ E(c+d)/|d|` is only needed when gravity
-    // is on. On the gravity-off path the blocked energy grid and
-    // `scratch_mass` stay empty and untouched (frozen fast path), and the
-    // neighbor snapshot is built with the plain per-coord hash.
-    //
-    // On the gravity-on path the blocked grid is built once up front and
-    // shared: both the 6-face neighbor snapshot and the stencil mass
-    // gather read energies through it instead of hashing every neighbor
-    // coord into `world.cells`. Values are identical either way.
-    if gravity == 0.0 {
-        refresh_neighbor_energies(world);
-    } else {
-        refresh_energy_blocks(world);
-        refresh_neighbor_energies_blocked(world);
+    // is on; on the gravity-off path `scratch_mass` stays empty and the
+    // rate loop's frozen fast path never reads it.
+    if gravity != 0.0 {
         refresh_mass(world, alpha, radius);
     }
 
@@ -252,47 +251,6 @@ fn gamma_pow(x: f64, gamma: f64) -> f64 {
     }
 }
 
-/// Rebuild [`SparseWorld::scratch_neighbor_energies`] from the current
-/// world state. The snapshot is a `Coord → [u32; 6]` map keyed by the
-/// cell's own coordinate, where each slot holds the energy of that
-/// neighbor (0 for void).
-///
-/// Reused across the `compute_natural_rates` and `cpu_phase` phases of
-/// a single [`step`] call — both phases observe the same energies (cell
-/// `memory.len()` doesn't change inside the CPU phase), so building
-/// once saves one full snapshot pass per tick.
-///
-/// **Allocation:** the snapshot's keyset is sync'd to `world.cells` in
-/// place — stale coords dropped, missing ones inserted with all-zero
-/// arrays — so the backing storage carries over from previous ticks
-/// without per-tick allocator churn.
-///
-/// **Parallelism:** the value-fill pass is dispatched through
-/// [`crate::parallel::par_or_seq_iter_mut!`], which goes parallel via
-/// rayon on native targets once the map size crosses the helper's
-/// threshold and stays sequential otherwise. Each entry's six neighbor
-/// lookups read the immutable `world.cells` map by coord, so the
-/// parallel walk is bit-identical to a sequential one.
-fn refresh_neighbor_energies(world: &mut SparseWorld) {
-    let cells = &world.cells;
-    let snapshot = &mut world.scratch_neighbor_energies;
-    // Keyset sync: drop stale, insert empty slots for new coords.
-    snapshot.retain(|coord, _| cells.contains_key(coord));
-    snapshot.reserve(cells.len().saturating_sub(snapshot.len()));
-    for coord in cells.keys() {
-        snapshot.entry(*coord).or_default();
-    }
-
-    let body = |coord: &Coord, energies: &mut [u32; Direction::COUNT]| {
-        for &d in &Direction::ALL {
-            let neighbor_coord = coord.neighbor(d);
-            energies[d.index()] = cells.get(&neighbor_coord).map_or(0, Cell::energy);
-        }
-    };
-
-    par_or_seq_iter_mut!(snapshot, body);
-}
-
 /// Rebuild the per-tick blocked energy grid: scatter each live cell's
 /// energy into its dense `GRAV_BLOCK_SIDE³` block (see
 /// [`SparseWorld::scratch_energy_block_idx`]). `clear` keeps both the
@@ -300,9 +258,9 @@ fn refresh_neighbor_energies(world: &mut SparseWorld) {
 /// pooled block is overwritten with a fresh zeroed array on reuse, so a
 /// cell only ever sees its own slot set (the rest stay 0 = void).
 ///
-/// Built once per tick on the gravity-on path, then shared by
-/// [`refresh_neighbor_energies_blocked`] (6-face) and [`refresh_mass`]
-/// (stencil) so both skip the per-coord `cells.get` hash.
+/// Built once per tick, then shared by [`refresh_neighbor_energies`]
+/// (6-face) and [`refresh_mass`] (stencil) so both skip the per-coord
+/// `cells.get` hash. A caller must run this before either of those.
 fn refresh_energy_blocks(world: &mut SparseWorld) {
     let cells = &world.cells;
     let idx = &mut world.scratch_energy_block_idx;
@@ -325,14 +283,25 @@ fn refresh_energy_blocks(world: &mut SparseWorld) {
     }
 }
 
-/// Block-grid variant of [`refresh_neighbor_energies`]: fills the same
-/// `Coord → [u32; 6]` snapshot, but reads each face neighbor's energy
-/// from the pre-built [`refresh_energy_blocks`] grid instead of hashing
-/// every neighbor coord into `world.cells`. An interior cell's six faces
-/// share its own block, so the per-cell work collapses to ~1 block
-/// resolve plus dense reads. Used only on the gravity-on path (where the
-/// grid is built anyway); the values are identical to the hash version.
-fn refresh_neighbor_energies_blocked(world: &mut SparseWorld) {
+/// Rebuild [`SparseWorld::scratch_neighbor_energies`] — a `Coord → [u32; 6]`
+/// snapshot of each cell's six face-neighbor energies (0 for void).
+/// Reused across `compute_natural_rates` and `cpu_phase` in one [`step`]
+/// (both observe the same energies, since `memory.len()` is fixed inside
+/// the CPU phase), so building once serves both.
+///
+/// Reads energies from the pre-built [`refresh_energy_blocks`] grid
+/// rather than hashing every neighbor coord into `world.cells`: an
+/// interior cell's six faces share its own block, so the per-cell work
+/// collapses to ~1 block resolve plus dense reads. **`refresh_energy_blocks`
+/// must run first.**
+///
+/// **Allocation:** the snapshot keyset is sync'd to `world.cells` in
+/// place (stale dropped, new inserted zeroed), so storage carries across
+/// ticks. **Parallelism:** the fill is dispatched through
+/// [`crate::parallel::par_or_seq_iter_mut!`]; each entry reads only the
+/// immutable grid by coord, so the parallel walk is bit-identical to the
+/// sequential one.
+fn refresh_neighbor_energies(world: &mut SparseWorld) {
     {
         let cells = &world.cells;
         let snapshot = &mut world.scratch_neighbor_energies;
@@ -1945,9 +1914,11 @@ pub fn apply_density_coupled_mutation(world: &mut SparseWorld) {
 pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     // The neighbor-energy snapshot is shared with `compute_natural_rates`
     // when `cpu_phase` runs inside [`step`]. If a caller invokes
-    // `cpu_phase` standalone (e.g. tests), refresh it here so the read
-    // below sees fresh data.
+    // `cpu_phase` standalone (e.g. tests), rebuild it here so the read
+    // below sees fresh data — `refresh_neighbor_energies` reads the
+    // blocked grid, so build that first.
     if world.scratch_neighbor_energies.len() != world.cells.len() {
+        refresh_energy_blocks(world);
         refresh_neighbor_energies(world);
     }
 
