@@ -86,6 +86,10 @@ const worldFactory: WorldFactory = {
   },
 };
 
+// `World.metrics()` returns a fresh `Float64Array` (wasm-bindgen copies the
+// `Vec<f64>` out), so it does not alias WASM memory like the snapshot views —
+// safe to forward without the copy-before-next-call dance.
+
 const handler = createWorkerHandler({
   worldFactory,
   postMessage(msg: WorkerToMainMsg, transfer?: readonly Transferable[]) {

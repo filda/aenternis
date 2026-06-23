@@ -393,6 +393,30 @@
         <input id="mutationHalfDensity" type="range" min="0" max="200000" step="1000" value="40000">
         <span class="value" id="mutationHalfDensityVal">40000</span>
       </div>
+      <div class="row">
+        <label title="Vzorkování kódových metrik každých N ticků (O(energie) navíc). 0 = úplně vypnuto = plná rychlost.">metriky á N</label>
+        <input id="metricsEvery" type="number" value="50" min="0" max="100000">
+      </div>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary>Kódové metriky</summary>
+      <div class="body">
+      <div class="hint" style="margin-bottom: 4px;">
+        Diverzita programů živých buněk (opcode fingerprint). <code>origin_tag</code>
+        je u jednoho big-bangu vždy 1 lineáž, tak měříme kód. Vzorkování řídí
+        „metriky á N" v Configu — <strong>0 = vypnuto</strong>.
+      </div>
+      <div class="row"><span class="label">vzorek @ tick</span><span class="value" id="mTick">-</span></div>
+      <div class="row"><span class="label">buňky</span><span class="value" id="mCells">-</span></div>
+      <div class="row"><span class="label">entropie (bity)</span><span class="value" id="mEntropy">-</span></div>
+      <div class="row"><span class="label">diverzita (0–1)</span><span class="value" id="mDiversity">-</span></div>
+      <div class="row"><span class="label">typy (unikátní)</span><span class="value" id="mUnique">-</span></div>
+      <div class="hint" style="margin: 6px 0 2px;">opcode histogram (globální)</div>
+      <canvas id="mHistCanvas" width="240" height="60" style="width:100%;display:block;background:#0a0a0f;border-radius:3px;"></canvas>
+      <div class="hint" style="margin: 6px 0 2px;">entropie (zelená) &amp; diverzita (oranžová) v čase</div>
+      <canvas id="mSeriesCanvas" width="240" height="60" style="width:100%;display:block;background:#0a0a0f;border-radius:3px;"></canvas>
       </div>
     </details>
 

@@ -51,7 +51,7 @@
     feature(alloc_error_hook)
 )]
 
-use aenternis_core::{tick, Base, GenesisConfig, PossessError, SparseWorld};
+use aenternis_core::{compute_metrics, tick, Base, GenesisConfig, PossessError, SparseWorld};
 #[cfg(target_arch = "wasm32")]
 use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
@@ -495,6 +495,35 @@ impl World {
     #[must_use]
     pub fn tick(&self) -> u32 {
         u32::try_from(self.inner.tick).unwrap_or(u32::MAX)
+    }
+
+    /// Code-diversity metrics over the living population, as a flat
+    /// `Float64Array`. Layout:
+    ///
+    /// ```text
+    /// [0] cells          [2] cell_diversity (0..1)
+    /// [1] entropy_bits   [3] unique_types
+    /// [4 ..] opcode histogram, one f64 count per opcode bin
+    /// ```
+    ///
+    /// The opcode-bin count is `len - 4` (the VM's opcode count), so the
+    /// caller can recover it without a separate constant. See
+    /// `aenternis_core::metrics` — this is an `O(total_energy)` walk, so the
+    /// viewer samples it every N ticks rather than every tick (and can
+    /// disable it entirely for full speed).
+    #[must_use]
+    // Opcode counts are bounded by total energy (well under `f64`'s 2^52
+    // exact-integer range), so the count→f64 conversion is lossless here.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn metrics(&self) -> Vec<f64> {
+        let m = compute_metrics(&self.inner);
+        let mut out = Vec::with_capacity(4 + m.opcode_hist.len());
+        out.push(f64::from(m.cells));
+        out.push(m.entropy_bits);
+        out.push(m.cell_diversity);
+        out.push(f64::from(m.unique_types));
+        out.extend(m.opcode_hist.iter().map(|&c| c as f64));
+        out
     }
 
     /// Bounding box across all live cells, returned as a flat 6-element

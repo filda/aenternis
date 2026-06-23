@@ -43,6 +43,7 @@ import type {
   ConfigMsg,
   InitMsg,
   InspectMsg,
+  MetricsMsg,
   ProgramStartedMsg,
   RunProgramMsg,
   RunningMsg,
@@ -179,6 +180,14 @@ export function bootstrap(): void {
     mutationStrengthVal: requireEl('mutationStrengthVal', HTMLSpanElement),
     mutationHalfDensity: requireEl('mutationHalfDensity', HTMLInputElement),
     mutationHalfDensityVal: requireEl('mutationHalfDensityVal', HTMLSpanElement),
+    metricsEvery: requireEl('metricsEvery', HTMLInputElement),
+    mTick: requireEl('mTick', HTMLSpanElement),
+    mCells: requireEl('mCells', HTMLSpanElement),
+    mEntropy: requireEl('mEntropy', HTMLSpanElement),
+    mDiversity: requireEl('mDiversity', HTMLSpanElement),
+    mUnique: requireEl('mUnique', HTMLSpanElement),
+    mHistCanvas: requireEl('mHistCanvas', HTMLCanvasElement),
+    mSeriesCanvas: requireEl('mSeriesCanvas', HTMLCanvasElement),
     trackerEnabled: requireEl('trackerEnabled', HTMLInputElement),
     trailLen: requireEl('trailLen', HTMLInputElement),
     trailLenVal: requireEl('trailLenVal', HTMLSpanElement),
@@ -294,6 +303,8 @@ export function bootstrap(): void {
       onProgramStarted(msg);
     } else if (msg.type === 'programRejected') {
       dom.programStatus.textContent = `odmítnuto: ${msg.reason}`;
+    } else if (msg.type === 'metrics') {
+      updateMetrics(msg);
     }
   };
 
@@ -330,11 +341,22 @@ export function bootstrap(): void {
       mutationHalfDensity: config.mutationHalfDensity,
       genesisWindow: config.genesisWindow,
       genesisFertility: config.genesisFertility,
+      metricsEvery: readMetricsEvery(),
       program,
     };
     channel.postMessage(init);
     cameraFitDirty = true;
     trackerState = resetTrackerState();
+    // A new big-bang is a fresh run — drop the old metrics time series so the
+    // sparkline doesn't splice two unrelated worlds together.
+    entropySeries.length = 0;
+    diversitySeries.length = 0;
+  }
+
+  /** Metrics sampling cadence (ticks) from the Config input; `0` = off.
+   *  Viewer-only — not part of `SimConfig` (the tuner must never sample). */
+  function readMetricsEvery(): number {
+    return Math.max(0, parseInt(dom.metricsEvery.value, 10) || 0);
   }
 
   function sendConfig(): void {
@@ -352,8 +374,80 @@ export function bootstrap(): void {
       pressureEref: config.pressureEref,
       mutationStrength: config.mutationStrength,
       mutationHalfDensity: config.mutationHalfDensity,
+      metricsEvery: readMetricsEvery(),
     };
     channel.postMessage(cfg);
+  }
+
+  // Code-metrics time series (entropy + diversity), capped so a long run
+  // doesn't grow unbounded. Each `metrics` message pushes one sample.
+  const METRICS_SERIES_CAP = 300;
+  const entropySeries: number[] = [];
+  const diversitySeries: number[] = [];
+  // Max opcode entropy is log2(bin count); the histogram length tells us the
+  // count, so we normalize the sparkline against it once we've seen a sample.
+  let metricsMaxEntropy = Math.log2(31);
+
+  /** Apply one metrics sample: numeric readouts, opcode histogram bars, and
+   *  the entropy/diversity sparkline. Pure rendering — no world mutation. */
+  function updateMetrics(msg: MetricsMsg): void {
+    dom.mTick.textContent = msg.tick.toLocaleString('en-US');
+    dom.mCells.textContent = msg.cells.toLocaleString('en-US');
+    dom.mEntropy.textContent = msg.entropy.toFixed(3);
+    dom.mDiversity.textContent = msg.diversity.toFixed(4);
+    dom.mUnique.textContent = String(msg.uniqueTypes);
+
+    const bins = msg.opcodeHist.length;
+    if (bins > 0) metricsMaxEntropy = Math.log2(bins);
+    drawHistogram(dom.mHistCanvas, msg.opcodeHist);
+
+    entropySeries.push(msg.entropy);
+    diversitySeries.push(msg.diversity);
+    if (entropySeries.length > METRICS_SERIES_CAP) entropySeries.shift();
+    if (diversitySeries.length > METRICS_SERIES_CAP) diversitySeries.shift();
+    drawSeries(dom.mSeriesCanvas);
+  }
+
+  /** Draw a normalized bar-per-opcode histogram (tallest bar = full height). */
+  function drawHistogram(canvas: HTMLCanvasElement, hist: Float64Array): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { width: w, height: h } = canvas;
+    ctx.clearRect(0, 0, w, h);
+    let max = 0;
+    for (const v of hist) if (v > max) max = v;
+    if (max <= 0) return;
+    const n = hist.length;
+    const bw = w / n;
+    ctx.fillStyle = '#5ad1c8';
+    for (let i = 0; i < n; i += 1) {
+      const bh = (hist[i]! / max) * (h - 1);
+      ctx.fillRect(i * bw, h - bh, Math.max(1, bw - 0.5), bh);
+    }
+  }
+
+  /** Draw entropy (green, scaled to its max) and diversity (orange, 0..1) as
+   *  two sparklines over the captured series. */
+  function drawSeries(canvas: HTMLCanvasElement): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { width: w, height: h } = canvas;
+    ctx.clearRect(0, 0, w, h);
+    const line = (series: number[], scale: number, color: string): void => {
+      if (series.length < 2) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < series.length; i += 1) {
+        const x = (i / (series.length - 1)) * (w - 1);
+        const y = h - 1 - Math.min(1, series[i]! / scale) * (h - 2);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    };
+    line(entropySeries, metricsMaxEntropy, '#6ee06e');
+    line(diversitySeries, 1, '#e0a056');
   }
 
   function sendRunning(running: boolean): void {
@@ -1213,6 +1307,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
     dom.mutationHalfDensityVal.textContent = String(config.mutationHalfDensity);
     sendConfig();
   });
+  // Metrics cadence is a live config knob (0 = off → full speed). 'change'
+  // not 'input' so a brief keystroke like an empty field mid-edit doesn't
+  // thrash the worker.
+  dom.metricsEvery.addEventListener('change', sendConfig);
   dom.trackerEnabled.addEventListener('change', () => {
     trackerEnabled = dom.trackerEnabled.checked;
   });

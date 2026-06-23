@@ -41,6 +41,15 @@ function makeMockWorld(): WorldHandle {
     cellCount: vi.fn(() => 5),
     totalEnergy: vi.fn(() => 10_000),
     cellInspectView: vi.fn(() => new Uint32Array([0xCAFE, 0xBABE])),
+    metrics: vi.fn(() => {
+      // [cells, entropy, diversity, uniqueTypes, ...31 opcode bins]
+      const a = new Float64Array(35);
+      a[0] = 5;
+      a[1] = 2.5;
+      a[2] = 0.3;
+      a[3] = 4;
+      return a;
+    }),
     memoryReport: vi.fn(() => new Uint32Array(MEMORY_REPORT_LEN)),
     snapshotStride: 4,
     inspectPrefix: 8,
@@ -206,6 +215,49 @@ describe('createWorkerHandler — init', () => {
     h.deps.worldFactory.newWithProgram.mockReturnValueOnce(makeMockWorld());
     h.handler.handleMessage(baseInit);
     expect(firstWorld.free).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- metrics ----------------------------------------------------------------
+
+describe('createWorkerHandler — metrics sampling', () => {
+  const metricMsgs = (h: Harness): Array<Record<string, unknown>> =>
+    h.deps.postMessage.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((m) => m.type === 'metrics');
+
+  it('posts a metrics message when the cadence divides the tick', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    // Mock tick is 42; cadence 7 divides it, so one loop iteration samples.
+    h.handler.handleMessage({ ...baseInit, metricsEvery: 7 });
+    runScheduledLoop(h);
+    const msgs = metricMsgs(h);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toMatchObject({
+      type: 'metrics',
+      tick: 42,
+      cells: 5,
+      entropy: 2.5,
+      diversity: 0.3,
+      uniqueTypes: 4,
+    });
+    expect(msgs[0]!.opcodeHist).toHaveLength(31);
+  });
+
+  it('never samples when disabled (default metricsEvery = 0)', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    h.handler.handleMessage(baseInit);
+    runScheduledLoop(h);
+    expect(h.world.metrics).not.toHaveBeenCalled();
+    expect(metricMsgs(h)).toHaveLength(0);
+  });
+
+  it('skips ticks the cadence does not divide', () => {
+    const h = makeHarness({ now: makeMonotonicNow() });
+    // 42 % 5 == 2 → no sample this iteration.
+    h.handler.handleMessage({ ...baseInit, metricsEvery: 5 });
+    runScheduledLoop(h);
+    expect(h.world.metrics).not.toHaveBeenCalled();
   });
 });
 

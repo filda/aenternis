@@ -29,6 +29,7 @@ describe('DEFAULT_STATE', () => {
       pressureEref: 1.0,
       mutationStrength: 0.0,
       mutationHalfDensity: 40_000,
+      metricsEvery: 0,
     });
   });
 
@@ -64,6 +65,7 @@ describe('stateFromInit', () => {
     expect(s.pressureEref).toBe(DEFAULT_STATE.pressureEref);
     expect(s.mutationStrength).toBe(DEFAULT_STATE.mutationStrength);
     expect(s.mutationHalfDensity).toBe(DEFAULT_STATE.mutationHalfDensity);
+    expect(s.metricsEvery).toBe(DEFAULT_STATE.metricsEvery);
   });
 
   it('uses the provided gravity/pressure fields when given', () => {
@@ -77,6 +79,7 @@ describe('stateFromInit', () => {
       pressureEref: 8,
       mutationStrength: 0.001,
       mutationHalfDensity: 25_000,
+      metricsEvery: 50,
     });
     expect(s.gravity).toBe(0.2);
     expect(s.gravityAlpha).toBe(0.05);
@@ -86,6 +89,7 @@ describe('stateFromInit', () => {
     expect(s.pressureEref).toBe(8);
     expect(s.mutationStrength).toBe(0.001);
     expect(s.mutationHalfDensity).toBe(25_000);
+    expect(s.metricsEvery).toBe(50);
   });
 });
 
@@ -102,6 +106,7 @@ describe('applyConfig', () => {
     pressureEref: 4.0,
     mutationStrength: 0.0005,
     mutationHalfDensity: 30_000,
+    metricsEvery: 0,
   };
 
   const baseCfg: ConfigMsg = {
@@ -149,6 +154,7 @@ describe('applyConfig', () => {
     expect(s.pressureEref).toBe(before.pressureEref);
     expect(s.mutationStrength).toBe(before.mutationStrength);
     expect(s.mutationHalfDensity).toBe(before.mutationHalfDensity);
+    expect(s.metricsEvery).toBe(before.metricsEvery);
   });
 
   it('updates gravity/pressure fields when provided', () => {
@@ -162,6 +168,7 @@ describe('applyConfig', () => {
       pressureEref: 16,
       mutationStrength: 0.002,
       mutationHalfDensity: 12_345,
+      metricsEvery: 25,
     });
     expect(s.gravity).toBe(0.3);
     expect(s.gravityAlpha).toBe(0.06);
@@ -171,6 +178,7 @@ describe('applyConfig', () => {
     expect(s.pressureEref).toBe(16);
     expect(s.mutationStrength).toBe(0.002);
     expect(s.mutationHalfDensity).toBe(12_345);
+    expect(s.metricsEvery).toBe(25);
   });
 
   it('updates gravity to 0 when explicitly set to 0 (turning gravity off)', () => {

@@ -17,6 +17,8 @@ export interface WorkerSimState {
   readonly pressureEref: number;
   readonly mutationStrength: number;
   readonly mutationHalfDensity: number;
+  /** Code-metrics sampling cadence in ticks; `0` = disabled (full speed). */
+  readonly metricsEvery: number;
 }
 
 /** Default state. Matches the fall-back values used in the original
@@ -34,6 +36,7 @@ export const DEFAULT_STATE: WorkerSimState = Object.freeze({
   pressureEref: 1.0,
   mutationStrength: 0.0,
   mutationHalfDensity: 40_000,
+  metricsEvery: 0,
 });
 
 /** Reducer: applies an `init` message to produce the initial state.
@@ -51,6 +54,7 @@ export function stateFromInit(msg: InitMsg): WorkerSimState {
     pressureEref: msg.pressureEref ?? DEFAULT_STATE.pressureEref,
     mutationStrength: msg.mutationStrength ?? DEFAULT_STATE.mutationStrength,
     mutationHalfDensity: msg.mutationHalfDensity ?? DEFAULT_STATE.mutationHalfDensity,
+    metricsEvery: msg.metricsEvery ?? DEFAULT_STATE.metricsEvery,
   };
 }
 
@@ -73,5 +77,6 @@ export function applyConfig(state: WorkerSimState, msg: ConfigMsg): WorkerSimSta
     pressureEref: pick(msg.pressureEref, state.pressureEref),
     mutationStrength: pick(msg.mutationStrength, state.mutationStrength),
     mutationHalfDensity: pick(msg.mutationHalfDensity, state.mutationHalfDensity),
+    metricsEvery: pick(msg.metricsEvery, state.metricsEvery),
   };
 }

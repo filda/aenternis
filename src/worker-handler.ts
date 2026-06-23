@@ -9,6 +9,7 @@
 import {
   type CellDetailMsg,
   type MainToWorkerMsg,
+  type MetricsMsg,
   normalizeProgram,
   type ProgramRejectedMsg,
   type ProgramStartedMsg,
@@ -65,6 +66,11 @@ export interface WorldHandle {
   cellCount(): number;
   totalEnergy(): number;
   cellInspectView(x: number, y: number, z: number): Uint32Array;
+  /** Code-diversity metrics as a flat `Float64Array`:
+   *  `[cells, entropy_bits, cell_diversity, unique_types, ...opcodeHist]`.
+   *  Returns an owned copy (does not alias WASM memory). `O(total_energy)`,
+   *  so only called when sampling is enabled. */
+  metrics(): Float64Array;
   /** Diagnostic snapshot of every container's allocated size on the
    *  Rust-side world plus the current WASM linear-memory page count.
    *  Returns a 21-`u32` flat array; layout documented on the Rust
@@ -284,9 +290,31 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     lastMsPerTick = deps.now() - t0;
     sendSnapshot(w);
     const tick = w.tick();
+    // Code metrics are an O(total_energy) extra pass; only sample when the
+    // cadence is enabled (`0` = off → full speed) and the tick lands on it.
+    if (state.metricsEvery > 0 && tick % state.metricsEvery === 0) {
+      sendMetrics(w, tick);
+    }
     if (tick > 0 && tick % MEMORY_REPORT_EVERY === 0) {
       logMemoryReport(w);
     }
+  }
+
+  /** Compute one code-metrics sample and post it. The flat `Float64Array`
+   *  from `WorldHandle.metrics` is `[cells, entropy, diversity, uniqueTypes,
+   *  ...opcodeHist]`; the histogram tail is everything past index 4. */
+  function sendMetrics(w: WorldHandle, tick: number): void {
+    const data = w.metrics();
+    const msg: MetricsMsg = {
+      type: 'metrics',
+      tick,
+      cells: data[0]!,
+      entropy: data[1]!,
+      diversity: data[2]!,
+      uniqueTypes: data[3]!,
+      opcodeHist: data.slice(4),
+    };
+    deps.postMessage(msg, [msg.opcodeHist.buffer]);
   }
 
   function loop(): void {

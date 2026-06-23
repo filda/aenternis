@@ -33,6 +33,9 @@ export interface InitMsg {
   // Omitted fields fall back to the `GenesisConfig` defaults (256 / 1.0).
   readonly genesisWindow?: number;
   readonly genesisFertility?: number;
+  // Code-metrics sampling cadence in ticks; `0`/omitted = disabled (the
+  // worker computes nothing, full speed). See `MetricsMsg`.
+  readonly metricsEvery?: number;
   readonly program?: Uint32Array | readonly number[];
 }
 
@@ -49,6 +52,8 @@ export interface ConfigMsg {
   readonly pressureEref?: number;
   readonly mutationStrength?: number;
   readonly mutationHalfDensity?: number;
+  /** Code-metrics sampling cadence in ticks; `0` disables sampling. */
+  readonly metricsEvery?: number;
 }
 
 export interface RunningMsg {
@@ -154,13 +159,31 @@ export interface ProgramRejectedMsg {
   readonly reason: string;
 }
 
+/** Periodic code-diversity sample (see `aenternis_core::metrics`). Emitted
+ *  only when the configured `metricsEvery` cadence is non-zero. The main
+ *  thread keeps a time series and renders the readout / opcode histogram. */
+export interface MetricsMsg {
+  readonly type: 'metrics';
+  readonly tick: number;
+  readonly cells: number;
+  /** Shannon entropy of the global opcode distribution, in bits. */
+  readonly entropy: number;
+  /** Mean per-cell total-variation distance from the population mean, 0..1. */
+  readonly diversity: number;
+  /** Distinct quantized per-cell fingerprints (behavioral types). */
+  readonly uniqueTypes: number;
+  /** Global opcode counts, one entry per opcode bin. */
+  readonly opcodeHist: Float64Array;
+}
+
 export type WorkerToMainMsg =
   | ReadyMsg
   | WelcomeMsg
   | SnapshotMsg
   | CellDetailMsg
   | ProgramStartedMsg
-  | ProgramRejectedMsg;
+  | ProgramRejectedMsg
+  | MetricsMsg;
 
 // ---- Helpers ---------------------------------------------------------------
 
