@@ -155,6 +155,8 @@ export function bootstrap(): void {
     resetBtn: requireEl('resetBtn', HTMLButtonElement),
     seed: requireEl('seed', HTMLInputElement),
     energyIn: requireEl('energy_in', HTMLInputElement),
+    genesisWindow: requireEl('genesisWindow', HTMLInputElement),
+    genesisFertility: requireEl('genesisFertility', HTMLInputElement),
     coeff: requireEl('coeff', HTMLInputElement),
     coeffVal: requireEl('coeffVal', HTMLSpanElement),
     k: requireEl('k', HTMLInputElement),
@@ -326,6 +328,8 @@ export function bootstrap(): void {
       pressureEref: config.pressureEref,
       mutationStrength: config.mutationStrength,
       mutationHalfDensity: config.mutationHalfDensity,
+      genesisWindow: config.genesisWindow,
+      genesisFertility: config.genesisFertility,
       program,
     };
     channel.postMessage(init);
@@ -1123,6 +1127,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   dom.resetBtn.addEventListener('click', () => {
     config.seed = parseInt(dom.seed.value, 10) || 0;
     config.energy = parseInt(dom.energyIn.value, 10) || 0;
+    // Genesis (initial-condition) knobs are read at Reset time, like
+    // seed/energy — they reshape the origin program, not the live world.
+    config.genesisWindow = Math.max(1, parseInt(dom.genesisWindow.value, 10) || 256);
+    config.genesisFertility = Math.max(0, parseFloat(dom.genesisFertility.value) || 0);
     initPaused();
   });
   // Seed the program textarea from the shared default so the origin-cell

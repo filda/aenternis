@@ -225,6 +225,8 @@ async function captureSnapshot(): Promise<SnapshotData> {
     DEFAULT_SIM_CONFIG.seed,
     DEFAULT_SIM_CONFIG.energy,
     program ?? new Uint32Array(0),
+    DEFAULT_SIM_CONFIG.genesisWindow,
+    DEFAULT_SIM_CONFIG.genesisFertility,
   );
   applySimConfig(world, DEFAULT_SIM_CONFIG);
 

@@ -78,9 +78,16 @@ export interface WorldHandle {
 
 /** Factory shape that the handler uses to instantiate a World. The
  *  WASM-generated `World` class exposes `newWithProgram` as a static
- *  method, so a class object satisfies this interface. */
+ *  method, so a class object satisfies this interface. `window` /
+ *  `fertility` are the genesis knobs (see `GenesisConfig`). */
 export interface WorldFactory {
-  newWithProgram(seed: number, energy: number, program: Uint32Array): WorldHandle;
+  newWithProgram(
+    seed: number,
+    energy: number,
+    program: Uint32Array,
+    window: number,
+    fertility: number,
+  ): WorldHandle;
 }
 
 export interface WorkerHandlerDeps {
@@ -293,7 +300,15 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     if (msg.type === 'init') {
       if (world) world.free();
       const program = normalizeProgram(msg.program);
-      const w = deps.worldFactory.newWithProgram(msg.seed, msg.energy, program);
+      // Genesis knobs are optional on the wire; fall back to the core
+      // `GenesisConfig` defaults (256 / 1.0) when omitted.
+      const w = deps.worldFactory.newWithProgram(
+        msg.seed,
+        msg.energy,
+        program,
+        msg.genesisWindow ?? 256,
+        msg.genesisFertility ?? 1.0,
+      );
       world = w;
       state = stateFromInit(msg);
       applyStateToWorld(w, state);

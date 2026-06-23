@@ -2,7 +2,7 @@
 //! big-bang API. See `docs/genesis-plan.md`.
 
 use aenternis_core::rng::cell_seed;
-use aenternis_core::{Base, Coord, Rng, SparseWorld};
+use aenternis_core::{Base, Coord, GenesisConfig, Rng, SparseWorld};
 
 const SEED: u64 = 0xA1A2_A3A4;
 const ENERGY: u32 = 4096;
@@ -45,6 +45,40 @@ fn macro_genesis_is_not_pure_noise() {
     let macros = SparseWorld::big_bang_macros(SEED, ENERGY);
     let noise = SparseWorld::big_bang(SEED, ENERGY);
     assert_ne!(origin_memory(&macros), origin_memory(&noise));
+}
+
+#[test]
+fn big_bang_with_config_default_matches_macros() {
+    // The default config must reproduce the plain macro genesis, proving
+    // `big_bang_with` and `big_bang_with_config` share one code path.
+    let cfg = GenesisConfig::default();
+    let cfgd = SparseWorld::big_bang_with_config(SEED, ENERGY, Base::Macros, &[], &cfg);
+    let plain = SparseWorld::big_bang_macros(SEED, ENERGY);
+    assert_eq!(origin_memory(&cfgd), origin_memory(&plain));
+}
+
+#[test]
+fn big_bang_with_config_window_threads_through() {
+    // A non-default window must reshape the program — guards against the
+    // generator silently ignoring the passed config.
+    let narrow = GenesisConfig {
+        window: 8,
+        fertility: 1.0,
+    };
+    let a = SparseWorld::big_bang_with_config(SEED, ENERGY, Base::Macros, &[], &narrow);
+    let b = SparseWorld::big_bang_macros(SEED, ENERGY);
+    assert_ne!(origin_memory(&a), origin_memory(&b));
+}
+
+#[test]
+fn big_bang_with_config_fertility_threads_through() {
+    let barren = GenesisConfig {
+        window: 256,
+        fertility: 0.0,
+    };
+    let a = SparseWorld::big_bang_with_config(SEED, ENERGY, Base::Macros, &[], &barren);
+    let b = SparseWorld::big_bang_macros(SEED, ENERGY);
+    assert_ne!(origin_memory(&a), origin_memory(&b));
 }
 
 // --- Overlay (player program) ----------------------------------------------

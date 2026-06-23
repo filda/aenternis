@@ -25,6 +25,10 @@ export interface SimConfig {
   pressureEref: number;
   mutationStrength: number;
   mutationHalfDensity: number;
+  /** Genesis working-window size `A` (`ADDR` operands ∈ `[0, window)`). */
+  genesisWindow: number;
+  /** Fertility multiplier on `spread`-macro weight (0 = no propagation). */
+  genesisFertility: number;
 }
 
 /** Production default config — the "Cauldron" preset (2026-06-14): mutagenic
@@ -45,6 +49,9 @@ export const DEFAULT_SIM_CONFIG: SimConfig = Object.freeze({
   pressureEref: 50_000.0,
   mutationStrength: 1.0,
   mutationHalfDensity: 40_000,
+  // Genesis defaults = the core `GenesisConfig::default` (docs/genesis-plan.md).
+  genesisWindow: 256,
+  genesisFertility: 1.0,
 });
 
 /** Tick count for a captured static snapshot (the viewer itself runs forever;

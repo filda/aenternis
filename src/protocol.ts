@@ -28,6 +28,11 @@ export interface InitMsg {
   readonly pressureEref?: number;
   readonly mutationStrength?: number;
   readonly mutationHalfDensity?: number;
+  // Genesis (initial-condition) knobs — shape only the origin cell's
+  // generated program, so they apply on init/Reset, not via `config`.
+  // Omitted fields fall back to the `GenesisConfig` defaults (256 / 1.0).
+  readonly genesisWindow?: number;
+  readonly genesisFertility?: number;
   readonly program?: Uint32Array | readonly number[];
 }
 

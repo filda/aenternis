@@ -462,11 +462,25 @@ impl SparseWorld {
     /// rather than noise, so passively emitted slices carry real code.
     ///
     /// The macro generator uses [`GenesisConfig::default`]; callers that
-    /// need custom knobs build memory via
-    /// [`crate::genesis::generate_into`] and
-    /// [`insert_with_memory`](Self::insert_with_memory).
+    /// need custom genesis knobs (window / fertility) use
+    /// [`big_bang_with_config`](Self::big_bang_with_config).
     #[must_use]
     pub fn big_bang_with(world_seed: u64, energy: u32, base: Base, overlay: &[u32]) -> Self {
+        Self::big_bang_with_config(world_seed, energy, base, overlay, &GenesisConfig::default())
+    }
+
+    /// Like [`big_bang_with`](Self::big_bang_with) but with an explicit
+    /// [`GenesisConfig`] (the macro generator's window / fertility knobs).
+    /// `cfg` is consumed only by the [`Base::Macros`] arm; [`Base::Noise`]
+    /// ignores it. See `docs/genesis-plan.md`, A5.
+    #[must_use]
+    pub fn big_bang_with_config(
+        world_seed: u64,
+        energy: u32,
+        base: Base,
+        overlay: &[u32],
+        cfg: &GenesisConfig,
+    ) -> Self {
         // Pre-allocate the arena to exactly the world's energy — by
         // conservation, total `mem_len` never exceeds `energy`, so the
         // arena never has to grow during `step`.
@@ -501,7 +515,7 @@ impl SparseWorld {
                 // identical regardless of prefix ("comparable background").
                 Base::Macros => {
                     let mut tape = Rng::new(origin_tag);
-                    generate_into(slice, &mut tape, &GenesisConfig::default());
+                    generate_into(slice, &mut tape, cfg);
                     slice[..n_overlay].copy_from_slice(&overlay[..n_overlay]);
                 }
             }

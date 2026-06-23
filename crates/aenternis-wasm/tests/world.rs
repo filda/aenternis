@@ -18,7 +18,7 @@ fn new_constructs_world_with_initial_energy() {
 
 #[test]
 fn new_with_program_writes_prefix() {
-    let mut w = World::new_with_program(7, 16, &[0xCAFE, 0xBABE]);
+    let mut w = World::new_with_program(7, 16, &[0xCAFE, 0xBABE], 256, 1.0);
     assert_eq!(w.cell_count(), 1);
     assert_eq!(w.total_energy(), 16);
     let dump = w.cell_inspect(0, 0, 0);
@@ -30,7 +30,7 @@ fn new_with_program_writes_prefix() {
 #[test]
 fn new_with_empty_program_matches_new() {
     let mut a = World::new(42, 32);
-    let mut b = World::new_with_program(42, 32, &[]);
+    let mut b = World::new_with_program(42, 32, &[], 256, 1.0);
     let dump_a = a.cell_inspect(0, 0, 0);
     let dump_b = b.cell_inspect(0, 0, 0);
     assert_eq!(dump_a, dump_b);

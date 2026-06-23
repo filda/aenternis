@@ -108,6 +108,19 @@ describe('createWorkerHandler — init', () => {
     expect(args[2]).toHaveLength(0);
   });
 
+  it('forwards genesis window/fertility, defaulting to 256 / 1.0 when omitted', () => {
+    const h = makeHarness();
+    h.handler.handleMessage(baseInit);
+    const defaults = h.deps.worldFactory.newWithProgram.mock.calls[0]!;
+    expect(defaults[3]).toBe(256);
+    expect(defaults[4]).toBe(1.0);
+
+    h.handler.handleMessage({ ...baseInit, genesisWindow: 64, genesisFertility: 2.5 });
+    const explicit = h.deps.worldFactory.newWithProgram.mock.calls[1]!;
+    expect(explicit[3]).toBe(64);
+    expect(explicit[4]).toBe(2.5);
+  });
+
   it('normalizes a number-array program into a Uint32Array', () => {
     const h = makeHarness();
     h.handler.handleMessage({ ...baseInit, program: [0x09, 0x00, 0x00] });

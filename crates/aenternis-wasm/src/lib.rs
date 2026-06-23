@@ -51,7 +51,7 @@
     feature(alloc_error_hook)
 )]
 
-use aenternis_core::{tick, Base, PossessError, SparseWorld};
+use aenternis_core::{tick, Base, GenesisConfig, PossessError, SparseWorld};
 #[cfg(target_arch = "wasm32")]
 use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
@@ -238,11 +238,31 @@ impl World {
     /// macro genesis; a non-empty one seeds the start with the player's
     /// code. (`Base::Noise` + program remains in the core API for
     /// baselines.)
+    ///
+    /// `window` and `fertility` are the macro-generator knobs
+    /// (`GenesisConfig`): `window` is the shared working-window size `A`
+    /// for `ADDR` operands (default `256`), `fertility` scales the weight
+    /// of `spread` macros (default `1.0`, `0.0` = no propagation). They
+    /// shape only the initial program, so they take effect on construction
+    /// (a viewer Reset), not at runtime. See `docs/genesis-plan.md`.
     #[wasm_bindgen(js_name = newWithProgram)]
     #[must_use]
-    pub fn new_with_program(seed: u32, energy: u32, program: &[u32]) -> Self {
+    pub fn new_with_program(
+        seed: u32,
+        energy: u32,
+        program: &[u32],
+        window: u32,
+        fertility: f64,
+    ) -> Self {
+        let cfg = GenesisConfig { window, fertility };
         Self {
-            inner: SparseWorld::big_bang_with(u64::from(seed), energy, Base::Macros, program),
+            inner: SparseWorld::big_bang_with_config(
+                u64::from(seed),
+                energy,
+                Base::Macros,
+                program,
+                &cfg,
+            ),
             // See `World::new` for the rationale on not pre-reserving.
             snapshot_buf: Vec::new(),
             inspect_buf: Vec::new(),

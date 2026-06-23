@@ -75,8 +75,14 @@ workerGlobal.postMessage(ready);
 // static; structurally compatible with `WorldFactory`. Wrap it in a
 // thin adapter so the cast is colocated with the wasm import.
 const worldFactory: WorldFactory = {
-  newWithProgram(seed, energy, program) {
-    return World.newWithProgram(seed, energy, program) as unknown as WorldHandle;
+  newWithProgram(seed, energy, program, window, fertility) {
+    return World.newWithProgram(
+      seed,
+      energy,
+      program,
+      window,
+      fertility,
+    ) as unknown as WorldHandle;
   },
 };
 

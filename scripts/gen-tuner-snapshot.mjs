@@ -37,7 +37,13 @@ const { World } = require('../crates/aenternis-wasm/pkg-node/aenternis_wasm.js')
 const cfg = DEFAULT_SIM_CONFIG;
 const { program } = parseProgramText(DEFAULT_PROGRAM_TEXT);
 
-const world = World.newWithProgram(cfg.seed, cfg.energy, program ?? new Uint32Array(0));
+const world = World.newWithProgram(
+  cfg.seed,
+  cfg.energy,
+  program ?? new Uint32Array(0),
+  cfg.genesisWindow,
+  cfg.genesisFertility,
+);
 applySimConfig(world, cfg);
 for (let i = 0; i < CAPTURE_TICKS; i += 1) world.step(cfg.coeff, cfg.k);
 
