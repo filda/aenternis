@@ -3,7 +3,7 @@
 //! fertility {1, 20} × mutation {on, off}, sampling `compute_metrics` across
 //! early and late ticks. Not part of the gate; delete after reading.
 //!
-//!   cargo run --release --example metrics_probe
+//!   cargo run --release --example `metrics_probe`
 
 use aenternis_core::{compute_metrics, tick, Base, GenesisConfig, SparseWorld};
 
@@ -13,7 +13,7 @@ const COEFF: f64 = 0.15;
 const K: u32 = 1;
 const SAMPLE_TICKS: &[u32] = &[0, 5, 10, 20, 50, 100, 250, 650];
 
-fn cauldron(w: &mut SparseWorld, mutation: f64) {
+const fn cauldron(w: &mut SparseWorld, mutation: f64) {
     w.move_threshold = 1.0;
     w.gravity = 1.0;
     w.gravity_alpha = 0.05;

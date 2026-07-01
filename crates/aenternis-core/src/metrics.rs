@@ -159,7 +159,7 @@ pub fn compute_metrics(world: &SparseWorld) -> CodeMetrics {
             let f = scratch[op] as f64 * inv;
             abs_sum += (f - mean[op]).abs();
         }
-        tv_sum += 0.5 * abs_sum;
+        tv_sum = 0.5f64.mul_add(abs_sum, tv_sum);
     }
 
     CodeMetrics {
