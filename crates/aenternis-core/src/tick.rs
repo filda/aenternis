@@ -2155,6 +2155,68 @@ mod mutation_unit_tests {
 }
 
 #[cfg(test)]
+mod mass_gather_parity_tests {
+    //! Pins `refresh_mass` against a naive reference gather: the
+    //! blocked-grid walk (and any future optimization of it) must be
+    //! **bit-identical** to summing `E(c+d) · w(d)` per-offset in stencil
+    //! order via direct `cells.get` — exact `f64 ==` on every key, across
+    //! block boundaries and negative coords. This is the regression net
+    //! that lets the mass path be restructured safely.
+    use super::{gravity_stencil, refresh_energy_blocks, refresh_mass};
+    use crate::{Coord, Rng, SparseWorld};
+
+    /// A deterministic multi-blob world spanning several blocks,
+    /// including negative coords and block-boundary straddles.
+    fn scattered_world() -> SparseWorld {
+        let mut world = SparseWorld::with_capacity(99, 100_000);
+        let mut rng = Rng::new(0xC0FF_EE00);
+        let mut draw = |modulo: u32| i32::try_from(rng.next_u32() % modulo).expect("small");
+        for fill in 0..200u32 {
+            // Coords in [-20, 20)³ — spans ~5 blocks per axis.
+            let coord = Coord::new(draw(40) - 20, draw(40) - 20, draw(40) - 20);
+            let len = (draw(300) + 1).unsigned_abs() as usize;
+            let slots = vec![fill; len];
+            world.insert_with_memory(coord, &slots);
+        }
+        world.rebuild_indices_if_dirty();
+        world
+    }
+
+    /// Reference: the per-offset gather straight off the cells map, in
+    /// stencil order.
+    fn naive_mass(world: &SparseWorld, coord: Coord, alpha: f64, radius: i32) -> f64 {
+        let mut acc = 0.0_f64;
+        for (off, weight) in gravity_stencil(radius) {
+            let nc = Coord::new(coord.x + off.x, coord.y + off.y, coord.z + off.z);
+            let energy = world.get(nc).map_or(0, crate::Cell::energy);
+            acc += f64::from(energy) * weight;
+        }
+        alpha * acc
+    }
+
+    // `float_cmp`: exact `==` is the whole point — the walk must be
+    // bit-identical to the reference, not merely close.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn blocked_walk_is_bit_identical_to_naive_gather() {
+        let mut world = scattered_world();
+        let alpha = 0.05;
+        for radius in [1, 2, 4, 8] {
+            refresh_energy_blocks(&mut world);
+            refresh_mass(&mut world, alpha, radius);
+            assert!(!world.scratch_mass.is_empty());
+            for (coord, &mass) in &world.scratch_mass {
+                let expected = naive_mass(&world, *coord, alpha, radius);
+                assert!(
+                    mass == expected,
+                    "mass mismatch at {coord:?} (radius {radius}): got {mass} vs naive {expected}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod block_addr_tests {
     //! Pins the gravity block-grid addressing. The mapping is internal
     //! (any bijection coord→(block, local) yields identical mass, since
