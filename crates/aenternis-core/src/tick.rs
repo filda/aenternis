@@ -1886,26 +1886,68 @@ pub fn apply_density_coupled_mutation(world: &mut SparseWorld) {
     let half_density = world.mutation_half_density;
     let world_seed = world.world_seed;
     let tick = world.tick;
-    // Disjoint field borrows: read each cell's range, mutate arena slots.
-    let cells = &world.cells;
-    let arena = &mut world.arena;
-    for (coord, cell) in cells.iter() {
-        let energy = cell.energy();
-        if energy == 0 {
-            continue;
-        }
-        // Saturating density coupling: p = strength · E / (E + K). `+`/`*`/
-        // `/` are correctly rounded → portable; `E + K > 0` (E ≥ 1) so no
-        // division by zero even at K = 0 (which gives p = strength).
-        let e = f64::from(energy);
-        let p_flip = strength * e / (e + half_density);
+
+    // Pair each live cell with its disjoint arena slice — the same
+    // carving as `cpu_phase` — so the per-cell flip walks run in
+    // parallel. Sound for the same reasons: ranges never overlap (bump
+    // allocation) and each cell's RNG stream is keyed by
+    // `(world_seed, tick, coord, domain)`, not by iteration order, so
+    // any execution order produces bit-identical flips.
+    let mut meta: Vec<(Coord, u32, u32, f64)> = world
+        .cells
+        .iter()
+        .filter(|(_, cell)| cell.energy() > 0)
+        .map(|(coord, cell)| {
+            // Saturating density coupling: p = strength · E / (E + K).
+            // `+`/`*`/`/` are correctly rounded → portable; `E + K > 0`
+            // (E ≥ 1) so no division by zero even at K = 0 (which gives
+            // p = strength).
+            let e = f64::from(cell.energy());
+            let p_flip = strength * e / (e + half_density);
+            (*coord, cell.mem_start, cell.mem_len, p_flip)
+        })
+        .collect();
+    meta.sort_unstable_by_key(|&(_, start, _, _)| start);
+
+    let mut work: Vec<(Coord, f64, &mut [u32])> = Vec::with_capacity(meta.len());
+    let mut rest: &mut [u32] = world.arena.backing_mut();
+    let mut consumed: usize = 0;
+    for (coord, start, len, p_flip) in meta {
+        let (_, tail) = rest.split_at_mut(start as usize - consumed);
+        let (mine, tail) = tail.split_at_mut(len as usize);
+        rest = tail;
+        consumed = (start + len) as usize;
+        work.push((coord, p_flip, mine));
+    }
+
+    let run = |coord: &Coord, p_flip: f64, mem: &mut [u32]| {
         let mut rng = Rng::for_cell_at_tick(world_seed, tick, *coord, DENSITY_MUTATION_RNG_DOMAIN);
-        for slot in arena.slice_mut(cell.mem_start, cell.mem_len).iter_mut() {
+        for slot in mem.iter_mut() {
             if rng.next_f64() < p_flip {
                 let bit = rng.next_u32() % 32;
                 *slot ^= 1u32 << bit;
             }
         }
+    };
+
+    // Accepted-as-unkillable mutants (`cargo mutants`): the `<` threshold
+    // comparison swaps — both branches are bit-identical by design, the
+    // cutoff only trades rayon dispatch overhead against parallelism.
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
+    {
+        const MUTATION_PAR_THRESHOLD: usize = 32;
+        if work.len() < MUTATION_PAR_THRESHOLD {
+            for (coord, p_flip, mem) in &mut work {
+                run(coord, *p_flip, mem);
+            }
+        } else {
+            work.into_par_iter()
+                .for_each(|(coord, p_flip, mem)| run(&coord, p_flip, mem));
+        }
+    }
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
+    for (coord, p_flip, mem) in &mut work {
+        run(coord, *p_flip, mem);
     }
 }
 
