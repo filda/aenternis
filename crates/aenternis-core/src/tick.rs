@@ -1475,6 +1475,20 @@ pub fn outflow_phase_inplace(world: &mut SparseWorld) {
     }
     inflows.reserve(world.cells.len().saturating_sub(inflows.len()));
 
+    // Target energies come from the neighbor snapshot instead of a
+    // `cells.get` hash probe per direction (6 per source). The snapshot
+    // is built by `compute_natural_rates` at the top of this tick and the
+    // CPU phase never changes `mem_len` (instructions rewrite content,
+    // not length), so `snapshot[source][d] == cells[target].mem_len`
+    // exactly — bit-identical, one lookup per source instead of six.
+    debug_assert_eq!(
+        world.scratch_neighbor_energies.len(),
+        world.cells.len(),
+        "outflow_phase_inplace requires the neighbor snapshot from this \
+         tick's compute_natural_rates (it runs inside step after initialize)"
+    );
+    let neighbor_snapshot = &world.scratch_neighbor_energies;
+
     for (source_coord, source_cell) in world.cells.iter() {
         let mem_size = source_cell.memory_len();
         if mem_size == 0 {
@@ -1500,6 +1514,10 @@ pub fn outflow_phase_inplace(world: &mut SparseWorld) {
         let source_mem_start = source_cell.mem_start;
         let source_mem_len = source_cell.mem_len;
         let src_origin_tag = source_cell.origin_tag;
+        let target_energies = neighbor_snapshot
+            .get(source_coord)
+            .copied()
+            .unwrap_or([0; Direction::COUNT]);
 
         for &d in &Direction::ALL {
             let rate = combined[d.index()];
@@ -1508,7 +1526,7 @@ pub fn outflow_phase_inplace(world: &mut SparseWorld) {
             }
 
             let target_coord = source_coord.neighbor(d);
-            let tgt_mem_len = world.cells.get(&target_coord).map_or(0, |c| c.mem_len);
+            let tgt_mem_len = target_energies[d.index()];
             let tgt_total = per_source_total.get(&target_coord).copied().unwrap_or(0);
             let target_e_post = tgt_mem_len.saturating_sub(tgt_total);
 
@@ -1923,24 +1941,82 @@ pub fn cpu_phase(world: &mut SparseWorld, k: u32) {
     }
 
     let k_safe = k.max(1);
-    // Sequential walk in Phase 2 because each `execute_instruction`
-    // call takes `&mut Arena`, and we can't share a mutable arena
-    // borrow across rayon worker threads. Phase 3 of the arena
-    // refactor re-introduces parallelism via prefix-sum disjoint
-    // ranges into `arena_next`; for now we keep the cell ranges in
-    // a single arena and walk them one at a time.
     let snapshot = &world.scratch_neighbor_energies;
-    let cells = &mut world.cells;
-    let arena = &mut world.arena;
-    for (coord, cell) in cells.iter_mut() {
+
+    // Pair every live cell with its own disjoint slice of the arena so
+    // the interpreter can run cells in parallel. Cell ranges never
+    // overlap (bump allocation), so sorting by `mem_start` and chaining
+    // `split_at_mut` carves the backing storage safely without `unsafe`.
+    // Cells are fully independent inside the CPU phase — instructions
+    // read only the cell's own memory/registers plus the immutable
+    // neighbor snapshot, and the VM draws no RNG — so any execution
+    // order (parallel included) is bit-identical to the sequential walk.
+    let mut jobs: Vec<(Coord, &mut Cell)> = world
+        .cells
+        .iter_mut()
+        // Accepted-as-unkillable mutant (`cargo mutants`): `>` → `>=`.
+        // Empty cells are a no-op in the interpreter anyway (`mem.len()
+        // == 0` early-returns), so including them only wastes work —
+        // behaviorally equivalent, no test can distinguish it.
+        .filter(|(_, cell)| cell.mem_len > 0)
+        .map(|(coord, cell)| (*coord, cell))
+        .collect();
+    // Slot order usually matches arena order (`apply_outflow` lays the
+    // ranges out in iteration order), so this is typically a single
+    // no-swap verification pass.
+    jobs.sort_unstable_by_key(|(_, cell)| cell.mem_start);
+
+    let mut work: Vec<(Coord, &mut Cell, &mut [u32])> = Vec::with_capacity(jobs.len());
+    let mut rest: &mut [u32] = world.arena.backing_mut();
+    let mut consumed: usize = 0;
+    for (coord, cell) in jobs {
+        let start = cell.mem_start as usize;
+        let len = cell.mem_len as usize;
+        // `start >= consumed` holds because ranges are disjoint and
+        // sorted; a violation means overlapping cells and panics here
+        // (subtraction underflow / split OOB) rather than corrupting.
+        let (_, tail) = rest.split_at_mut(start - consumed);
+        let (mine, tail) = tail.split_at_mut(len);
+        rest = tail;
+        consumed = start + len;
+        work.push((coord, cell, mine));
+    }
+
+    let run = |coord: &Coord, cell: &mut Cell, mem: &mut [u32]| {
         let neighbors = snapshot
             .get(coord)
             .copied()
             .unwrap_or([0; Direction::COUNT]);
         let budget = cell.energy() / k_safe;
         for _ in 0..budget {
-            crate::vm::execute_instruction(cell, arena, &neighbors);
+            crate::vm::execute_instruction_mem(cell, mem, &neighbors);
         }
+    };
+
+    // Per-item work here is `O(cell energy)` — orders heavier than the
+    // per-entry map walks `PAR_THRESHOLD` calibrates for — so a much
+    // smaller cutoff pays; below it (tiny test worlds) rayon dispatch
+    // overhead isn't worth it.
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
+    {
+        const CPU_PAR_THRESHOLD: usize = 32;
+        // Accepted-as-unkillable mutants (`cargo mutants`): the `<`
+        // comparison swaps. Both branches are bit-identical by design
+        // (cells are independent inside the CPU phase), so which one runs
+        // is unobservable to any functional test — the threshold only
+        // trades rayon dispatch overhead against parallelism.
+        if work.len() < CPU_PAR_THRESHOLD {
+            for (coord, cell, mem) in &mut work {
+                run(coord, cell, mem);
+            }
+        } else {
+            work.into_par_iter()
+                .for_each(|(coord, cell, mem)| run(&coord, cell, mem));
+        }
+    }
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
+    for (coord, cell, mem) in &mut work {
+        run(coord, cell, mem);
     }
 }
 

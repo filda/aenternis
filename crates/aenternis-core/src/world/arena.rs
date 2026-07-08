@@ -132,6 +132,15 @@ impl Arena {
         &mut self.slots[s..e]
     }
 
+    /// The whole backing storage as one mutable slice. Used by
+    /// [`crate::tick::cpu_phase`] to split the arena into disjoint
+    /// per-cell ranges for the parallel interpreter walk — cell ranges
+    /// never overlap (bump allocation), so `split_at_mut` chains carve
+    /// it safely without `unsafe`.
+    pub(crate) fn backing_mut(&mut self) -> &mut [u32] {
+        &mut self.slots
+    }
+
     /// Single-slot read. Cheaper than [`Arena::slice`] when the
     /// caller only needs one `u32` — used by VM opcodes that read
     /// a few independent slots per instruction.

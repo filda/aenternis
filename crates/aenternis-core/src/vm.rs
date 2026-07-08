@@ -279,18 +279,62 @@ impl Opcode {
 /// uses `wrapping_add` to accumulate into `active_outflow` — the wrap
 /// is intentional, not undefined behavior; rogue programs that drive a
 /// face's outflow past `u32::MAX` just wrap around.
-#[allow(clippy::too_many_lines)] // 31 opcodes per match; splitting hurts more than it helps
 pub fn execute_instruction(
     cell: &mut Cell,
     arena: &mut Arena,
     neighbor_energies: &[u32; Direction::COUNT],
 ) {
-    let mem_size = cell.memory_len();
+    if cell.memory_len() == 0 {
+        return;
+    }
+    let mem = arena.slice_mut(cell.mem_start, cell.mem_len);
+    execute_instruction_mem(cell, mem, neighbor_energies);
+}
+
+/// `x % mem_size` for `x` built as "wrapped base + small offset": the hot
+/// path replaces a real `u32` division with a compare, and the division
+/// only runs on the rare wrap. Same value as `%` for every input —
+/// bit-identical, just cheaper. At `k = 1` the CPU phase executes
+/// `total_energy` instructions per tick and each did 4–5 of these
+/// divisions on fetch + PC advance.
+#[inline]
+const fn wrap(x: usize, mem_size: usize) -> usize {
+    if x >= mem_size {
+        x % mem_size
+    } else {
+        x
+    }
+}
+
+/// [`execute_instruction`] over the cell's memory as a raw slice.
+///
+/// This is the actual interpreter; the `Arena` entry point above just
+/// resolves the cell's slice. Taking `&mut [u32]` (instead of
+/// `&mut Arena`) is what lets [`crate::tick::cpu_phase`] hand disjoint
+/// per-cell slices to parallel workers — cell ranges never overlap (bump
+/// allocation), so no worker can observe another's memory.
+///
+/// `mem` must be the cell's full memory range (`mem.len() ==
+/// cell.energy()`); the caller guarantees it is non-empty.
+#[allow(clippy::too_many_lines)] // 31 opcodes per match; splitting hurts more than it helps
+pub(crate) fn execute_instruction_mem(
+    cell: &mut Cell,
+    mem: &mut [u32],
+    neighbor_energies: &[u32; Direction::COUNT],
+) {
+    let mem_size = mem.len();
+    debug_assert_eq!(
+        mem_size,
+        cell.memory_len(),
+        "slice must be the whole memory"
+    );
     if mem_size == 0 {
         return;
     }
+
     let pc_u = cell.pc as usize;
-    let opcode_slot = cell.memory_slot(arena, pc_u % mem_size);
+    let pc_w = wrap(pc_u, mem_size);
+    let opcode_slot = mem[pc_w];
 
     // `decode` is total — every byte folds onto a real opcode, so there is
     // no "unknown → nop" fallback. A byte `>= COUNT` executes as its folded
@@ -306,17 +350,17 @@ pub fn execute_instruction(
     // *pre-write* state. Matches the JS prototype's behaviour
     // exactly.
     let arg1 = if length >= 2 {
-        cell.memory_slot(arena, (pc_u + 1) % mem_size)
+        mem[wrap(pc_w + 1, mem_size)]
     } else {
         0
     };
     let arg2 = if length >= 3 {
-        cell.memory_slot(arena, (pc_u + 2) % mem_size)
+        mem[wrap(pc_w + 2, mem_size)]
     } else {
         0
     };
     let arg3 = if length >= 4 {
-        cell.memory_slot(arena, (pc_u + 3) % mem_size)
+        mem[wrap(pc_w + 3, mem_size)]
     } else {
         0
     };
@@ -329,37 +373,37 @@ pub fn execute_instruction(
 
         Opcode::Set => {
             let dst = (arg1 as usize) % mem_size;
-            cell.set_memory_slot(arena, dst, arg2);
+            mem[dst] = arg2;
         }
         Opcode::Copy => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let v = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, v);
+            let v = mem[src];
+            mem[dst] = v;
         }
         Opcode::Add => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.wrapping_add(rhs));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.wrapping_add(rhs);
         }
         Opcode::Sub => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.wrapping_sub(rhs));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.wrapping_sub(rhs);
         }
         Opcode::Inc => {
             let dst = (arg1 as usize) % mem_size;
-            let v = cell.memory_slot(arena, dst);
-            cell.set_memory_slot(arena, dst, v.wrapping_add(1));
+            let v = mem[dst];
+            mem[dst] = v.wrapping_add(1);
         }
         Opcode::Dec => {
             let dst = (arg1 as usize) % mem_size;
-            let v = cell.memory_slot(arena, dst);
-            cell.set_memory_slot(arena, dst, v.wrapping_sub(1));
+            let v = mem[dst];
+            mem[dst] = v.wrapping_sub(1);
         }
 
         Opcode::Jmp => {
@@ -367,20 +411,20 @@ pub fn execute_instruction(
         }
         Opcode::Jz => {
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory_slot(arena, probe) == 0 {
+            if mem[probe] == 0 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
         Opcode::Jne => {
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory_slot(arena, probe) != 0 {
+            if mem[probe] != 0 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
         Opcode::Je => {
             let a = (arg1 as usize) % mem_size;
             let b = (arg2 as usize) % mem_size;
-            if cell.memory_slot(arena, a) == cell.memory_slot(arena, b) {
+            if mem[a] == mem[b] {
                 jump_to = Some((arg3 as usize) % mem_size);
             }
         }
@@ -394,12 +438,12 @@ pub fn execute_instruction(
             let dir = (arg1 as usize) % Direction::COUNT;
             let dst = (arg2 as usize) % mem_size;
             let v = cell.pointers[dir];
-            cell.set_memory_slot(arena, dst, v);
+            mem[dst] = v;
         }
         Opcode::Setpv => {
             let dir = (arg1 as usize) % Direction::COUNT;
             let src = (arg2 as usize) % mem_size;
-            cell.pointers[dir] = cell.memory_slot(arena, src) % (mem_size as u32);
+            cell.pointers[dir] = mem[src] % (mem_size as u32);
             cell.pointer_override[dir] = true;
         }
 
@@ -411,30 +455,30 @@ pub fn execute_instruction(
             let dir = (arg1 as usize) % Direction::COUNT;
             let dst = (arg2 as usize) % mem_size;
             let v = neighbor_energies[dir];
-            cell.set_memory_slot(arena, dst, v);
+            mem[dst] = v;
         }
 
         Opcode::Ldi => {
             let b_addr = (arg2 as usize) % mem_size;
-            let runtime = cell.memory_slot(arena, b_addr) as usize;
+            let runtime = mem[b_addr] as usize;
             let src = runtime % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let v = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, v);
+            let v = mem[src];
+            mem[dst] = v;
         }
         Opcode::Sti => {
             let a_addr = (arg1 as usize) % mem_size;
             let b_addr = (arg2 as usize) % mem_size;
-            let runtime = cell.memory_slot(arena, a_addr) as usize;
+            let runtime = mem[a_addr] as usize;
             let dst = runtime % mem_size;
-            let v = cell.memory_slot(arena, b_addr);
-            cell.set_memory_slot(arena, dst, v);
+            let v = mem[b_addr];
+            mem[dst] = v;
         }
 
         Opcode::Sid => {
             let dst = (arg1 as usize) % mem_size;
             let tag = cell.origin_tag;
-            cell.set_memory_slot(arena, dst, tag);
+            mem[dst] = tag;
         }
         Opcode::Paint => {
             cell.appearance = arg1;
@@ -443,76 +487,76 @@ pub fn execute_instruction(
         Opcode::And => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs & rhs);
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs & rhs;
         }
         Opcode::Or => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs | rhs);
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs | rhs;
         }
         Opcode::Xor => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs ^ rhs);
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs ^ rhs;
         }
         Opcode::Not => {
             let dst = (arg1 as usize) % mem_size;
-            let v = cell.memory_slot(arena, dst);
-            cell.set_memory_slot(arena, dst, !v);
+            let v = mem[dst];
+            mem[dst] = !v;
         }
         Opcode::Shl => {
             // `wrapping_shl` masks the shift amount by 32 (i.e. `mem[b] % 32`),
             // matching the `& 31` in the spec and never panicking on `>= 32`.
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.wrapping_shl(rhs));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.wrapping_shl(rhs);
         }
         Opcode::Shr => {
             // Logical (unsigned) shift right; `wrapping_shr` masks by 32.
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.wrapping_shr(rhs));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.wrapping_shr(rhs);
         }
         Opcode::Mul => {
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.wrapping_mul(rhs));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.wrapping_mul(rhs);
         }
         Opcode::Div => {
             // Division by zero yields 0 — the VM has no trap mechanism, so a
             // defined deterministic result is required. See `docs/vm.md`.
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.checked_div(rhs).unwrap_or(0));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.checked_div(rhs).unwrap_or(0);
         }
         Opcode::Mod => {
             // Modulo by zero yields 0 (same rationale as `div`).
             let src = (arg2 as usize) % mem_size;
             let dst = (arg1 as usize) % mem_size;
-            let lhs = cell.memory_slot(arena, dst);
-            let rhs = cell.memory_slot(arena, src);
-            cell.set_memory_slot(arena, dst, lhs.checked_rem(rhs).unwrap_or(0));
+            let lhs = mem[dst];
+            let rhs = mem[src];
+            mem[dst] = lhs.checked_rem(rhs).unwrap_or(0);
         }
         Opcode::Jp => {
             // Signed `> 0` without an `as i32` cast (MSRV 1.85 predates
             // `u32::cast_signed`): positive two's-complement means the sign
             // bit is clear and the value is non-zero.
             let probe = (arg1 as usize) % mem_size;
-            let v = cell.memory_slot(arena, probe);
+            let v = mem[probe];
             if v != 0 && v < 0x8000_0000 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
@@ -520,14 +564,16 @@ pub fn execute_instruction(
         Opcode::Jn => {
             // Signed `< 0`: the two's-complement sign bit is set.
             let probe = (arg1 as usize) % mem_size;
-            if cell.memory_slot(arena, probe) >= 0x8000_0000 {
+            if mem[probe] >= 0x8000_0000 {
                 jump_to = Some((arg2 as usize) % mem_size);
             }
         }
     }
 
     cell.pc = jump_to.map_or_else(
-        || ((pc_u + length) % mem_size) as u32,
+        // `(pc_w + length) % m == (pc_u + length) % m` by modular identity;
+        // `wrap` gives the same value with the division only on the wrap.
+        || wrap(pc_w + length, mem_size) as u32,
         |target| target as u32,
     );
 }
