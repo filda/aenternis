@@ -18,7 +18,7 @@
     "test:mutation": "stryker run"
   },
   "dependencies": {
-    "three": "^0.185.0"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^9.6.1",
