@@ -9,6 +9,7 @@ dependencies = [
  "criterion",
  "rayon",
  "rustc-hash",
+ "serde_json",
  "wasm-bindgen-rayon",
 ]
 

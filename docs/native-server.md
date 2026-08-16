@@ -231,6 +231,16 @@ Tahle sekce čeká na první konkrétní benchmark. Hrubý odhad:
   jako WASM `World.newWithProgram`. Výběr hostitele pro
   `runProgram` je v core (`aenternis_core::find_host`), bitově
   identický s TS `src/host-select.ts`.
+- **Fyzikální parita wasm ↔ native:** zlatá fixture
+  `tests/fixtures/parity-world.json` (plně naparametrizovaný svět
+  — gravitace + pressure + mutace + makro-genesis + program
+  overlay — po 8 ticích). Nativní core ji pinuje testem
+  `crates/aenternis-core/tests/wasm_parity_fixture.rs`, zkompilovaný
+  wasm bundle testem `tests/web/wasm-native-parity.test.ts` (jede
+  přes produkční hranici `newWithProgram` + settery). Odchylka
+  kterékoliv strany = červený `./check`. Po záměrné změně fyziky
+  regeneruj: `UPDATE_PARITY_FIXTURE=1 cargo test -p aenternis-core
+  --test wasm_parity_fixture` a přežeň `./check`.
 - Snapshot fan-out přes `tokio::sync::broadcast` s
   `Arc<Vec<u8>>` — encode jednou, broadcast všem klientům
   zero-copy. Cap 64; lagging klienti tichou ztrátu starých
