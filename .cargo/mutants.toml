@@ -86,4 +86,17 @@ exclude_re = [
     # snapshot/inspect test in the wasm and server crates.
     "snapshot\\.rs:.*replace \\* with [+/] in snapshot_into",
     "snapshot\\.rs:.*replace \\+ with \\* in inspect_into",
+
+    # Wall-clock tick timing in the server actor
+    # (`WorldActor::step_and_broadcast`): the `elapsed * 1000` ms
+    # conversion and the `(1 - a) * elapsed` smoothing term. Any
+    # mutation only rescales `ms_per_tick` — a diagnostic rolling
+    # average of a nondeterministic `Instant::elapsed` measurement.
+    # There is no deterministic assertion that can distinguish
+    # `0.15 * elapsed` from `1.85 * elapsed` when `elapsed` itself
+    # varies run to run; asserting magnitude bounds would be flaky by
+    # construction. The mirrored smoothing logic *is* deterministically
+    # tested on the JS side (`worker-handler` with an injected clock),
+    # which pins the shared constant and formula.
+    "world_actor\\.rs:.*replace [*-] with [+/] in WorldActor::step_and_broadcast",
 ]

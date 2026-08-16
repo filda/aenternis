@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CELL_DETAIL_TAG,
+  METRICS_TAG,
   SNAPSHOT_TAG,
   type IncomingFromServer,
   type WebSocketLike,
@@ -228,6 +229,42 @@ describe('decodeIncoming text', () => {
   it('returns null for object without type field', () => {
     expect(decodeIncoming('{"running":true}')).toBeNull();
   });
+
+  it('parses programStarted with all coordinates and tag', () => {
+    expect(
+      decodeIncoming('{"type":"programStarted","x":-4,"y":5,"z":-6,"tag":4242}'),
+    ).toEqual({ type: 'programStarted', x: -4, y: 5, z: -6, tag: 4242 });
+  });
+
+  it('returns null for programStarted missing any numeric field', () => {
+    expect(decodeIncoming('{"type":"programStarted","x":1,"y":2,"z":3}')).toBeNull();
+    expect(decodeIncoming('{"type":"programStarted","x":1,"y":2,"tag":4}')).toBeNull();
+    expect(decodeIncoming('{"type":"programStarted","x":1,"z":3,"tag":4}')).toBeNull();
+    expect(decodeIncoming('{"type":"programStarted","y":2,"z":3,"tag":4}')).toBeNull();
+    expect(
+      decodeIncoming('{"type":"programStarted","x":"1","y":2,"z":3,"tag":4}'),
+    ).toBeNull();
+  });
+
+  it('requires the exact type tag even when the payload fields fit', () => {
+    // A wrong-typed message whose fields would satisfy the guards —
+    // pins the `type === '...'` clauses against being short-circuited.
+    expect(decodeIncoming('{"type":"bogus","x":1,"y":2,"z":3,"tag":4}')).toBeNull();
+    expect(decodeIncoming('{"type":"bogus","reason":"nope"}')).toBeNull();
+    expect(decodeIncoming('{"type":"bogus","running":true}')).toBeNull();
+  });
+
+  it('parses programRejected with a reason', () => {
+    expect(decodeIncoming('{"type":"programRejected","reason":"too big"}')).toEqual({
+      type: 'programRejected',
+      reason: 'too big',
+    });
+  });
+
+  it('returns null for programRejected without a string reason', () => {
+    expect(decodeIncoming('{"type":"programRejected"}')).toBeNull();
+    expect(decodeIncoming('{"type":"programRejected","reason":42}')).toBeNull();
+  });
 });
 
 // ---- decodeIncoming: binary -------------------------------------------------
@@ -340,6 +377,86 @@ describe('decodeIncoming binary cellDetail', () => {
     view.setUint32(13, 0, true);
     view.setUint32(17, 28, true);
     view.setUint32(21, 10, true);
+    expect(decodeIncoming(buf)).toBeNull();
+  });
+});
+
+describe('decodeIncoming binary metrics', () => {
+  /** Build a metrics frame: tag(1) + tick(4) + count(4) + f64×count. */
+  function buildMetricsFrame(tick: number, values: readonly number[]): ArrayBuffer {
+    const buf = new ArrayBuffer(9 + values.length * 8);
+    const view = new DataView(buf);
+    view.setUint8(0, METRICS_TAG);
+    view.setUint32(1, tick, true);
+    view.setUint32(5, values.length, true);
+    values.forEach((v, i) => view.setFloat64(9 + i * 8, v, true));
+    return buf;
+  }
+
+  it('parses scalars and the opcode histogram tail', () => {
+    const buf = buildMetricsFrame(250, [3, 1.5, 0.25, 2, 7, 0, 42]);
+    const msg = decodeIncoming(buf);
+    expect(msg?.type).toBe('metrics');
+    if (msg?.type !== 'metrics') return;
+    expect(msg.tick).toBe(250);
+    expect(msg.cells).toBe(3);
+    expect(msg.entropy).toBe(1.5);
+    expect(msg.diversity).toBe(0.25);
+    expect(msg.uniqueTypes).toBe(2);
+    expect(Array.from(msg.opcodeHist)).toEqual([7, 0, 42]);
+  });
+
+  it('parses an empty histogram (exactly the 4 scalars)', () => {
+    const msg = decodeIncoming(buildMetricsFrame(1, [5, 0.5, 0.125, 1]));
+    expect(msg?.type).toBe('metrics');
+    if (msg?.type !== 'metrics') return;
+    expect(msg.opcodeHist.length).toBe(0);
+  });
+
+  it('returns null if header is truncated', () => {
+    const truncated = new ArrayBuffer(5);
+    new DataView(truncated).setUint8(0, METRICS_TAG);
+    expect(decodeIncoming(truncated)).toBeNull();
+  });
+
+  it('returns null one byte short of the minimal frame', () => {
+    // 40 bytes = header + 4 scalars minus one; pins the `<` in the
+    // min-length guard (the 41-byte case is the empty-histogram test).
+    const buf = new ArrayBuffer(40);
+    new DataView(buf).setUint8(0, METRICS_TAG);
+    expect(decodeIncoming(buf)).toBeNull();
+  });
+
+  it('returns null if payload is shorter than count * 8', () => {
+    const buf = new ArrayBuffer(9 + 4 * 8);
+    const view = new DataView(buf);
+    view.setUint8(0, METRICS_TAG);
+    view.setUint32(1, 0, true);
+    view.setUint32(5, 6, true); // claims 6 values, carries 4
+    expect(decodeIncoming(buf)).toBeNull();
+  });
+
+  it('returns null when fewer than the 4 leading scalars are present', () => {
+    expect(decodeIncoming(buildMetricsFrame(1, [5, 0.5]))).toBeNull();
+  });
+
+  it('rejects a small count even when the buffer itself is long enough', () => {
+    // 41 bytes passes the min-length guard, but count=2 still claims
+    // fewer than the 4 leading scalars — pins the `count < 4` clause
+    // independently of the frame-length checks.
+    const buf = new ArrayBuffer(41);
+    const view = new DataView(buf);
+    view.setUint8(0, METRICS_TAG);
+    view.setUint32(1, 7, true);
+    view.setUint32(5, 2, true);
+    expect(decodeIncoming(buf)).toBeNull();
+  });
+
+  it('rejects a metrics-shaped body under an unknown tag', () => {
+    // A frame that WOULD be a valid metrics message except for its
+    // tag byte — pins the `tag === METRICS_TAG` dispatch itself.
+    const buf = buildMetricsFrame(250, [3, 1.5, 0.25, 2, 7]);
+    new DataView(buf).setUint8(0, 99);
     expect(decodeIncoming(buf)).toBeNull();
   });
 });

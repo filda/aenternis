@@ -51,7 +51,9 @@
     feature(alloc_error_hook)
 )]
 
-use aenternis_core::{compute_metrics, tick, Base, GenesisConfig, PossessError, SparseWorld};
+use aenternis_core::{
+    compute_metrics, snap_gamma, tick, Base, GenesisConfig, PossessError, SparseWorld,
+};
 #[cfg(target_arch = "wasm32")]
 use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
@@ -512,18 +514,11 @@ impl World {
     /// viewer samples it every N ticks rather than every tick (and can
     /// disable it entirely for full speed).
     #[must_use]
-    // Opcode counts are bounded by total energy (well under `f64`'s 2^52
-    // exact-integer range), so the count→f64 conversion is lossless here.
-    #[allow(clippy::cast_precision_loss)]
     pub fn metrics(&self) -> Vec<f64> {
-        let m = compute_metrics(&self.inner);
-        let mut out = Vec::with_capacity(4 + m.opcode_hist.len());
-        out.push(f64::from(m.cells));
-        out.push(m.entropy_bits);
-        out.push(m.cell_diversity);
-        out.push(f64::from(m.unique_types));
-        out.extend(m.opcode_hist.iter().map(|&c| c as f64));
-        out
+        // Flat layout lives in the core (`CodeMetrics::to_flat`), shared
+        // with the native server's metrics frame so JS unpacks one layout
+        // regardless of backend.
+        compute_metrics(&self.inner).to_flat()
     }
 
     /// Bounding box across all live cells, returned as a flat 6-element
@@ -802,62 +797,5 @@ impl World {
         // Layout lives in the core; see [`World::fill_snapshot_buf`].
         let coord = aenternis_core::Coord::new(x, y, z);
         aenternis_core::snapshot::inspect_into(&self.inner, coord, &mut self.inspect_buf);
-    }
-}
-
-/// Snap an arbitrary γ to the nearest portable polytropic index in
-/// `{1.0, 1.5, 2.0, 2.5, 3.0}`. The core's pressure law only evaluates
-/// these (via multiply/`sqrt` chains, all IEEE correctly-rounded), so the
-/// boundary clamps user input here rather than letting a non-portable
-/// `powf` slip into the deterministic rate path.
-fn snap_gamma(gamma: f64) -> f64 {
-    const SUPPORTED: [f64; 5] = [1.0, 1.5, 2.0, 2.5, 3.0];
-    let mut best = SUPPORTED[0];
-    let mut best_dist = (gamma - best).abs();
-    for &candidate in &SUPPORTED[1..] {
-        let dist = (gamma - candidate).abs();
-        if dist < best_dist {
-            best = candidate;
-            best_dist = dist;
-        }
-    }
-    best
-}
-
-#[cfg(test)]
-#[allow(clippy::float_cmp)] // snap targets are exactly-representable f64 values
-mod snap_gamma_tests {
-    use super::snap_gamma;
-
-    #[test]
-    fn supported_values_pass_through_unchanged() {
-        for g in [1.0, 1.5, 2.0, 2.5, 3.0] {
-            assert_eq!(snap_gamma(g), g);
-        }
-    }
-
-    #[test]
-    fn nearby_values_snap_to_the_closest_supported() {
-        assert_eq!(snap_gamma(2.1), 2.0);
-        assert_eq!(snap_gamma(2.3), 2.5);
-        assert_eq!(snap_gamma(1.7), 1.5);
-        assert_eq!(snap_gamma(2.9), 3.0);
-    }
-
-    #[test]
-    fn out_of_range_values_clamp_to_the_ends() {
-        assert_eq!(snap_gamma(0.5), 1.0);
-        assert_eq!(snap_gamma(-4.0), 1.0);
-        assert_eq!(snap_gamma(5.0), 3.0);
-        assert_eq!(snap_gamma(100.0), 3.0);
-    }
-
-    #[test]
-    fn exact_ties_resolve_to_the_lower_index() {
-        // 1.25 is equidistant from 1.0 and 1.5; the strict `<` keeps the
-        // first (lower) candidate. A `<=` would instead jump to 1.5, and
-        // 2.25 → 2.5 — so these pin the tie-break direction.
-        assert_eq!(snap_gamma(1.25), 1.0);
-        assert_eq!(snap_gamma(2.25), 2.0);
     }
 }

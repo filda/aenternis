@@ -55,7 +55,8 @@ INFO aenternis-server listening on http://127.0.0.1:8765 (ws at /sim)
 
 Server drží jednu globální `SparseWorld` instanci. Klienti, kteří
 se připojí na `ws://127.0.0.1:8765/sim`, sdílejí stejný stav —
-init/config/running/step od kteréhokoliv klienta vidí všichni.
+init/config/running/step/runProgram od kteréhokoliv klienta vidí
+všichni.
 
 ### Konfigurace
 
@@ -87,7 +88,11 @@ Bez autentizace. Použít jen na důvěryhodné síti.
   `{"type":"ready"}` JSON, hned potom `{"type":"welcome","running":<bool>}`,
   a pak začne broadcastovat snapshoty (binární frames, tag 1).
   CellDetail (binární frames, tag 2) chodí jen ke klientovi,
-  který poslal `inspect`.
+  který poslal `inspect`; stejně tak `programStarted` /
+  `programRejected` (JSON) jen ke klientovi, který poslal
+  `runProgram`. Když je zapnuté `metricsEvery`, chodí navíc
+  broadcast metrics frames (binární, tag 3) se stejným plochým
+  layoutem jako WASM `World.metrics()`.
 
 ### Vypnutí
 
@@ -127,8 +132,8 @@ WS se připojí na ten samý hostname.
 ## Sdílený svět — co to znamená
 
 Server má jednu `SparseWorld`. **Každý** control message
-(init/config/running/step/inspect) z **kteréhokoliv** klienta
-se aplikuje na ten samý svět. Důsledky:
+(init/config/running/step/inspect/runProgram) z **kteréhokoliv**
+klienta se aplikuje na ten samý svět. Důsledky:
 
 - **Reset z tabu A vidí tab B.** Tab B uvidí na příštím
   snapshotu tick=0. Pokud měl rozeditovaný program, server ho
@@ -206,6 +211,26 @@ Tahle sekce čeká na první konkrétní benchmark. Hrubý odhad:
   binární část ručně přes `to_le_bytes`/`DataView` —
   případnou chybu off-by-one chytí round-trip testy v obou
   modulech.
+- **Drift guard:** `tests/fixtures/wire-messages.json` je sdílený
+  kánon JSON zpráv. TS strana ho pinuje v
+  `tests/protocol-wire-parity.test.ts` (zprávy staví přes
+  `Required<...>`, takže nové optional pole v `src/protocol.ts`
+  shodí kompilaci testu, dokud se nedoplní i do fixture) a Rust
+  strana round-tripuje tentýž soubor přes
+  `ClientMessage`/`ServerControl` (serde neznámá pole tiše
+  ignoruje, takže knob chybějící na serveru neprojde
+  round-trip equality). Jednou už se to rozjelo — server dva
+  měsíce tiše zahazoval gravity/pressure/mutation/genesis pole
+  a jel Noise-base big bang místo makro-genesis; tyhle testy
+  existují, aby se to nemohlo opakovat potichu.
+- Sémantika parametrů se drží zrcadlem `SimParams` ↔
+  `WorkerSimState` (`src/worker-state.ts`): stejné defaulty pro
+  vynechaná pole, `init` = reset na defaulty + poslané hodnoty,
+  `config` = merge jen přítomných polí. Genesis jde přes
+  `big_bang_with_config(Base::Macros, …)` — tentýž konstruktor
+  jako WASM `World.newWithProgram`. Výběr hostitele pro
+  `runProgram` je v core (`aenternis_core::find_host`), bitově
+  identický s TS `src/host-select.ts`.
 - Snapshot fan-out přes `tokio::sync::broadcast` s
   `Arc<Vec<u8>>` — encode jednou, broadcast všem klientům
   zero-copy. Cap 64; lagging klienti tichou ztrátu starých

@@ -1,0 +1,68 @@
+{
+  "//": [
+    "Shared wire-protocol fixture — the single source both backends verify against.",
+    "TS side: tests/protocol-wire-parity.test.ts builds every message with Required<...>",
+    "  (so a new optional field in src/protocol.ts breaks the compile until this file grows it)",
+    "  and asserts encodeOutgoing / decodeIncoming match these entries.",
+    "Rust side: crates/aenternis-server/src/protocol.rs round-trips every entry through",
+    "  ClientMessage / ServerControl and asserts lossless equality (serde silently ignores",
+    "  unknown fields, so a knob missing on the Rust side fails the round-trip here).",
+    "Keep float-typed fields non-integral (1.5, not 1) so JSON number forms are unambiguous",
+    "on both sides. clientToServer mirrors MainToWorkerMsg; serverToClient mirrors the",
+    "JSON subset of WorkerToMainMsg (snapshot/cellDetail/metrics are binary frames, pinned",
+    "by the tests in native-client.test.ts and crates/aenternis-server/src/protocol.rs)."
+  ],
+  "clientToServer": [
+    {
+      "type": "init",
+      "seed": 1234,
+      "energy": 1000000,
+      "coeff": 0.5,
+      "k": 2,
+      "moveThreshold": 1.5,
+      "gravity": 1.5,
+      "gravityAlpha": 0.25,
+      "gravityRadius": 4,
+      "pressure": 0.125,
+      "pressureGamma": 2.5,
+      "pressureEref": 50000.5,
+      "mutationStrength": 0.75,
+      "mutationHalfDensity": 40000.5,
+      "genesisWindow": 512,
+      "genesisFertility": 1.5,
+      "metricsEvery": 25,
+      "program": [1, 2, 3]
+    },
+    {
+      "type": "config",
+      "coeff": 0.25,
+      "k": 3,
+      "moveThreshold": 2.5,
+      "gravity": 0.5,
+      "gravityAlpha": 0.125,
+      "gravityRadius": 2,
+      "pressure": 0.375,
+      "pressureGamma": 1.5,
+      "pressureEref": 25000.5,
+      "mutationStrength": 0.5,
+      "mutationHalfDensity": 30000.5,
+      "metricsEvery": 10
+    },
+    { "type": "running", "running": true },
+    { "type": "step" },
+    { "type": "inspect", "x": -1, "y": 2, "z": 3 },
+    {
+      "type": "runProgram",
+      "code": [7, 8, 9],
+      "reserve": 16,
+      "tag": 4242,
+      "appearance": 99
+    }
+  ],
+  "serverToClient": [
+    { "type": "ready" },
+    { "type": "welcome", "running": true },
+    { "type": "programStarted", "x": -4, "y": 5, "z": -6, "tag": 4242 },
+    { "type": "programRejected", "reason": "no host cell with energy >= 19" }
+  ]
+}

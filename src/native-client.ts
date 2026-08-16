@@ -14,10 +14,11 @@
 //   single JSON text frame. Optional `program: Uint32Array` is
 //   widened to a plain `number[]` first because `JSON.stringify` of a
 //   typed array produces an indexed object, not an array.
-// - **Inbound (server → client)**: text frames are JSON `{ type:
-//   'ready' }` or `{ type: 'welcome', running: boolean }`. Binary
-//   frames are tagged little-endian byte streams (tag 1 = snapshot,
-//   tag 2 = cellDetail) — see `decodeBinaryFrame` for the layout.
+// - **Inbound (server → client)**: text frames are JSON control
+//   messages (`ready`, `welcome`, `programStarted`, `programRejected`).
+//   Binary frames are tagged little-endian byte streams (tag 1 =
+//   snapshot, tag 2 = cellDetail, tag 3 = metrics) — see
+//   `decodeBinaryFrame` for the layouts.
 //
 // ## Open-state buffering
 //
@@ -32,6 +33,9 @@
 import type {
   CellDetailMsg,
   MainToWorkerMsg,
+  MetricsMsg,
+  ProgramRejectedMsg,
+  ProgramStartedMsg,
   ReadyMsg,
   SnapshotMsg,
   WelcomeMsg,
@@ -39,7 +43,14 @@ import type {
 } from './protocol.ts';
 
 /** Discriminated union the viewer reads off `onmessage.data`. */
-export type IncomingFromServer = ReadyMsg | WelcomeMsg | SnapshotMsg | CellDetailMsg;
+export type IncomingFromServer =
+  | ReadyMsg
+  | WelcomeMsg
+  | SnapshotMsg
+  | CellDetailMsg
+  | ProgramStartedMsg
+  | ProgramRejectedMsg
+  | MetricsMsg;
 
 /** Subset of the browser `WebSocket` API the channel actually uses.
  *  Defined as an interface so tests can supply a mock implementation
@@ -71,6 +82,8 @@ export interface SimChannel {
 export const SNAPSHOT_TAG = 1;
 /** Tag byte for cellDetail binary frames (matches server `CELL_DETAIL_TAG`). */
 export const CELL_DETAIL_TAG = 2;
+/** Tag byte for code-metrics binary frames (matches server `METRICS_TAG`). */
+export const METRICS_TAG = 3;
 
 /** Construct a [`SimChannel`] talking to `aenternis-server` at `url`.
  *
@@ -142,7 +155,9 @@ export function decodeIncoming(data: string | ArrayBuffer): IncomingFromServer |
   return decodeBinaryFrame(data);
 }
 
-function decodeTextFrame(text: string): ReadyMsg | WelcomeMsg | null {
+function decodeTextFrame(
+  text: string,
+): ReadyMsg | WelcomeMsg | ProgramStartedMsg | ProgramRejectedMsg | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -150,10 +165,30 @@ function decodeTextFrame(text: string): ReadyMsg | WelcomeMsg | null {
     return null;
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
-  const obj = parsed as { readonly type?: unknown; readonly running?: unknown };
+  const obj = parsed as {
+    readonly type?: unknown;
+    readonly running?: unknown;
+    readonly x?: unknown;
+    readonly y?: unknown;
+    readonly z?: unknown;
+    readonly tag?: unknown;
+    readonly reason?: unknown;
+  };
   if (obj.type === 'ready') return { type: 'ready' };
   if (obj.type === 'welcome' && typeof obj.running === 'boolean') {
     return { type: 'welcome', running: obj.running };
+  }
+  if (
+    obj.type === 'programStarted' &&
+    typeof obj.x === 'number' &&
+    typeof obj.y === 'number' &&
+    typeof obj.z === 'number' &&
+    typeof obj.tag === 'number'
+  ) {
+    return { type: 'programStarted', x: obj.x, y: obj.y, z: obj.z, tag: obj.tag };
+  }
+  if (obj.type === 'programRejected' && typeof obj.reason === 'string') {
+    return { type: 'programRejected', reason: obj.reason };
   }
   return null;
 }
@@ -181,8 +216,21 @@ function decodeTextFrame(text: string): ReadyMsg | WelcomeMsg | null {
  *  dataLen  u32 @ 21
  *  data     u32×dataLen @ 25..
  *  ```
+ *
+ *  Metrics frame layout (payload = the flat `CodeMetrics::to_flat`
+ *  order `[cells, entropy, diversity, uniqueTypes, ...opcodeHist]`,
+ *  identical to the WASM `World.metrics()` array):
+ *
+ *  ```text
+ *  tag      u8  @ 0
+ *  tick     u32 @ 1
+ *  count    u32 @ 5
+ *  values   f64×count @ 9..
+ *  ```
  */
-function decodeBinaryFrame(buf: ArrayBuffer): SnapshotMsg | CellDetailMsg | null {
+function decodeBinaryFrame(
+  buf: ArrayBuffer,
+): SnapshotMsg | CellDetailMsg | MetricsMsg | null {
   if (buf.byteLength < 1) return null;
   const view = new DataView(buf);
   const tag = view.getUint8(0);
@@ -219,6 +267,30 @@ function decodeBinaryFrame(buf: ArrayBuffer): SnapshotMsg | CellDetailMsg | null
     return { type: 'cellDetail', x, y, z, tick, data, prefix };
   }
 
+  if (tag === METRICS_TAG) {
+    // Shortest well-formed frame carries the 4 leading scalars; the
+    // combined bound (not the bare 9-byte header) keeps the check
+    // observable — a 41-byte frame is valid, a 40-byte one is not.
+    if (buf.byteLength < METRICS_MIN_LEN) return null;
+    const tick = view.getUint32(1, true);
+    const count = view.getUint32(5, true);
+    if (count < 4 || buf.byteLength < METRICS_HEADER_LEN + count * 8) return null;
+    // `slice` re-bases the payload to offset 0 of a fresh buffer —
+    // required because 9 is not 8-byte-aligned for a Float64Array view.
+    const values = new Float64Array(
+      buf.slice(METRICS_HEADER_LEN, METRICS_HEADER_LEN + count * 8),
+    );
+    return {
+      type: 'metrics',
+      tick,
+      cells: values[0]!,
+      entropy: values[1]!,
+      diversity: values[2]!,
+      uniqueTypes: values[3]!,
+      opcodeHist: values.slice(4),
+    };
+  }
+
   return null;
 }
 
@@ -229,3 +301,10 @@ const SNAPSHOT_HEADER_LEN = 49;
 /** CellDetail header: tag(1) + x(4) + y(4) + z(4) + tick(4) +
  *  prefix(4) + dataLen(4) = 25 bytes. */
 const CELL_DETAIL_HEADER_LEN = 25;
+
+/** Metrics header: tag(1) + tick(4) + count(4) = 9 bytes. */
+const METRICS_HEADER_LEN = 9;
+
+/** Shortest well-formed metrics frame: header + the 4 leading scalar
+ *  f64s (cells, entropy, diversity, uniqueTypes) = 9 + 32 bytes. */
+const METRICS_MIN_LEN = 41;

@@ -1070,3 +1070,68 @@ impl<'a> IntoIterator for &'a mut SparseWorld {
         self.cells.iter_mut()
     }
 }
+
+/// Snap an arbitrary γ to the nearest portable polytropic index in
+/// `{1.0, 1.5, 2.0, 2.5, 3.0}`.
+///
+/// The pressure law only evaluates these (via multiply/`sqrt` chains,
+/// all IEEE correctly-rounded), so the rate path stays bit-for-bit
+/// reproducible across native and wasm. Arbitrary γ would need a
+/// non-portable `powf` and is out of scope.
+///
+/// Every boundary that writes [`SparseWorld::pressure_gamma`] from user
+/// input (the WASM `setPressureGamma` setter and the native server's
+/// config path) clamps through this single definition, so both backends
+/// snap identically. Exact ties resolve to the lower candidate.
+#[must_use]
+pub fn snap_gamma(gamma: f64) -> f64 {
+    const SUPPORTED: [f64; 5] = [1.0, 1.5, 2.0, 2.5, 3.0];
+    let mut best = SUPPORTED[0];
+    let mut best_dist = (gamma - best).abs();
+    for &candidate in &SUPPORTED[1..] {
+        let dist = (gamma - candidate).abs();
+        if dist < best_dist {
+            best = candidate;
+            best_dist = dist;
+        }
+    }
+    best
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)] // snap targets are exactly-representable f64 values
+mod snap_gamma_tests {
+    use super::snap_gamma;
+
+    #[test]
+    fn supported_values_pass_through_unchanged() {
+        for g in [1.0, 1.5, 2.0, 2.5, 3.0] {
+            assert_eq!(snap_gamma(g), g);
+        }
+    }
+
+    #[test]
+    fn nearby_values_snap_to_the_closest_supported() {
+        assert_eq!(snap_gamma(2.1), 2.0);
+        assert_eq!(snap_gamma(2.3), 2.5);
+        assert_eq!(snap_gamma(1.7), 1.5);
+        assert_eq!(snap_gamma(2.9), 3.0);
+    }
+
+    #[test]
+    fn out_of_range_values_clamp_to_the_ends() {
+        assert_eq!(snap_gamma(0.5), 1.0);
+        assert_eq!(snap_gamma(-4.0), 1.0);
+        assert_eq!(snap_gamma(5.0), 3.0);
+        assert_eq!(snap_gamma(100.0), 3.0);
+    }
+
+    #[test]
+    fn exact_ties_resolve_to_the_lower_index() {
+        // 1.25 is equidistant from 1.0 and 1.5; the strict `<` keeps the
+        // first (lower) candidate. A `<=` would instead jump to 1.5, and
+        // 2.25 → 2.5 — so these pin the tie-break direction.
+        assert_eq!(snap_gamma(1.25), 1.0);
+        assert_eq!(snap_gamma(2.25), 2.0);
+    }
+}

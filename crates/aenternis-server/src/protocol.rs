@@ -21,7 +21,16 @@
 //! cellDetail = [u8 tag=2][i32 x][i32 y][i32 z][u32 tick]
 //!              [u32 prefix][u32 dataLen]
 //!              [u32 \u{00d7} dataLen]
+//!
+//! metrics    = [u8 tag=3][u32 tick][u32 count]
+//!              [f64 \u{00d7} count]
 //! ```
+//!
+//! The metrics payload is the flat layout of
+//! `aenternis_core::CodeMetrics::to_flat` (`[cells, entropy,
+//! diversity, uniqueTypes, ...opcodeHist]`) — identical to what the
+//! WASM `World::metrics` hands the worker, so JS unpacks one layout
+//! regardless of backend.
 //!
 //! `stride` and `prefix` are constants today (6 and 28 respectively),
 //! sent in-band so the parser doesn't need to recompile to keep up
@@ -29,50 +38,135 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Full `init` payload — a field-for-field mirror of `InitMsg` in
+/// `src/protocol.ts`. Every physics / genesis / sampling knob the WASM
+/// worker accepts must exist here too, or the native backend silently
+/// simulates a different world than the viewer asked for (that drift
+/// happened once; the shared-fixture test below now pins the mirror).
+///
+/// `Serialize` exists for that fixture test only: round-tripping the
+/// canonical JSON through this struct proves no field is silently
+/// dropped by serde's ignore-unknown-fields default.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InitMsg {
+    /// PRNG seed for the big bang.
+    pub(crate) seed: u32,
+    /// Total starting energy at the origin cell.
+    pub(crate) energy: u32,
+    /// Diffusion coefficient passed to `tick::step`.
+    pub(crate) coeff: f64,
+    /// CPU compute constant `k` (`instructions_per_cell = floor(energy / k)`).
+    pub(crate) k: u32,
+    /// Optional override of the world's `move_threshold`.
+    #[serde(default)]
+    pub(crate) move_threshold: Option<f32>,
+    /// Gravity coupling strength (omitted = off).
+    #[serde(default)]
+    pub(crate) gravity: Option<f64>,
+    /// Mass coupling `alpha` in `m = alpha · E`.
+    #[serde(default)]
+    pub(crate) gravity_alpha: Option<f64>,
+    /// Gravity cutoff radius `R`.
+    #[serde(default)]
+    pub(crate) gravity_radius: Option<i32>,
+    /// Pressure amplitude (omitted = off).
+    #[serde(default)]
+    pub(crate) pressure: Option<f64>,
+    /// Polytropic index γ; snapped to the portable set on apply.
+    #[serde(default)]
+    pub(crate) pressure_gamma: Option<f64>,
+    /// Reference energy `eref` for the pressure law.
+    #[serde(default)]
+    pub(crate) pressure_eref: Option<f64>,
+    /// Density-coupled mutation ceiling (omitted = off).
+    #[serde(default)]
+    pub(crate) mutation_strength: Option<f64>,
+    /// Half-saturation density `K` for the mutation curve.
+    #[serde(default)]
+    pub(crate) mutation_half_density: Option<f64>,
+    /// Genesis working-window size `A` (construction-time only).
+    #[serde(default)]
+    pub(crate) genesis_window: Option<u32>,
+    /// Genesis fertility multiplier (construction-time only).
+    #[serde(default)]
+    pub(crate) genesis_fertility: Option<f64>,
+    /// Code-metrics sampling cadence in ticks; `0`/omitted = disabled.
+    #[serde(default)]
+    pub(crate) metrics_every: Option<u32>,
+    /// Optional program prefix overlaid on the origin cell's
+    /// macro-genesis memory.
+    #[serde(default)]
+    pub(crate) program: Vec<u32>,
+}
+
+/// Full `config` payload — mirror of `ConfigMsg` in `src/protocol.ts`.
+/// `coeff` / `k` always apply; every optional field updates only when
+/// present (an explicit `0` still applies), matching the worker's
+/// `applyConfig` reducer. Genesis knobs are deliberately absent — they
+/// shape only the initial program, so they exist on `init` alone.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigMsg {
+    /// Diffusion coefficient passed to `tick::step`.
+    pub(crate) coeff: f64,
+    /// CPU compute constant `k`.
+    pub(crate) k: u32,
+    /// See the matching [`InitMsg`] fields for knob semantics.
+    #[serde(default)]
+    pub(crate) move_threshold: Option<f32>,
+    #[serde(default)]
+    pub(crate) gravity: Option<f64>,
+    #[serde(default)]
+    pub(crate) gravity_alpha: Option<f64>,
+    #[serde(default)]
+    pub(crate) gravity_radius: Option<i32>,
+    #[serde(default)]
+    pub(crate) pressure: Option<f64>,
+    #[serde(default)]
+    pub(crate) pressure_gamma: Option<f64>,
+    #[serde(default)]
+    pub(crate) pressure_eref: Option<f64>,
+    #[serde(default)]
+    pub(crate) mutation_strength: Option<f64>,
+    #[serde(default)]
+    pub(crate) mutation_half_density: Option<f64>,
+    #[serde(default)]
+    pub(crate) metrics_every: Option<u32>,
+}
+
+/// `runProgram` payload — mirror of `RunProgramMsg` in
+/// `src/protocol.ts` (Project Pilgrim "Run Program"). The server picks
+/// an eligible host via `aenternis_core::find_host` (the same
+/// energy-weighted-periphery rule the worker applies in
+/// `src/host-select.ts`) and `possess`es it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RunProgramMsg {
+    /// Program written over the host's leading slots.
+    pub(crate) code: Vec<u32>,
+    /// Extra slots the host must have beyond the program.
+    pub(crate) reserve: u32,
+    /// `origin_tag` stamped on the host (lineage marker).
+    pub(crate) tag: u32,
+    /// `appearance` stamped on the host (war-paint / color).
+    pub(crate) appearance: u32,
+}
+
 /// Inbound control message from the viewer. Mirrors
 /// `MainToWorkerMsg` in `src/protocol.ts`: identical `type` tags and
-/// camelCase field names.
-///
-/// `rename_all = "camelCase"` is applied **twice** — once on the enum
-/// (renames variant tags: `Init` → `init`, etc.) and once on each
-/// struct-shaped variant (renames its fields: `move_threshold` →
-/// `moveThreshold`). The enum-level attribute does *not* descend into
-/// variant fields, so without the per-variant attributes serde would
-/// look for the `snake_case` field name and silently default to
-/// `None`/empty for the one we actually receive.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+/// camelCase field names. The struct-shaped variants live as named
+/// types above so the actor's `Command` enum can carry them without
+/// re-listing every field.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum ClientMessage {
-    /// Reset the shared world with the given seed/energy and an
-    /// optional program prefix written into the origin cell's memory.
-    /// Affects every connected client \u{2014} this is a global reset.
-    #[serde(rename_all = "camelCase")]
-    Init {
-        /// PRNG seed for `SparseWorld::big_bang`.
-        seed: u32,
-        /// Total starting energy at the origin cell.
-        energy: u32,
-        /// Diffusion coefficient passed to `tick::step`.
-        coeff: f64,
-        /// CPU compute constant `k` (`instructions_per_cell = floor(energy / k)`).
-        k: u32,
-        /// Optional override of the world's `move_threshold` (default 2.0).
-        #[serde(default)]
-        move_threshold: Option<f32>,
-        /// Optional program prefix written verbatim into the origin
-        /// cell's memory before the deterministic RNG fills the rest.
-        #[serde(default)]
-        program: Vec<u32>,
-    },
+    /// Reset the shared world. Affects every connected client \u{2014}
+    /// this is a global reset.
+    Init(InitMsg),
     /// Update tick-time parameters in place \u{2014} the world's state
     /// is not touched.
-    #[serde(rename_all = "camelCase")]
-    Config {
-        coeff: f64,
-        k: u32,
-        #[serde(default)]
-        move_threshold: Option<f32>,
-    },
+    Config(ConfigMsg),
     /// Resume (`true`) or pause (`false`) the autonomous tick loop.
     Running { running: bool },
     /// Single-step: advance the world by exactly one tick and emit
@@ -82,11 +176,16 @@ pub(crate) enum ClientMessage {
     /// is a binary cellDetail frame addressed back to the requesting
     /// client only.
     Inspect { x: i32, y: i32, z: i32 },
+    /// Inject a program into the running world. The reply
+    /// (`programStarted` / `programRejected`) is a JSON text frame
+    /// addressed back to the requesting client only; the world change
+    /// itself reaches everyone via the next snapshot broadcast.
+    RunProgram(RunProgramMsg),
 }
 
-/// Outbound JSON control message to the viewer. Snapshot and
-/// cellDetail are binary frames, encoded by [`encode_snapshot_frame`]
-/// and [`encode_cell_detail_frame`].
+/// Outbound JSON control message to the viewer. Snapshot, cellDetail
+/// and metrics are binary frames, encoded by the `encode_*` helpers
+/// below.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(crate) enum ServerControl {
@@ -96,6 +195,14 @@ pub(crate) enum ServerControl {
     /// `running` is needed; the rest of the welcome state arrives
     /// implicitly with the next snapshot frame.
     Welcome { running: bool },
+    /// Reply to a successful `runProgram`: the program was injected
+    /// into the cell at `(x, y, z)`, stamped with `tag`. Mirrors
+    /// `ProgramStartedMsg` in `src/protocol.ts`.
+    ProgramStarted { x: i32, y: i32, z: i32, tag: u32 },
+    /// Reply to a `runProgram` that could not be honored — no cell
+    /// was large enough to host the program. Nothing was changed.
+    /// Mirrors `ProgramRejectedMsg` in `src/protocol.ts`.
+    ProgramRejected { reason: String },
 }
 
 /// Tag byte for a snapshot binary frame.
@@ -103,6 +210,9 @@ pub const SNAPSHOT_TAG: u8 = 1;
 
 /// Tag byte for a cellDetail binary frame.
 pub(crate) const CELL_DETAIL_TAG: u8 = 2;
+
+/// Tag byte for a code-metrics binary frame.
+pub(crate) const METRICS_TAG: u8 = 3;
 
 /// Snapshot stride: number of `u32` fields per cell in the snapshot
 /// payload.
@@ -218,6 +328,22 @@ pub(crate) fn encode_cell_detail_frame_into(out: &mut Vec<u8>, frame: &CellDetai
     write_u32_slice_le(out, frame.data);
 }
 
+/// Encode a code-metrics binary frame into a fresh `Vec<u8>`.
+/// `values` is the flat `CodeMetrics::to_flat` layout; metrics frames
+/// are small (a few dozen `f64`s) and infrequent (every
+/// `metricsEvery` ticks), so no buffer-recycling variant is needed.
+pub(crate) fn encode_metrics_frame(tick: u32, values: &[f64]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 4 + 4 + values.len() * 8);
+    out.push(METRICS_TAG);
+    out.extend_from_slice(&tick.to_le_bytes());
+    let count = u32::try_from(values.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&count.to_le_bytes());
+    for v in values {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
 /// Append `slice` as little-endian bytes to `out`. `resize` reserves
 /// the full output region in one step, then a tight indexed loop
 /// stores four bytes per element via `copy_from_slice` — the compiler
@@ -236,44 +362,103 @@ fn write_u32_slice_le(out: &mut Vec<u8>, slice: &[u32]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_cell_detail_frame, encode_cell_detail_frame_into, encode_snapshot_frame,
-        encode_snapshot_frame_into, CellDetailFrame, ClientMessage, ServerControl, SnapshotFrame,
-        CELL_DETAIL_TAG, INSPECT_PREFIX, SNAPSHOT_STRIDE, SNAPSHOT_TAG,
+        encode_cell_detail_frame, encode_cell_detail_frame_into, encode_metrics_frame,
+        encode_snapshot_frame, encode_snapshot_frame_into, CellDetailFrame, ClientMessage,
+        ServerControl, SnapshotFrame, CELL_DETAIL_TAG, INSPECT_PREFIX, METRICS_TAG,
+        SNAPSHOT_STRIDE, SNAPSHOT_TAG,
     };
 
     // -- JSON layer -----------------------------------------------------------
 
+    /// Shared wire fixture — the canonical JSON forms of every control
+    /// message, checked byte-for-byte on the TS side too
+    /// (`tests/protocol-wire-parity.test.ts`). Editing `src/protocol.ts`
+    /// without mirroring the change here fails one side or the other,
+    /// which is the whole point: the two backends can no longer drift
+    /// silently.
+    const WIRE_FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/wire-messages.json"
+    ));
+
+    fn fixture_section(section: &str) -> Vec<serde_json::Value> {
+        let root: serde_json::Value = serde_json::from_str(WIRE_FIXTURE).expect("fixture parses");
+        root.get(section)
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("fixture has array section {section:?}"))
+            .clone()
+    }
+
+    #[test]
+    fn every_client_fixture_message_round_trips_losslessly() {
+        // Round-trip = deserialize into `ClientMessage`, serialize back,
+        // compare `Value`s. Serde ignores unknown JSON fields by default,
+        // so a field the viewer sends but this enum lacks would vanish in
+        // the re-serialization and fail the equality — exactly the silent
+        // parameter drop this test exists to catch.
+        let entries = fixture_section("clientToServer");
+        assert_eq!(entries.len(), 6, "one fixture entry per MainToWorkerMsg");
+        for entry in entries {
+            let msg: ClientMessage = serde_json::from_value(entry.clone())
+                .unwrap_or_else(|e| panic!("fixture entry must parse: {e}\n{entry}"));
+            let back = serde_json::to_value(&msg).expect("ClientMessage serializes");
+            assert_eq!(back, entry, "lossless round-trip for {entry}");
+        }
+    }
+
+    #[test]
+    fn every_server_fixture_message_matches_serialization() {
+        // The outbound direction: each fixture entry must be exactly what
+        // `ServerControl` serializes to, so the TS decoder (which parses
+        // the same fixture) stays in lock-step with the server encoder.
+        let entries = fixture_section("serverToClient");
+        assert_eq!(entries.len(), 4, "one fixture entry per JSON server msg");
+        for entry in entries {
+            let control = match entry["type"].as_str().expect("type tag") {
+                "ready" => ServerControl::Ready,
+                "welcome" => ServerControl::Welcome {
+                    running: entry["running"].as_bool().expect("running"),
+                },
+                "programStarted" => ServerControl::ProgramStarted {
+                    x: i32::try_from(entry["x"].as_i64().expect("x")).unwrap(),
+                    y: i32::try_from(entry["y"].as_i64().expect("y")).unwrap(),
+                    z: i32::try_from(entry["z"].as_i64().expect("z")).unwrap(),
+                    tag: u32::try_from(entry["tag"].as_u64().expect("tag")).unwrap(),
+                },
+                "programRejected" => ServerControl::ProgramRejected {
+                    reason: entry["reason"].as_str().expect("reason").to_owned(),
+                },
+                other => panic!("unknown serverToClient fixture type {other:?}"),
+            };
+            let json = serde_json::to_value(&control).expect("ServerControl serializes");
+            assert_eq!(json, entry);
+        }
+    }
+
     #[test]
     fn parse_init_full() {
-        // Pick float values whose IEEE-754 representation is exact in
-        // both f32 and f64 (powers of two and their sums) so we can
-        // assert by `to_bits()` without tolerance gymnastics.
-        let json = r#"{
-            "type": "init",
-            "seed": 1234,
-            "energy": 10,
-            "coeff": 0.5,
-            "k": 1,
-            "moveThreshold": 1.5,
-            "program": [1, 2, 3]
-        }"#;
-        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        // The full-fields init lives in the shared fixture; this test
+        // pins a handful of representative values by exact bits.
+        let entries = fixture_section("clientToServer");
+        let init = entries
+            .iter()
+            .find(|e| e["type"] == "init")
+            .expect("fixture has an init entry");
+        let msg: ClientMessage = serde_json::from_value(init.clone()).unwrap();
         match msg {
-            ClientMessage::Init {
-                seed,
-                energy,
-                coeff,
-                k,
-                move_threshold,
-                program,
-            } => {
-                assert_eq!(seed, 1234);
-                assert_eq!(energy, 10);
-                assert_eq!(coeff.to_bits(), 0.5_f64.to_bits());
-                assert_eq!(k, 1);
-                let mt = move_threshold.expect("moveThreshold parses to Some");
+            ClientMessage::Init(init) => {
+                assert_eq!(init.seed, 1234);
+                assert_eq!(init.energy, 1_000_000);
+                assert_eq!(init.coeff.to_bits(), 0.5_f64.to_bits());
+                assert_eq!(init.k, 2);
+                let mt = init.move_threshold.expect("moveThreshold parses to Some");
                 assert_eq!(mt.to_bits(), 1.5_f32.to_bits());
-                assert_eq!(program, vec![1, 2, 3]);
+                let gravity = init.gravity.expect("gravity parses to Some");
+                assert_eq!(gravity.to_bits(), 1.5_f64.to_bits());
+                assert_eq!(init.gravity_radius, Some(4));
+                assert_eq!(init.genesis_window, Some(512));
+                assert_eq!(init.metrics_every, Some(25));
+                assert_eq!(init.program, vec![1, 2, 3]);
             }
             other => panic!("expected Init, got {other:?}"),
         }
@@ -284,13 +469,20 @@ mod tests {
         let json = r#"{"type":"init","seed":1,"energy":5,"coeff":0.2,"k":2}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ClientMessage::Init {
-                move_threshold,
-                program,
-                ..
-            } => {
-                assert_eq!(move_threshold, None);
-                assert!(program.is_empty());
+            ClientMessage::Init(init) => {
+                assert_eq!(init.move_threshold, None);
+                assert_eq!(init.gravity, None);
+                assert_eq!(init.gravity_alpha, None);
+                assert_eq!(init.gravity_radius, None);
+                assert_eq!(init.pressure, None);
+                assert_eq!(init.pressure_gamma, None);
+                assert_eq!(init.pressure_eref, None);
+                assert_eq!(init.mutation_strength, None);
+                assert_eq!(init.mutation_half_density, None);
+                assert_eq!(init.genesis_window, None);
+                assert_eq!(init.genesis_fertility, None);
+                assert_eq!(init.metrics_every, None);
+                assert!(init.program.is_empty());
             }
             other => panic!("expected Init, got {other:?}"),
         }
@@ -298,21 +490,36 @@ mod tests {
 
     #[test]
     fn parse_config() {
-        // Exact-binary float values, see `parse_init_full`.
-        let json = r#"{"type":"config","coeff":0.25,"k":2,"moveThreshold":2.5}"#;
+        // Exact-binary float values so `to_bits` comparison works.
+        let json = r#"{"type":"config","coeff":0.25,"k":2,"moveThreshold":2.5,"gravity":1.5}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ClientMessage::Config {
-                coeff,
-                k,
-                move_threshold,
-            } => {
-                assert_eq!(coeff.to_bits(), 0.25_f64.to_bits());
-                assert_eq!(k, 2);
-                let mt = move_threshold.expect("moveThreshold parses to Some");
+            ClientMessage::Config(cfg) => {
+                assert_eq!(cfg.coeff.to_bits(), 0.25_f64.to_bits());
+                assert_eq!(cfg.k, 2);
+                let mt = cfg.move_threshold.expect("moveThreshold parses to Some");
                 assert_eq!(mt.to_bits(), 2.5_f32.to_bits());
+                let gravity = cfg.gravity.expect("gravity parses to Some");
+                assert_eq!(gravity.to_bits(), 1.5_f64.to_bits());
+                assert_eq!(cfg.mutation_strength, None);
             }
             other => panic!("expected Config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_program() {
+        let json =
+            r#"{"type":"runProgram","code":[7,8,9],"reserve":16,"tag":4242,"appearance":99}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ClientMessage::RunProgram(rp) => {
+                assert_eq!(rp.code, vec![7, 8, 9]);
+                assert_eq!(rp.reserve, 16);
+                assert_eq!(rp.tag, 4242);
+                assert_eq!(rp.appearance, 99);
+            }
+            other => panic!("expected RunProgram, got {other:?}"),
         }
     }
 
@@ -578,6 +785,23 @@ mod tests {
         );
         assert_eq!(buf[0], CELL_DETAIL_TAG);
         assert!(buf.capacity() >= cap_after_a);
+    }
+
+    #[test]
+    fn metrics_frame_round_trip() {
+        // Flat layout `[cells, entropy, diversity, uniqueTypes, ...hist]`;
+        // values chosen exact in f64 so bit-equality holds.
+        let values = [3.0, 1.5, 0.25, 2.0, 7.0, 0.0, 42.0];
+        let bytes = encode_metrics_frame(1234, &values);
+        assert_eq!(bytes.len(), 1 + 4 + 4 + values.len() * 8);
+        let mut r = Reader::new(&bytes);
+        assert_eq!(r.u8(), METRICS_TAG);
+        assert_eq!(r.u32(), 1234);
+        assert_eq!(r.u32(), u32::try_from(values.len()).unwrap());
+        for &expected in &values {
+            assert!((r.f64() - expected).abs() < f64::EPSILON);
+        }
+        assert_eq!(r.pos, bytes.len());
     }
 
     #[test]

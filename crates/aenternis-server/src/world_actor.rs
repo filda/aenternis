@@ -19,11 +19,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use aenternis_core::{tick, Coord, SparseWorld};
+use aenternis_core::{
+    compute_metrics, find_host, snap_gamma, tick, Base, Coord, GenesisConfig, SparseWorld,
+};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::protocol::{
-    encode_cell_detail_frame, encode_snapshot_frame_into, CellDetailFrame, SnapshotFrame,
+    encode_cell_detail_frame, encode_metrics_frame, encode_snapshot_frame_into, CellDetailFrame,
+    ConfigMsg, InitMsg, RunProgramMsg, ServerControl, SnapshotFrame,
 };
 
 /// Broadcast channel capacity for snapshot frames. Lagging receivers
@@ -78,25 +81,16 @@ pub(crate) struct WelcomeState {
 
 /// Inbound actor command. `Init`/`Config`/`Running`/`Step` are
 /// shared global state changes — every connected client sees them
-/// on the next snapshot. `Inspect` is a per-client request whose
-/// reply travels back through the supplied oneshot.
+/// on the next snapshot. `Inspect` and `RunProgram` are per-client
+/// requests whose replies travel back through the supplied oneshots.
 pub(crate) enum Command {
-    /// Reset the shared world. See [`crate::protocol::ClientMessage::Init`]
-    /// for field semantics.
-    Init {
-        seed: u32,
-        energy: u32,
-        coeff: f64,
-        k: u32,
-        move_threshold: Option<f32>,
-        program: Vec<u32>,
-    },
+    /// Reset the shared world with the full viewer payload. Boxed
+    /// (like `Config`): the full message structs are the largest
+    /// variants and would otherwise bloat every `Command` (and its
+    /// `SendError`) to their size.
+    Init(Box<InitMsg>),
     /// Update tick parameters in place; world state untouched.
-    Config {
-        coeff: f64,
-        k: u32,
-        move_threshold: Option<f32>,
-    },
+    Config(Box<ConfigMsg>),
     /// Resume / pause the autonomous tick loop.
     Running { running: bool },
     /// Single-step + emit one snapshot regardless of `running`.
@@ -110,6 +104,134 @@ pub(crate) enum Command {
         z: i32,
         reply: oneshot::Sender<Vec<u8>>,
     },
+    /// Inject a program (Project Pilgrim). The JSON reply text
+    /// (`programStarted` / `programRejected`) goes back through the
+    /// oneshot to the requesting client only; the possession itself
+    /// reaches everyone via the next snapshot broadcast.
+    RunProgram {
+        msg: RunProgramMsg,
+        reply: oneshot::Sender<String>,
+    },
+}
+
+/// Runtime simulation parameters — a field-for-field mirror of
+/// `WorkerSimState` (`src/worker-state.ts`), including its defaults,
+/// so an `init`/`config` with omitted optional fields resolves to the
+/// **same** effective world on both backends.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SimParams {
+    pub(crate) coeff: f64,
+    pub(crate) k: u32,
+    pub(crate) move_threshold: f32,
+    pub(crate) gravity: f64,
+    pub(crate) gravity_alpha: f64,
+    pub(crate) gravity_radius: i32,
+    pub(crate) pressure: f64,
+    pub(crate) pressure_gamma: f64,
+    pub(crate) pressure_eref: f64,
+    pub(crate) mutation_strength: f64,
+    pub(crate) mutation_half_density: f64,
+    /// Code-metrics sampling cadence in ticks; `0` = disabled.
+    pub(crate) metrics_every: u32,
+}
+
+impl Default for SimParams {
+    /// Mirrors `DEFAULT_STATE` in `src/worker-state.ts` (which in turn
+    /// mirrors the `SparseWorld` frozen-baseline defaults, plus the
+    /// legacy worker fall-backs for the tick params).
+    fn default() -> Self {
+        Self {
+            coeff: 0.20,
+            k: 1,
+            move_threshold: SparseWorld::DEFAULT_MOVE_THRESHOLD,
+            gravity: 0.0,
+            gravity_alpha: 0.0,
+            gravity_radius: 1,
+            pressure: 0.0,
+            pressure_gamma: SparseWorld::DEFAULT_PRESSURE_GAMMA,
+            pressure_eref: SparseWorld::DEFAULT_PRESSURE_EREF,
+            mutation_strength: 0.0,
+            mutation_half_density: SparseWorld::DEFAULT_MUTATION_HALF_DENSITY,
+            metrics_every: 0,
+        }
+    }
+}
+
+impl SimParams {
+    /// Reducer for `init` — mirrors `stateFromInit` in
+    /// `src/worker-state.ts`: every omitted optional field falls back
+    /// to the default (NOT to the previous value; an init is a reset).
+    fn from_init(msg: &InitMsg) -> Self {
+        let d = Self::default();
+        Self {
+            coeff: msg.coeff,
+            k: msg.k,
+            move_threshold: msg.move_threshold.unwrap_or(d.move_threshold),
+            gravity: msg.gravity.unwrap_or(d.gravity),
+            gravity_alpha: msg.gravity_alpha.unwrap_or(d.gravity_alpha),
+            gravity_radius: msg.gravity_radius.unwrap_or(d.gravity_radius),
+            pressure: msg.pressure.unwrap_or(d.pressure),
+            pressure_gamma: msg.pressure_gamma.unwrap_or(d.pressure_gamma),
+            pressure_eref: msg.pressure_eref.unwrap_or(d.pressure_eref),
+            mutation_strength: msg.mutation_strength.unwrap_or(d.mutation_strength),
+            mutation_half_density: msg.mutation_half_density.unwrap_or(d.mutation_half_density),
+            metrics_every: msg.metrics_every.unwrap_or(d.metrics_every),
+        }
+    }
+
+    /// Reducer for `config` — mirrors `applyConfig` in
+    /// `src/worker-state.ts`: `coeff` / `k` always apply; every other
+    /// field updates only when present on the message.
+    const fn apply_config(&mut self, msg: &ConfigMsg) {
+        self.coeff = msg.coeff;
+        self.k = msg.k;
+        if let Some(v) = msg.move_threshold {
+            self.move_threshold = v;
+        }
+        if let Some(v) = msg.gravity {
+            self.gravity = v;
+        }
+        if let Some(v) = msg.gravity_alpha {
+            self.gravity_alpha = v;
+        }
+        if let Some(v) = msg.gravity_radius {
+            self.gravity_radius = v;
+        }
+        if let Some(v) = msg.pressure {
+            self.pressure = v;
+        }
+        if let Some(v) = msg.pressure_gamma {
+            self.pressure_gamma = v;
+        }
+        if let Some(v) = msg.pressure_eref {
+            self.pressure_eref = v;
+        }
+        if let Some(v) = msg.mutation_strength {
+            self.mutation_strength = v;
+        }
+        if let Some(v) = msg.mutation_half_density {
+            self.mutation_half_density = v;
+        }
+        if let Some(v) = msg.metrics_every {
+            self.metrics_every = v;
+        }
+    }
+
+    /// Push every physics knob onto the world — the counterpart of the
+    /// WASM setter sequence the worker applies (`applySimConfig` /
+    /// `applyStateToWorld`). γ snaps through the same core
+    /// [`snap_gamma`] the WASM `setPressureGamma` boundary uses.
+    fn apply_to(&self, world: &mut SparseWorld) {
+        world.move_threshold = self.move_threshold;
+        world.gravity = self.gravity;
+        world.gravity_alpha = self.gravity_alpha;
+        world.gravity_radius = self.gravity_radius;
+        world.pressure = self.pressure;
+        world.pressure_gamma = snap_gamma(self.pressure_gamma);
+        world.pressure_eref = self.pressure_eref;
+        world.mutation_strength = self.mutation_strength;
+        world.mutation_half_density = self.mutation_half_density;
+    }
 }
 
 /// Spawn the world actor with default config and return a handle for
@@ -123,9 +245,7 @@ pub fn spawn() -> Handle {
 
     let actor = WorldActor {
         world: SparseWorld::new(0),
-        coeff: 0.15,
-        k: 1,
-        move_threshold: SparseWorld::DEFAULT_MOVE_THRESHOLD,
+        params: SimParams::default(),
         running: false,
         tick_ms_avg: 0.0,
         cmd_rx,
@@ -146,9 +266,7 @@ pub fn spawn() -> Handle {
 
 struct WorldActor {
     world: SparseWorld,
-    coeff: f64,
-    k: u32,
-    move_threshold: f32,
+    params: SimParams,
     running: bool,
     tick_ms_avg: f64,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
@@ -168,8 +286,7 @@ impl WorldActor {
     async fn run(mut self) {
         loop {
             if self.running {
-                self.tick_once();
-                self.broadcast_snapshot();
+                self.step_and_broadcast();
                 // Drain any commands queued during the tick
                 // without blocking. If the channel is closed,
                 // shut down cleanly.
@@ -202,62 +319,117 @@ impl WorldActor {
     /// Returns `false` to request shutdown.
     fn handle_command(&mut self, cmd: Command) -> bool {
         match cmd {
-            Command::Init {
-                seed,
-                energy,
-                coeff,
-                k,
-                move_threshold,
-                program,
-            } => {
-                self.world = if program.is_empty() {
-                    SparseWorld::big_bang(u64::from(seed), energy)
-                } else {
-                    SparseWorld::big_bang_with_program(u64::from(seed), energy, &program)
+            Command::Init(init) => {
+                let init = *init;
+                // Macro-genesis base with the viewer's program overlaid —
+                // the exact constructor the WASM worker uses
+                // (`World::newWithProgram`), so both backends build a
+                // bit-identical initial world from the same init message.
+                let defaults = GenesisConfig::default();
+                let genesis = GenesisConfig {
+                    window: init.genesis_window.unwrap_or(defaults.window),
+                    fertility: init.genesis_fertility.unwrap_or(defaults.fertility),
                 };
-                self.coeff = coeff;
-                self.k = k;
-                self.move_threshold = move_threshold.unwrap_or(self.move_threshold);
-                self.world.move_threshold = self.move_threshold;
+                self.world = SparseWorld::big_bang_with_config(
+                    u64::from(init.seed),
+                    init.energy,
+                    Base::Macros,
+                    &init.program,
+                    &genesis,
+                );
+                self.params = SimParams::from_init(&init);
+                self.params.apply_to(&mut self.world);
                 self.tick_ms_avg = 0.0;
                 self.broadcast_snapshot();
             }
-            Command::Config {
-                coeff,
-                k,
-                move_threshold,
-            } => {
-                self.coeff = coeff;
-                self.k = k;
-                if let Some(mt) = move_threshold {
-                    self.move_threshold = mt;
-                    self.world.move_threshold = mt;
-                }
+            Command::Config(cfg) => {
+                self.params.apply_config(&cfg);
+                self.params.apply_to(&mut self.world);
             }
             Command::Running { running } => {
                 self.running = running;
                 self.publish_welcome();
             }
             Command::Step => {
-                self.tick_once();
-                self.broadcast_snapshot();
+                self.step_and_broadcast();
             }
             Command::Inspect { x, y, z, reply } => {
                 let frame = self.build_inspect_frame(x, y, z);
                 let _ = reply.send(frame);
             }
+            Command::RunProgram { msg, reply } => {
+                let response = self.run_program(&msg);
+                let _ = reply.send(response);
+            }
         }
         true
     }
 
-    fn tick_once(&mut self) {
+    /// Advance one tick and emit the snapshot (plus a metrics frame
+    /// when the sampling cadence lands on this tick). Shared between
+    /// the autonomous run loop and the on-demand `Step` command so
+    /// single-step and run-mode behave identically — mirrors
+    /// `stepOnce` in `src/worker-handler.ts`.
+    fn step_and_broadcast(&mut self) {
         let start = Instant::now();
-        tick::step(&mut self.world, self.coeff, self.k);
+        tick::step(&mut self.world, self.params.coeff, self.params.k);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         // Equivalent to `a * old + (1 - a) * elapsed`, but `mul_add` is
         // both faster (single FMA) and slightly more accurate.
         self.tick_ms_avg =
             TICK_MS_SMOOTHING.mul_add(self.tick_ms_avg, (1.0 - TICK_MS_SMOOTHING) * elapsed_ms);
+        self.broadcast_snapshot();
+        self.broadcast_metrics_if_due();
+    }
+
+    /// Inject a program into the shared world (Project Pilgrim) and
+    /// build the JSON reply for the requesting client. Mirrors
+    /// `runProgram` in `src/worker-handler.ts`: same host-selection
+    /// rule (via the shared core `find_host`), same rejection reason
+    /// text, and a fresh snapshot broadcast on success so the
+    /// possession is visible immediately.
+    fn run_program(&mut self, msg: &RunProgramMsg) -> String {
+        aenternis_core::snapshot::snapshot_into(&self.world, &mut self.snapshot_buf);
+        let Some(host) = find_host(&self.snapshot_buf, msg.code.len(), msg.reserve) else {
+            let need = msg.code.len() as u64 + u64::from(msg.reserve);
+            let rejected = ServerControl::ProgramRejected {
+                reason: format!("no host cell with energy >= {need}"),
+            };
+            return serde_json::to_string(&rejected).expect("ProgramRejected always serializes");
+        };
+        // `find_host` guarantees the host exists with energy >=
+        // code.len(), so possession cannot fail (same invariant the
+        // worker relies on to skip its try/catch).
+        self.world
+            .possess(host, &msg.code, msg.tag, msg.appearance)
+            .expect("find_host returned an eligible host");
+        let started = ServerControl::ProgramStarted {
+            x: host.x,
+            y: host.y,
+            z: host.z,
+            tag: msg.tag,
+        };
+        let reply = serde_json::to_string(&started).expect("ProgramStarted always serializes");
+        self.broadcast_snapshot();
+        reply
+    }
+
+    /// Broadcast a binary metrics frame when sampling is enabled and
+    /// the current tick lands on the cadence — the same
+    /// `metricsEvery > 0 && tick % metricsEvery == 0` rule as the
+    /// worker. `compute_metrics` is an `O(total_energy)` walk, so it
+    /// only runs when a frame will actually be sent.
+    fn broadcast_metrics_if_due(&self) {
+        if self.params.metrics_every == 0
+            || self.world.tick % u64::from(self.params.metrics_every) != 0
+            || self.event_tx.receiver_count() == 0
+        {
+            return;
+        }
+        let flat = compute_metrics(&self.world).to_flat();
+        let tick_u32 = u32::try_from(self.world.tick).unwrap_or(u32::MAX);
+        let bytes: Arc<[u8]> = Arc::from(encode_metrics_frame(tick_u32, &flat).as_slice());
+        let _ = self.event_tx.send(bytes);
     }
 
     fn broadcast_snapshot(&mut self) {
@@ -330,8 +502,12 @@ impl WorldActor {
 
 #[cfg(test)]
 mod tests {
-    use super::{spawn, Command, WelcomeState};
-    use crate::protocol::{CELL_DETAIL_TAG, INSPECT_PREFIX, SNAPSHOT_STRIDE, SNAPSHOT_TAG};
+    use super::{spawn, Command, SimParams, WelcomeState};
+    use crate::protocol::{
+        ConfigMsg, InitMsg, RunProgramMsg, CELL_DETAIL_TAG, INSPECT_PREFIX, METRICS_TAG,
+        SNAPSHOT_STRIDE, SNAPSHOT_TAG,
+    };
+    use aenternis_core::{tick, Base, GenesisConfig, SparseWorld};
     use std::time::Duration;
     use tokio::sync::{broadcast, oneshot};
 
@@ -354,15 +530,32 @@ mod tests {
         }
     }
 
-    fn init_command(seed: u32, energy: u32) -> Command {
-        Command::Init {
+    /// A minimal `InitMsg` (every optional field omitted), the wire
+    /// equivalent of `{"type":"init","seed":…,"energy":…,"coeff":0.15,"k":1}`.
+    fn init_msg(seed: u32, energy: u32) -> InitMsg {
+        InitMsg {
             seed,
             energy,
             coeff: 0.15,
             k: 1,
             move_threshold: None,
+            gravity: None,
+            gravity_alpha: None,
+            gravity_radius: None,
+            pressure: None,
+            pressure_gamma: None,
+            pressure_eref: None,
+            mutation_strength: None,
+            mutation_half_density: None,
+            genesis_window: None,
+            genesis_fertility: None,
+            metrics_every: None,
             program: vec![],
         }
+    }
+
+    fn init_command(seed: u32, energy: u32) -> Command {
+        Command::Init(Box::new(init_msg(seed, energy)))
     }
 
     #[tokio::test]
@@ -547,5 +740,424 @@ mod tests {
         assert_eq!(read_u32_le(&frame, 21), SNAPSHOT_STRIDE);
         let cell_count = read_u32_le(&frame, 5);
         assert!(cell_count >= 1, "big_bang must produce >= 1 cell");
+    }
+
+    // -- SimParams reducers (mirror src/worker-state.ts) ----------------------
+
+    #[test]
+    fn from_init_falls_back_to_worker_defaults() {
+        let params = SimParams::from_init(&init_msg(1, 10));
+        let expected = SimParams {
+            coeff: 0.15,
+            k: 1,
+            ..SimParams::default()
+        };
+        assert_eq!(params, expected, "omitted optionals resolve to defaults");
+    }
+
+    #[test]
+    fn from_init_takes_every_provided_knob() {
+        let msg = InitMsg {
+            move_threshold: Some(1.0),
+            gravity: Some(1.5),
+            gravity_alpha: Some(0.05),
+            gravity_radius: Some(4),
+            pressure: Some(0.2),
+            pressure_gamma: Some(3.0),
+            pressure_eref: Some(50_000.0),
+            mutation_strength: Some(0.75),
+            mutation_half_density: Some(30_000.0),
+            metrics_every: Some(25),
+            ..init_msg(1, 10)
+        };
+        let params = SimParams::from_init(&msg);
+        let expected = SimParams {
+            coeff: 0.15,
+            k: 1,
+            move_threshold: 1.0,
+            gravity: 1.5,
+            gravity_alpha: 0.05,
+            gravity_radius: 4,
+            pressure: 0.2,
+            pressure_gamma: 3.0,
+            pressure_eref: 50_000.0,
+            mutation_strength: 0.75,
+            mutation_half_density: 30_000.0,
+            metrics_every: 25,
+        };
+        assert_eq!(params, expected);
+    }
+
+    #[test]
+    fn apply_config_updates_present_fields_and_keeps_the_rest() {
+        let mut params = SimParams {
+            gravity: 1.5,
+            mutation_strength: 0.75,
+            ..SimParams::default()
+        };
+        params.apply_config(&ConfigMsg {
+            coeff: 0.3,
+            k: 2,
+            move_threshold: None,
+            gravity: Some(0.0), // explicit 0 still applies
+            gravity_alpha: None,
+            gravity_radius: Some(2),
+            pressure: None,
+            pressure_gamma: None,
+            pressure_eref: None,
+            mutation_strength: None,
+            mutation_half_density: None,
+            metrics_every: Some(10),
+        });
+        let expected = SimParams {
+            coeff: 0.3,
+            k: 2,
+            gravity: 0.0,
+            gravity_radius: 2,
+            mutation_strength: 0.75, // absent → kept
+            metrics_every: 10,
+            ..SimParams::default()
+        };
+        assert_eq!(params, expected);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // exact assignments and snap targets
+    fn apply_to_pushes_every_knob_and_snaps_gamma() {
+        let params = SimParams {
+            move_threshold: 1.0,
+            gravity: 1.5,
+            gravity_alpha: 0.05,
+            gravity_radius: 4,
+            pressure: 0.2,
+            pressure_gamma: 2.3, // snaps to 2.5
+            pressure_eref: 50_000.0,
+            mutation_strength: 0.75,
+            mutation_half_density: 30_000.0,
+            ..SimParams::default()
+        };
+        let mut world = SparseWorld::new(0);
+        params.apply_to(&mut world);
+        assert_eq!(world.move_threshold, 1.0);
+        assert_eq!(world.gravity, 1.5);
+        assert_eq!(world.gravity_alpha, 0.05);
+        assert_eq!(world.gravity_radius, 4);
+        assert_eq!(world.pressure, 0.2);
+        assert_eq!(world.pressure_gamma, 2.5, "γ must snap through snap_gamma");
+        assert_eq!(world.pressure_eref, 50_000.0);
+        assert_eq!(world.mutation_strength, 0.75);
+        assert_eq!(world.mutation_half_density, 30_000.0);
+    }
+
+    // -- WASM-worker parity through the wire -----------------------------------
+
+    #[tokio::test]
+    async fn init_builds_the_macro_genesis_world() {
+        // The worker constructs via `World::newWithProgram` = macro
+        // genesis base + program overlay. The origin cell's *memory*
+        // (not visible in a snapshot) is where a Noise-base regression
+        // would show, so compare the inspect payload against a world
+        // built by the exact core constructor the WASM path uses.
+        let (seed, energy) = (7, 50);
+        let program = vec![11, 22, 33];
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle
+            .send_command(Command::Init(Box::new(InitMsg {
+                program: program.clone(),
+                ..init_msg(seed, energy)
+            })))
+            .unwrap();
+        let _ = next_event(&mut events).await;
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        handle
+            .send_command(Command::Inspect {
+                x: 0,
+                y: 0,
+                z: 0,
+                reply: reply_tx,
+            })
+            .unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(2), reply_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let reference = SparseWorld::big_bang_with_config(
+            u64::from(seed),
+            energy,
+            Base::Macros,
+            &program,
+            &GenesisConfig::default(),
+        );
+        let mut expected = Vec::new();
+        aenternis_core::snapshot::inspect_into(
+            &reference,
+            aenternis_core::Coord::ORIGIN,
+            &mut expected,
+        );
+        // CellDetail header is 25 bytes; payload follows.
+        let data_len = read_u32_le(&frame, 21) as usize;
+        assert_eq!(data_len, expected.len());
+        let payload: Vec<u32> = (0..data_len)
+            .map(|i| read_u32_le(&frame, 25 + i * 4))
+            .collect();
+        assert_eq!(
+            payload, expected,
+            "origin memory must match the macro-genesis constructor"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_applies_physics_knobs_end_to_end() {
+        // Drive the actor with a gravity/pressure/mutation init and
+        // step twice; a reference world built + stepped locally with
+        // the same parameters must produce byte-identical snapshots.
+        // This is the regression test for the parameter drop that let
+        // the native backend silently run the all-off baseline.
+        let (seed, energy) = (1234, 5000);
+        let init = InitMsg {
+            coeff: 0.15,
+            move_threshold: Some(1.0),
+            gravity: Some(1.5),
+            gravity_alpha: Some(0.05),
+            gravity_radius: Some(2),
+            pressure: Some(0.2),
+            pressure_gamma: Some(2.0),
+            pressure_eref: Some(50_000.0),
+            mutation_strength: Some(1.0),
+            mutation_half_density: Some(40_000.0),
+            ..init_msg(seed, energy)
+        };
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle
+            .send_command(Command::Init(Box::new(init.clone())))
+            .unwrap();
+        let _ = next_event(&mut events).await;
+        handle.send_command(Command::Step).unwrap();
+        let _ = next_event(&mut events).await;
+        handle.send_command(Command::Step).unwrap();
+        let frame = next_event(&mut events).await;
+        assert_eq!(read_u32_le(&frame, 1), 2, "two steps → tick 2");
+
+        let mut reference = SparseWorld::big_bang_with_config(
+            u64::from(seed),
+            energy,
+            Base::Macros,
+            &[],
+            &GenesisConfig::default(),
+        );
+        reference.move_threshold = 1.0;
+        reference.gravity = 1.5;
+        reference.gravity_alpha = 0.05;
+        reference.gravity_radius = 2;
+        reference.pressure = 0.2;
+        reference.pressure_gamma = 2.0;
+        reference.pressure_eref = 50_000.0;
+        reference.mutation_strength = 1.0;
+        reference.mutation_half_density = 40_000.0;
+        tick::step(&mut reference, 0.15, 1);
+        tick::step(&mut reference, 0.15, 1);
+        let mut expected = Vec::new();
+        aenternis_core::snapshot::snapshot_into(&reference, &mut expected);
+
+        // Snapshot header is 49 bytes; cell payload follows.
+        let cell_count = read_u32_le(&frame, 5) as usize;
+        assert_eq!(cell_count * SNAPSHOT_STRIDE as usize, expected.len());
+        let payload: Vec<u32> = (0..expected.len())
+            .map(|i| read_u32_le(&frame, 49 + i * 4))
+            .collect();
+        assert_eq!(
+            payload, expected,
+            "wire-driven world must match a locally-parameterized one"
+        );
+    }
+
+    // -- Metrics broadcast -----------------------------------------------------
+
+    #[tokio::test]
+    async fn metrics_frame_follows_snapshot_on_cadence() {
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle
+            .send_command(Command::Init(Box::new(InitMsg {
+                metrics_every: Some(1),
+                ..init_msg(1, 50)
+            })))
+            .unwrap();
+        let init_frame = next_event(&mut events).await;
+        assert_eq!(
+            init_frame[0], SNAPSHOT_TAG,
+            "no metrics at tick 0 — the worker samples in stepOnce only"
+        );
+
+        handle.send_command(Command::Step).unwrap();
+        let snap = next_event(&mut events).await;
+        assert_eq!(snap[0], SNAPSHOT_TAG);
+        let metrics = next_event(&mut events).await;
+        assert_eq!(metrics[0], METRICS_TAG);
+        assert_eq!(read_u32_le(&metrics, 1), 1, "metrics tick");
+        let count = read_u32_le(&metrics, 5) as usize;
+        assert_eq!(count, 4 + aenternis_core::OPCODE_BINS);
+        assert_eq!(metrics.len(), 9 + count * 8);
+    }
+
+    #[tokio::test]
+    async fn no_metrics_frame_off_cadence() {
+        // metricsEvery=2 → tick 1 must emit a snapshot and nothing
+        // else. Pins the guard's `||` chain: corrupting either `||`
+        // to `&&` lets an off-cadence tick fall through to a send.
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle
+            .send_command(Command::Init(Box::new(InitMsg {
+                metrics_every: Some(2),
+                ..init_msg(1, 50)
+            })))
+            .unwrap();
+        let _ = next_event(&mut events).await;
+        handle.send_command(Command::Step).unwrap();
+        let snap = next_event(&mut events).await;
+        assert_eq!(snap[0], SNAPSHOT_TAG);
+        let extra = tokio::time::timeout(Duration::from_millis(100), events.recv()).await;
+        assert!(extra.is_err(), "tick 1 is off the every-2 cadence");
+
+        // Tick 2 lands on the cadence — metrics must follow.
+        handle.send_command(Command::Step).unwrap();
+        let snap2 = next_event(&mut events).await;
+        assert_eq!(snap2[0], SNAPSHOT_TAG);
+        let metrics = next_event(&mut events).await;
+        assert_eq!(metrics[0], METRICS_TAG);
+        assert_eq!(read_u32_le(&metrics, 1), 2);
+    }
+
+    #[tokio::test]
+    async fn commands_drained_mid_run_do_not_stop_the_actor() {
+        // While the autonomous loop runs, commands are drained via
+        // `try_recv` between ticks. A benign command handled there
+        // must NOT shut the actor down (pins the `!` in the drain
+        // loop's `if !self.handle_command(cmd) { return; }`).
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle.send_command(init_command(1, 50)).unwrap();
+        let _ = next_event(&mut events).await;
+        handle
+            .send_command(Command::Running { running: true })
+            .unwrap();
+        let _ = next_event(&mut events).await;
+
+        // Handled inside the drain loop because the loop is running.
+        handle
+            .send_command(Command::Config(Box::new(ConfigMsg {
+                coeff: 0.2,
+                k: 1,
+                move_threshold: None,
+                gravity: None,
+                gravity_alpha: None,
+                gravity_radius: None,
+                pressure: None,
+                pressure_gamma: None,
+                pressure_eref: None,
+                mutation_strength: None,
+                mutation_half_density: None,
+                metrics_every: None,
+            })))
+            .unwrap();
+
+        // Ticks must keep flowing past the drained command.
+        let before = read_u32_le(&next_event(&mut events).await, 1);
+        let mut after = before;
+        for _ in 0..50 {
+            after = read_u32_le(&next_event(&mut events).await, 1);
+            if after > before + 2 {
+                break;
+            }
+        }
+        assert!(
+            after > before + 2,
+            "actor must keep ticking after a mid-run command (before={before}, after={after})"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_metrics_frame_when_cadence_disabled() {
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle.send_command(init_command(1, 50)).unwrap();
+        let _ = next_event(&mut events).await;
+        handle.send_command(Command::Step).unwrap();
+        let snap = next_event(&mut events).await;
+        assert_eq!(snap[0], SNAPSHOT_TAG);
+        // Nothing else should arrive in a short window.
+        let extra = tokio::time::timeout(Duration::from_millis(100), events.recv()).await;
+        assert!(extra.is_err(), "metricsEvery=0 must emit no metrics frame");
+    }
+
+    // -- RunProgram (Project Pilgrim) -------------------------------------------
+
+    async fn send_run_program(
+        handle: &super::Handle,
+        code: Vec<u32>,
+        reserve: u32,
+        tag: u32,
+    ) -> String {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        handle
+            .send_command(Command::RunProgram {
+                msg: RunProgramMsg {
+                    code,
+                    reserve,
+                    tag,
+                    appearance: 7,
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), reply_rx)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn run_program_possesses_a_host_and_broadcasts() {
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle.send_command(init_command(1, 100)).unwrap();
+        let _ = next_event(&mut events).await;
+
+        let reply = send_run_program(&handle, vec![1, 2, 3], 0, 4242).await;
+        // Single-cell world → the origin is the only (eligible) host.
+        assert_eq!(
+            reply,
+            r#"{"type":"programStarted","x":0,"y":0,"z":0,"tag":4242}"#
+        );
+
+        // Possession broadcasts a fresh snapshot; the host cell now
+        // carries the pilgrim's origin_tag (snapshot field +4).
+        let frame = next_event(&mut events).await;
+        assert_eq!(frame[0], SNAPSHOT_TAG);
+        assert_eq!(read_u32_le(&frame, 49 + 4 * 4), 4242, "origin_tag stamped");
+    }
+
+    #[tokio::test]
+    async fn run_program_rejects_when_no_host_is_large_enough() {
+        let handle = spawn();
+        let mut events = handle.subscribe_events();
+        handle.send_command(init_command(1, 10)).unwrap();
+        let _ = next_event(&mut events).await;
+
+        // need = 8 + 5 = 13 > 10 → rejected, worker-identical reason.
+        let reply = send_run_program(&handle, vec![0; 8], 5, 1).await;
+        assert_eq!(
+            reply,
+            r#"{"type":"programRejected","reason":"no host cell with energy >= 13"}"#
+        );
+
+        // Rejection must not broadcast a snapshot.
+        let extra = tokio::time::timeout(Duration::from_millis(100), events.recv()).await;
+        assert!(extra.is_err(), "rejected runProgram must not broadcast");
     }
 }

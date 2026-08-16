@@ -12,10 +12,11 @@
 //!    [`ClientMessage`], translates to [`Command`], and routes
 //!    through the actor.
 //!
-//! `Inspect` is per-client: the cellDetail reply travels back
-//! through a oneshot, then onto this connection's sender only —
-//! never the broadcast — so a click in tab A doesn't paint tab B's
-//! inspector.
+//! `Inspect` and `RunProgram` are per-client: their replies (a binary
+//! cellDetail frame; a JSON `programStarted`/`programRejected` text
+//! frame) travel back through a oneshot, then onto this connection's
+//! sender only — never the broadcast — so a click in tab A doesn't
+//! paint tab B's inspector.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -42,7 +43,9 @@ pub async fn ws_handler(State(handle): State<Handle>, ws: WebSocketUpgrade) -> i
 async fn handle_socket(socket: WebSocket, world: Handle) {
     let (mut sender, mut receiver) = socket.split();
     let mut events = world.subscribe_events();
-    let (inspect_tx, mut inspect_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // Per-client reply funnel, carrying ready-to-send frames (binary
+    // cellDetail for Inspect, JSON text for RunProgram replies).
+    let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<Message>();
 
     // Bootstrap: ready, then welcome with the actor's current state.
     let ready_text = serde_json::to_string(&ServerControl::Ready).expect("Ready always serializes");
@@ -71,9 +74,9 @@ async fn handle_socket(socket: WebSocket, world: Handle) {
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
             },
-            inspect = inspect_rx.recv() => {
-                let Some(frame) = inspect else { return; };
-                if sender.send(Message::Binary(frame)).await.is_err() {
+            reply = reply_rx.recv() => {
+                let Some(frame) = reply else { return; };
+                if sender.send(frame).await.is_err() {
                     return;
                 }
             }
@@ -83,7 +86,7 @@ async fn handle_socket(socket: WebSocket, world: Handle) {
                     // drop. The viewer never produces these in
                     // normal operation; logging would just spam.
                     if let Ok(parsed) = serde_json::from_str::<ClientMessage>(&text) {
-                        handle_client_message(parsed, &world, &inspect_tx);
+                        handle_client_message(parsed, &world, &reply_tx);
                     }
                 }
                 // Close, stream end, and underlying transport error
@@ -99,56 +102,40 @@ async fn handle_socket(socket: WebSocket, world: Handle) {
 }
 
 /// Translate a parsed [`ClientMessage`] into a [`Command`] and route
-/// it to the actor. Inspect grows an extra oneshot listener task
-/// that funnels the reply onto this connection's `inspect_tx`.
+/// it to the actor. Inspect and `RunProgram` grow an extra oneshot
+/// listener task that funnels the reply onto this connection's
+/// `reply_tx`.
 fn handle_client_message(
     msg: ClientMessage,
     world: &Handle,
-    inspect_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    reply_tx: &mpsc::UnboundedSender<Message>,
 ) {
     let cmd = match msg {
-        ClientMessage::Init {
-            seed,
-            energy,
-            coeff,
-            k,
-            move_threshold,
-            program,
-        } => Command::Init {
-            seed,
-            energy,
-            coeff,
-            k,
-            move_threshold,
-            program,
-        },
-        ClientMessage::Config {
-            coeff,
-            k,
-            move_threshold,
-        } => Command::Config {
-            coeff,
-            k,
-            move_threshold,
-        },
+        ClientMessage::Init(init) => Command::Init(Box::new(init)),
+        ClientMessage::Config(cfg) => Command::Config(Box::new(cfg)),
         ClientMessage::Running { running } => Command::Running { running },
         ClientMessage::Step => Command::Step,
         ClientMessage::Inspect { x, y, z } => {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            let inspect_tx = inspect_tx.clone();
+            let (tx, rx) = oneshot::channel();
+            let reply_tx = reply_tx.clone();
             tokio::spawn(async move {
-                if let Ok(frame) = reply_rx.await {
+                if let Ok(frame) = rx.await {
                     // Receiver dropped means the connection died
                     // while the actor was busy — fine, just discard.
-                    let _ = inspect_tx.send(frame);
+                    let _ = reply_tx.send(Message::Binary(frame));
                 }
             });
-            Command::Inspect {
-                x,
-                y,
-                z,
-                reply: reply_tx,
-            }
+            Command::Inspect { x, y, z, reply: tx }
+        }
+        ClientMessage::RunProgram(rp) => {
+            let (tx, rx) = oneshot::channel();
+            let reply_tx = reply_tx.clone();
+            tokio::spawn(async move {
+                if let Ok(json) = rx.await {
+                    let _ = reply_tx.send(Message::Text(json));
+                }
+            });
+            Command::RunProgram { msg: rp, reply: tx }
         }
     };
     // Send-error means the actor task itself shut down (process
@@ -313,6 +300,49 @@ mod tests {
         // frame we'll see is the cellDetail reply.
         let frame = next_binary(&mut ws).await;
         assert_eq!(frame[0], CELL_DETAIL_TAG, "expected cellDetail tag");
+    }
+
+    #[tokio::test]
+    async fn run_program_replies_with_program_started_text_frame() {
+        let (port, _abort) = spawn_test_server().await;
+        let url = format!("ws://127.0.0.1:{port}/sim");
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+        let _ = next_text(&mut ws).await; // ready
+        let _ = next_text(&mut ws).await; // welcome
+
+        ws.send(TgMessage::Text(
+            r#"{"type":"init","seed":1,"energy":100,"coeff":0.15,"k":1}"#.into(),
+        ))
+        .await
+        .unwrap();
+        let _init_snap = next_binary(&mut ws).await;
+
+        ws.send(TgMessage::Text(
+            r#"{"type":"runProgram","code":[1,2,3],"reserve":0,"tag":4242,"appearance":7}"#.into(),
+        ))
+        .await
+        .unwrap();
+
+        // Reply is a per-client JSON text frame. The possession also
+        // broadcasts a snapshot whose delivery order relative to the
+        // reply is unspecified — skip binary frames while waiting.
+        let reply = loop {
+            let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+                .await
+                .expect("reply timed out")
+                .expect("stream ended")
+                .expect("ws error");
+            match msg {
+                TgMessage::Text(t) => break String::from(t.as_str()),
+                TgMessage::Binary(_) | TgMessage::Ping(_) | TgMessage::Pong(_) => {}
+                other => panic!("expected Text, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            reply,
+            r#"{"type":"programStarted","x":0,"y":0,"z":0,"tag":4242}"#
+        );
     }
 
     #[tokio::test]

@@ -74,6 +74,23 @@ impl CodeMetrics {
             unique_types: 0,
         }
     }
+
+    /// Flatten into the shared wire layout
+    /// `[cells, entropy_bits, cell_diversity, unique_types, ...opcode_hist]`
+    /// (length `4 + OPCODE_BINS`, all `f64`). This is the single
+    /// definition both backends emit — the WASM boundary
+    /// (`World::metrics`) and the native server's binary metrics frame —
+    /// so JS unpacks one layout regardless of backend.
+    #[must_use]
+    pub fn to_flat(&self) -> Vec<f64> {
+        let mut out = Vec::with_capacity(4 + self.opcode_hist.len());
+        out.push(f64::from(self.cells));
+        out.push(self.entropy_bits);
+        out.push(self.cell_diversity);
+        out.push(f64::from(self.unique_types));
+        out.extend(self.opcode_hist.iter().map(|&c| c as f64));
+        out
+    }
 }
 
 /// Opcode-bin index for a slot — the VM fold (`Opcode::decode`), as an index.
@@ -199,6 +216,22 @@ mod tests {
         let m = compute_metrics(&w);
         assert_eq!(m, CodeMetrics::empty());
         assert_eq!(m.cells, 0);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // exact values: integer counts and copied f64 fields
+    fn to_flat_packs_scalars_then_histogram() {
+        let w = world_with_cells(&[&[0, 1, 2, 3]]);
+        let m = compute_metrics(&w);
+        let flat = m.to_flat();
+        assert_eq!(flat.len(), 4 + OPCODE_BINS);
+        assert_eq!(flat[0], f64::from(m.cells));
+        assert_eq!(flat[1], m.entropy_bits);
+        assert_eq!(flat[2], m.cell_diversity);
+        assert_eq!(flat[3], f64::from(m.unique_types));
+        for (i, &count) in m.opcode_hist.iter().enumerate() {
+            assert_eq!(flat[4 + i], count as f64, "hist bin {i}");
+        }
     }
 
     #[test]
