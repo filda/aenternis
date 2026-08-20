@@ -23,6 +23,9 @@ export interface InitMsg {
   readonly gravity?: number;
   readonly gravityAlpha?: number;
   readonly gravityRadius?: number;
+  /** Critical mass m_crit of the peaked gravitational potential (the
+   *  inflation law); 0/omitted = off = exact legacy attraction. */
+  readonly gravityCritMass?: number;
   readonly pressure?: number;
   readonly pressureGamma?: number;
   readonly pressureEref?: number;
@@ -47,6 +50,8 @@ export interface ConfigMsg {
   readonly gravity?: number;
   readonly gravityAlpha?: number;
   readonly gravityRadius?: number;
+  /** Critical mass m_crit of the inflation law; 0 = off. */
+  readonly gravityCritMass?: number;
   readonly pressure?: number;
   readonly pressureGamma?: number;
   readonly pressureEref?: number;

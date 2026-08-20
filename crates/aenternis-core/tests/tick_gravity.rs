@@ -317,3 +317,141 @@ fn gravity_is_deterministic_across_the_parallel_threshold() {
     };
     assert_eq!(run(), run(), "parallel gravity path must be deterministic");
 }
+
+// ----- inflation law: peaked potential f(m) = m − m²/(2·m_crit) --------------
+// (`docs/inflation-plan.md` R2 — gravity_crit_mass)
+
+/// H(200) — C(100) — D(100) on the x axis, the same accretion geometry as
+/// `gravity_makes_a_cell_emit_toward_higher_local_mass`, with the critical
+/// mass as a parameter. Returns (D.rates, C.rates).
+fn crit_world(crit: f64) -> ([u32; 6], [u32; 6]) {
+    let mut w = SparseWorld::new(0xC417);
+    w.gravity = 1.0;
+    w.gravity_alpha = 0.1;
+    w.gravity_crit_mass = crit;
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 200]); // H
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 100]); // C
+    w.insert_with_memory(Coord::new(2, 0, 0), &[1; 100]); // D
+    compute_natural_rates(&mut w, 0.0); // coeff 0 → pure gravity term
+    (
+        w.get(Coord::new(2, 0, 0)).unwrap().rates,
+        w.get(Coord::new(1, 0, 0)).unwrap().rates,
+    )
+}
+
+#[test]
+fn crit_mass_zero_reproduces_plain_attraction_exactly() {
+    // The off state is the exact limit of the formula (`inv_2crit = 0` ⇒
+    // `f(m) = m` bit-for-bit), so crit = 0 must equal the attraction
+    // world in every rate — this is the zero-default identity pin for
+    // the inflation law.
+    // With M_C = α·(200+100) = 30 > M_D = α·100 = 10, D is pulled toward
+    // C: rates[Xn] > 0 despite the zero energy gradient.
+    let (d_rates, _) = crit_world(0.0);
+    assert!(
+        d_rates[Direction::Xn.index()] > 0,
+        "crit=0: attraction must pull D toward the heavier side"
+    );
+}
+
+#[test]
+fn sub_critical_masses_still_attract() {
+    // crit far above every neighborhood mass (M ≤ 30) keeps `f`
+    // increasing over the whole range → same attraction direction.
+    let (d_rates, _) = crit_world(1_000.0);
+    assert!(
+        d_rates[Direction::Xn.index()] > 0,
+        "sub-critical regime must preserve accretion"
+    );
+}
+
+#[test]
+fn super_critical_mass_repels() {
+    // crit = 5 puts both M_D = 10 and M_C = 30 past the peak, where `f`
+    // decreases: f(10) = 0, f(30) = −60. The force reverses —
+    // D is no longer pulled toward the dense side, and C now flees the
+    // heavy H toward D (drive g·(f(M_D) − f(M_C)) = +60 > 0).
+    let (d_rates, c_rates) = crit_world(5.0);
+    assert_eq!(
+        d_rates[Direction::Xn.index()],
+        0,
+        "super-critical: D must not be pulled toward the dense side"
+    );
+    assert!(
+        c_rates[Direction::Xp.index()] > 0,
+        "super-critical: C must flee the heavy neighborhood toward D"
+    );
+}
+
+#[test]
+fn crit_mass_run_is_deterministic_and_matches_itself() {
+    // Same seed + same crit ⇒ byte-identical worlds after many ticks
+    // (the potential uses only portable ops and no new RNG), and a
+    // different crit ⇒ a genuinely different world — pins that the knob
+    // both replays cleanly and actually reaches the physics.
+    //
+    // (No cloud-scale cosmology assert here on purpose: at toy scale a
+    // lone dense cell has zero neighborhood mass of its own, so even
+    // plain attraction evacuates the center via the void-shell — the
+    // dome-inversion behavior only manifests at production scale and is
+    // mapped by the calibration probes, `docs/inflation-plan.md`.)
+    let run = |crit: f64| {
+        let mut w = SparseWorld::big_bang(0xD37E, 30_000);
+        w.gravity = 1.0;
+        w.gravity_alpha = 0.05;
+        w.gravity_crit_mass = crit;
+        for _ in 0..30 {
+            step(&mut w, 0.15, 1);
+        }
+        let mut cells: Vec<(Coord, u32)> = w.iter().map(|(c, cell)| (*c, cell.energy())).collect();
+        cells.sort_unstable_by_key(|&(c, _)| (c.x, c.y, c.z));
+        cells
+    };
+    assert_eq!(
+        run(25.0),
+        run(25.0),
+        "same crit must replay byte-identically"
+    );
+    assert_ne!(run(25.0), run(0.0), "crit must change the world");
+}
+
+#[test]
+fn conservation_holds_with_crit_mass_over_many_ticks() {
+    let mut w = SparseWorld::big_bang(0xC0117, 50_000);
+    w.gravity = 1.0;
+    w.gravity_alpha = 0.05;
+    w.gravity_crit_mass = 20.0;
+    let e0 = w.total_energy();
+    for _ in 0..40 {
+        step(&mut w, 0.15, 1);
+        assert_eq!(w.total_energy(), e0, "inflation law must conserve energy");
+    }
+}
+
+#[test]
+fn potential_peak_sits_exactly_at_crit_mass() {
+    // Pins the peak POSITION of `f(m) = m − m²/(2·m_crit)` — the peak
+    // must sit at `m = m_crit` exactly (kills the `2·crit` → `2+crit`
+    // arithmetic mutant, which moves it to a different mass and flips
+    // the force direction for masses between the two peaks).
+    //
+    // H(10) — C(60) — D(60), α = 0.1 ⇒ M_D = 6, M_C = 7. With
+    // crit = 8 both masses sit BELOW the true peak (f increasing ⇒
+    // attraction): drive(D→C) = g·(f(7) − f(6)) = 16·0.1875 = 3.0
+    // exactly ⇒ rate 3. A peak at 5 (the mutant) would put both
+    // masses PAST it (f decreasing ⇒ repulsion ⇒ rate 0).
+    let mut w = SparseWorld::new(0x9EAC);
+    w.gravity = 16.0;
+    w.gravity_alpha = 0.1;
+    w.gravity_crit_mass = 8.0;
+    w.insert_with_memory(Coord::new(0, 0, 0), &[1; 10]); // H
+    w.insert_with_memory(Coord::new(1, 0, 0), &[1; 60]); // C
+    w.insert_with_memory(Coord::new(2, 0, 0), &[1; 60]); // D
+    compute_natural_rates(&mut w, 0.0);
+    let d_rates = w.get(Coord::new(2, 0, 0)).unwrap().rates;
+    assert_eq!(
+        d_rates[Direction::Xn.index()],
+        3,
+        "sub-peak attraction drive must be exactly g·(f(7)−f(6)) = 3"
+    );
+}

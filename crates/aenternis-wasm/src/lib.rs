@@ -385,6 +385,23 @@ impl World {
         self.inner.gravity_radius
     }
 
+    /// Set the critical neighborhood mass `m_crit` of the peaked
+    /// gravitational potential (the inflation law — `0.0` = off, exact
+    /// legacy attraction; see `docs/inflation-plan.md` R2).
+    #[wasm_bindgen(js_name = setGravityCritMass)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_gravity_crit_mass(&mut self, crit: f64) {
+        self.inner.gravity_crit_mass = crit;
+    }
+
+    /// Current critical mass `m_crit` (`0.0` = inflation law off).
+    #[wasm_bindgen(getter, js_name = gravityCritMass)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn gravity_crit_mass(&self) -> f64 {
+        self.inner.gravity_crit_mass
+    }
+
     /// Set the pressure amplitude (default `0.0` = off).
     #[wasm_bindgen(js_name = setPressure)]
     #[allow(clippy::missing_const_for_fn)]

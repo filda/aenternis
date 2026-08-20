@@ -28,6 +28,7 @@ function makeMockWorld(): WorldHandle {
     setGravity: vi.fn(),
     setGravityAlpha: vi.fn(),
     setGravityRadius: vi.fn(),
+    setGravityCritMass: vi.fn(),
     setPressure: vi.fn(),
     setPressureGamma: vi.fn(),
     setPressureEref: vi.fn(),

@@ -170,6 +170,7 @@ export function bootstrap(): void {
     gravityAlphaVal: requireEl('gravityAlphaVal', HTMLSpanElement),
     gravityRadius: requireEl('gravityRadius', HTMLInputElement),
     gravityRadiusVal: requireEl('gravityRadiusVal', HTMLSpanElement),
+    gravityCritMass: requireEl('gravityCritMass', HTMLInputElement),
     pressure: requireEl('pressure', HTMLInputElement),
     pressureVal: requireEl('pressureVal', HTMLSpanElement),
     pressureGamma: requireEl('pressureGamma', HTMLInputElement),
@@ -334,6 +335,7 @@ export function bootstrap(): void {
       gravity: config.gravity,
       gravityAlpha: config.gravityAlpha,
       gravityRadius: config.gravityRadius,
+      gravityCritMass: config.gravityCritMass,
       pressure: config.pressure,
       pressureGamma: config.pressureGamma,
       pressureEref: config.pressureEref,
@@ -369,6 +371,7 @@ export function bootstrap(): void {
       gravity: config.gravity,
       gravityAlpha: config.gravityAlpha,
       gravityRadius: config.gravityRadius,
+      gravityCritMass: config.gravityCritMass,
       pressure: config.pressure,
       pressureGamma: config.pressureGamma,
       pressureEref: config.pressureEref,
@@ -1275,6 +1278,10 @@ totalEmissiveRadiance += diffuseColor.rgb * uEmissiveBoost;`,
   dom.gravityAlpha.addEventListener('input', () => {
     config.gravityAlpha = parseFloat(dom.gravityAlpha.value) || 0.0;
     dom.gravityAlphaVal.textContent = config.gravityAlpha.toFixed(2);
+    sendConfig();
+  });
+  dom.gravityCritMass.addEventListener('change', () => {
+    config.gravityCritMass = Math.max(0, parseFloat(dom.gravityCritMass.value) || 0);
     sendConfig();
   });
   dom.gravityRadius.addEventListener('input', () => {

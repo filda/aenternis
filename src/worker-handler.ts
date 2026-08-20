@@ -41,6 +41,7 @@ export interface WorldHandle {
   setGravity(g: number): void;
   setGravityAlpha(a: number): void;
   setGravityRadius(r: number): void;
+  setGravityCritMass(c: number): void;
   setPressure(p: number): void;
   setPressureGamma(g: number): void;
   setPressureEref(e: number): void;
@@ -185,6 +186,7 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
     w.setGravity(s.gravity);
     w.setGravityAlpha(s.gravityAlpha);
     w.setGravityRadius(s.gravityRadius);
+    w.setGravityCritMass(s.gravityCritMass);
     w.setPressure(s.pressure);
     w.setPressureGamma(s.pressureGamma);
     w.setPressureEref(s.pressureEref);
@@ -357,6 +359,9 @@ export function createWorkerHandler(deps: WorkerHandlerDeps): WorkerHandler {
         if (typeof msg.gravity === 'number') world.setGravity(state.gravity);
         if (typeof msg.gravityAlpha === 'number') world.setGravityAlpha(state.gravityAlpha);
         if (typeof msg.gravityRadius === 'number') world.setGravityRadius(state.gravityRadius);
+        if (typeof msg.gravityCritMass === 'number') {
+          world.setGravityCritMass(state.gravityCritMass);
+        }
         if (typeof msg.pressure === 'number') world.setPressure(state.pressure);
         if (typeof msg.pressureGamma === 'number') world.setPressureGamma(state.pressureGamma);
         if (typeof msg.pressureEref === 'number') world.setPressureEref(state.pressureEref);

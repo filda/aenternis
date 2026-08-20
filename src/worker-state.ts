@@ -12,6 +12,8 @@ export interface WorkerSimState {
   readonly gravity: number;
   readonly gravityAlpha: number;
   readonly gravityRadius: number;
+  /** m_crit of the inflation law; 0 = off (legacy attraction). */
+  readonly gravityCritMass: number;
   readonly pressure: number;
   readonly pressureGamma: number;
   readonly pressureEref: number;
@@ -31,6 +33,7 @@ export const DEFAULT_STATE: WorkerSimState = Object.freeze({
   gravity: 0.0,
   gravityAlpha: 0.0,
   gravityRadius: 1,
+  gravityCritMass: 0.0,
   pressure: 0.0,
   pressureGamma: 2.0,
   pressureEref: 1.0,
@@ -49,6 +52,7 @@ export function stateFromInit(msg: InitMsg): WorkerSimState {
     gravity: msg.gravity ?? DEFAULT_STATE.gravity,
     gravityAlpha: msg.gravityAlpha ?? DEFAULT_STATE.gravityAlpha,
     gravityRadius: msg.gravityRadius ?? DEFAULT_STATE.gravityRadius,
+    gravityCritMass: msg.gravityCritMass ?? DEFAULT_STATE.gravityCritMass,
     pressure: msg.pressure ?? DEFAULT_STATE.pressure,
     pressureGamma: msg.pressureGamma ?? DEFAULT_STATE.pressureGamma,
     pressureEref: msg.pressureEref ?? DEFAULT_STATE.pressureEref,
@@ -72,6 +76,7 @@ export function applyConfig(state: WorkerSimState, msg: ConfigMsg): WorkerSimSta
     gravity: pick(msg.gravity, state.gravity),
     gravityAlpha: pick(msg.gravityAlpha, state.gravityAlpha),
     gravityRadius: pick(msg.gravityRadius, state.gravityRadius),
+    gravityCritMass: pick(msg.gravityCritMass, state.gravityCritMass),
     pressure: pick(msg.pressure, state.pressure),
     pressureGamma: pick(msg.pressureGamma, state.pressureGamma),
     pressureEref: pick(msg.pressureEref, state.pressureEref),

@@ -90,6 +90,18 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
     let eref = world.pressure_eref;
     let alpha = world.gravity_alpha;
     let radius = world.gravity_radius;
+    // Peaked gravitational potential `f(m) = m − m²·inv_2crit` (the
+    // inflation law, `docs/inflation-plan.md` R2): below `m_crit`
+    // denser neighborhoods attract, above it they repel. The off state
+    // is the exact LIMIT of the formula, not a branch: `inv_2crit = 0`
+    // makes `f(m) = m − (m·m)·0.0 = m − (+0.0) = m` bit-for-bit (masses
+    // are finite and non-negative), so every gravity-on baseline is
+    // reproduced untouched with the default `gravity_crit_mass = 0`.
+    let inv_2crit = if world.gravity_crit_mass > 0.0 {
+        1.0 / (2.0 * world.gravity_crit_mass)
+    } else {
+        0.0
+    };
 
     // Build the per-tick blocked energy grid up front and read all
     // neighbor energies through it — the 6-face snapshot always, and the
@@ -157,15 +169,23 @@ pub fn compute_natural_rates(world: &mut SparseWorld, coeff: f64) {
             }
         } else {
             // Active path: radiation (down the energy gradient) + pressure
-            // (outward, ∝ E^γ) + gravity (toward mass, can flow uphill).
-            let m_c = mass_snapshot.get(coord).copied().unwrap_or(0.0);
+            // (outward, ∝ E^γ) + gravity (up the gradient of the peaked
+            // potential `f(m)` — toward moderate mass, away from
+            // super-critical mass; `f` is the identity while the
+            // inflation law is off).
+            //
+            // Plain `m − m·m·inv`, never `mul_add`: FMA's single rounding
+            // is not portable native↔wasm (same contract as the mass
+            // gather and `pressure_pi`).
+            let pot = |m: f64| m - m * m * inv_2crit;
+            let m_c = pot(mass_snapshot.get(coord).copied().unwrap_or(0.0));
             let pi_self = pressure_pi(my_energy, pressure, eref, gamma);
             for &d in &Direction::ALL {
                 let neighbor_energy = neighbor_energies[d.index()];
-                let m_nbr = mass_snapshot
+                let m_nbr = pot(mass_snapshot
                     .get(&coord.neighbor(d))
                     .copied()
-                    .unwrap_or(0.0);
+                    .unwrap_or(0.0));
                 let pi_nbr = pressure_pi(neighbor_energy, pressure, eref, gamma);
                 let drive = coeff * (f64::from(my_energy) - f64::from(neighbor_energy))
                     + (pi_self - pi_nbr)

@@ -70,6 +70,10 @@ pub(crate) struct InitMsg {
     /// Gravity cutoff radius `R`.
     #[serde(default)]
     pub(crate) gravity_radius: Option<i32>,
+    /// Critical mass `m_crit` of the peaked gravitational potential (the
+    /// inflation law, `docs/inflation-plan.md`); omitted/0 = off.
+    #[serde(default)]
+    pub(crate) gravity_crit_mass: Option<f64>,
     /// Pressure amplitude (omitted = off).
     #[serde(default)]
     pub(crate) pressure: Option<f64>,
@@ -121,6 +125,8 @@ pub(crate) struct ConfigMsg {
     pub(crate) gravity_alpha: Option<f64>,
     #[serde(default)]
     pub(crate) gravity_radius: Option<i32>,
+    #[serde(default)]
+    pub(crate) gravity_crit_mass: Option<f64>,
     #[serde(default)]
     pub(crate) pressure: Option<f64>,
     #[serde(default)]

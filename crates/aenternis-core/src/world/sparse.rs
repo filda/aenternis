@@ -133,6 +133,24 @@ pub struct SparseWorld {
     /// `0.0`. See `docs/mechanics.md`.
     pub gravity_radius: i32,
 
+    /// Critical neighborhood mass `m_crit` of the peaked gravitational
+    /// potential (the inflation law, `docs/inflation-plan.md` R2). The
+    /// drive's gravity term flows up the gradient of
+    /// `f(m) = m − m²/(2·m_crit)` instead of raw `m`: below the peak
+    /// denser neighborhoods attract (today's behavior, continuously),
+    /// above it they **repel** — matter packed past the critical mass
+    /// pushes outward (inflaton / degeneracy analogy, Lennard-Jones-shaped
+    /// force). A single-point big-bang therefore starts super-critical,
+    /// explodes, and the era ends emergently by dilution — no schedules.
+    ///
+    /// **Default `0.0` = off**, evaluated as the exact limit of the
+    /// formula (`inv_2crit = 0` ⇒ `f(m) = m` bit-for-bit), so every
+    /// existing gravity-on baseline is untouched. Units match the
+    /// gathered mass `M = α·Σ E/r` ([`Self::gravity_alpha`],
+    /// [`Self::gravity_radius`]). Inactive while [`Self::gravity`] is
+    /// `0.0`.
+    pub gravity_crit_mass: f64,
+
     /// Pressure amplitude — the outward counter-force that grows with
     /// density. Enters the drive as `Π(E_c) − Π(E_nbr)` where
     /// `Π(E) = pressure · eref · (E/eref)^γ`. Default `0.0`.
@@ -389,6 +407,7 @@ impl SparseWorld {
             gravity: 0.0,
             gravity_alpha: 0.0,
             gravity_radius: 1,
+            gravity_crit_mass: 0.0,
             pressure: 0.0,
             pressure_gamma: Self::DEFAULT_PRESSURE_GAMMA,
             pressure_eref: Self::DEFAULT_PRESSURE_EREF,

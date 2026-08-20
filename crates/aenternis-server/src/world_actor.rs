@@ -126,6 +126,7 @@ pub(crate) struct SimParams {
     pub(crate) gravity: f64,
     pub(crate) gravity_alpha: f64,
     pub(crate) gravity_radius: i32,
+    pub(crate) gravity_crit_mass: f64,
     pub(crate) pressure: f64,
     pub(crate) pressure_gamma: f64,
     pub(crate) pressure_eref: f64,
@@ -147,6 +148,7 @@ impl Default for SimParams {
             gravity: 0.0,
             gravity_alpha: 0.0,
             gravity_radius: 1,
+            gravity_crit_mass: 0.0,
             pressure: 0.0,
             pressure_gamma: SparseWorld::DEFAULT_PRESSURE_GAMMA,
             pressure_eref: SparseWorld::DEFAULT_PRESSURE_EREF,
@@ -170,6 +172,7 @@ impl SimParams {
             gravity: msg.gravity.unwrap_or(d.gravity),
             gravity_alpha: msg.gravity_alpha.unwrap_or(d.gravity_alpha),
             gravity_radius: msg.gravity_radius.unwrap_or(d.gravity_radius),
+            gravity_crit_mass: msg.gravity_crit_mass.unwrap_or(d.gravity_crit_mass),
             pressure: msg.pressure.unwrap_or(d.pressure),
             pressure_gamma: msg.pressure_gamma.unwrap_or(d.pressure_gamma),
             pressure_eref: msg.pressure_eref.unwrap_or(d.pressure_eref),
@@ -196,6 +199,9 @@ impl SimParams {
         }
         if let Some(v) = msg.gravity_radius {
             self.gravity_radius = v;
+        }
+        if let Some(v) = msg.gravity_crit_mass {
+            self.gravity_crit_mass = v;
         }
         if let Some(v) = msg.pressure {
             self.pressure = v;
@@ -226,6 +232,7 @@ impl SimParams {
         world.gravity = self.gravity;
         world.gravity_alpha = self.gravity_alpha;
         world.gravity_radius = self.gravity_radius;
+        world.gravity_crit_mass = self.gravity_crit_mass;
         world.pressure = self.pressure;
         world.pressure_gamma = snap_gamma(self.pressure_gamma);
         world.pressure_eref = self.pressure_eref;
@@ -542,6 +549,7 @@ mod tests {
             gravity: None,
             gravity_alpha: None,
             gravity_radius: None,
+            gravity_crit_mass: None,
             pressure: None,
             pressure_gamma: None,
             pressure_eref: None,
@@ -762,6 +770,7 @@ mod tests {
             gravity: Some(1.5),
             gravity_alpha: Some(0.05),
             gravity_radius: Some(4),
+            gravity_crit_mass: Some(777.5),
             pressure: Some(0.2),
             pressure_gamma: Some(3.0),
             pressure_eref: Some(50_000.0),
@@ -778,6 +787,7 @@ mod tests {
             gravity: 1.5,
             gravity_alpha: 0.05,
             gravity_radius: 4,
+            gravity_crit_mass: 777.5,
             pressure: 0.2,
             pressure_gamma: 3.0,
             pressure_eref: 50_000.0,
@@ -802,6 +812,7 @@ mod tests {
             gravity: Some(0.0), // explicit 0 still applies
             gravity_alpha: None,
             gravity_radius: Some(2),
+            gravity_crit_mass: Some(55.5),
             pressure: None,
             pressure_gamma: None,
             pressure_eref: None,
@@ -813,6 +824,7 @@ mod tests {
             coeff: 0.3,
             k: 2,
             gravity: 0.0,
+            gravity_crit_mass: 55.5,
             gravity_radius: 2,
             mutation_strength: 0.75, // absent → kept
             metrics_every: 10,
@@ -829,6 +841,7 @@ mod tests {
             gravity: 1.5,
             gravity_alpha: 0.05,
             gravity_radius: 4,
+            gravity_crit_mass: 777.5,
             pressure: 0.2,
             pressure_gamma: 2.3, // snaps to 2.5
             pressure_eref: 50_000.0,
@@ -1057,6 +1070,7 @@ mod tests {
                 gravity: None,
                 gravity_alpha: None,
                 gravity_radius: None,
+                gravity_crit_mass: None,
                 pressure: None,
                 pressure_gamma: None,
                 pressure_eref: None,

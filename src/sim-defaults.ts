@@ -20,6 +20,9 @@ export interface SimConfig {
   gravity: number;
   gravityAlpha: number;
   gravityRadius: number;
+  /** m_crit of the inflation law; 0 = off. Production value comes from
+   *  the calibration plan (docs/inflation-plan.md). */
+  gravityCritMass: number;
   pressure: number;
   pressureGamma: number;
   pressureEref: number;
@@ -44,6 +47,7 @@ export const DEFAULT_SIM_CONFIG: SimConfig = Object.freeze({
   gravity: 1.0,
   gravityAlpha: 0.05,
   gravityRadius: 4,
+  gravityCritMass: 0.0,
   pressure: 0.2,
   pressureGamma: 2.0,
   pressureEref: 50_000.0,
@@ -70,6 +74,7 @@ export interface SimSettableWorld {
   setGravity(v: number): void;
   setGravityAlpha(v: number): void;
   setGravityRadius(v: number): void;
+  setGravityCritMass(v: number): void;
   setPressure(v: number): void;
   setPressureGamma(v: number): void;
   setPressureEref(v: number): void;
@@ -84,6 +89,7 @@ export function applySimConfig(world: SimSettableWorld, cfg: SimConfig): void {
   world.setGravity(cfg.gravity);
   world.setGravityAlpha(cfg.gravityAlpha);
   world.setGravityRadius(cfg.gravityRadius);
+  world.setGravityCritMass(cfg.gravityCritMass);
   world.setPressure(cfg.pressure);
   world.setPressureGamma(cfg.pressureGamma);
   world.setPressureEref(cfg.pressureEref);
